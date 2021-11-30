@@ -12,7 +12,7 @@ allprojects {
 def isRelease = false
 
 group = 'com.sondertara'
-version = '0.0.4'
+version = '0.0.5'
 archivesBaseName = 'joya'
 sourceCompatibility = '1.8'
 
@@ -70,7 +70,7 @@ dependencies {
     implementation "org.springframework:spring-web:${versions.springframework}"
     implementation 'org.hibernate:hibernate-core:5.6.1.Final'
     implementation 'com.github.vertical-blank:sql-formatter:2.0.2'
-    implementation 'com.sondertara:common-tara:0.0.3.306'
+    implementation 'com.sondertara:common-tara:0.0.3.307'
     compileOnly "org.projectlombok:lombok:${versions.lombok}"
     annotationProcessor "org.projectlombok:lombok:${versions.lombok}"
 }

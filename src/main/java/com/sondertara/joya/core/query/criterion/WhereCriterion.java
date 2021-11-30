@@ -9,7 +9,7 @@ import com.sondertara.joya.utils.SqlUtils;
 import com.sondertara.common.util.StringFormatter;
 import com.sondertara.common.util.StringUtils;
 import com.sondertara.joya.cache.AliasThreadLocalCache;
-import com.sondertara.joya.core.constant.JostConst;
+import com.sondertara.joya.core.constant.JoyaConst;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -125,7 +125,7 @@ public class WhereCriterion {
         }
         List<Object> params = apply.getParams();
         int counts = apply.getCounts();
-        if (counts < JostConst.TWO_QUERY_COUNT) {
+        if (counts < JoyaConst.TWO_QUERY_COUNT) {
             throw new RuntimeException("sub query must a least two part!");
         }
         String subSql = joiner.toString();
@@ -592,7 +592,7 @@ public class WhereCriterion {
      * @return where criterion
      */
     public WhereCriterion between(String columnName, List<Object> values) {
-        if (CollectionUtils.isNotEmpty(values) && values.size() == JostConst.TWO_QUERY_COUNT) {
+        if (CollectionUtils.isNotEmpty(values) && values.size() == JoyaConst.TWO_QUERY_COUNT) {
             segments.add(StringUtils.format("{} BETWEEN ?{} AND ?{}", warpColumn(columnName), counts++, counts++));
             params.addAll(values);
         }
@@ -607,7 +607,7 @@ public class WhereCriterion {
      * @return where criterion
      */
     public <T> WhereCriterion between(TaraFunction<T, ?> fn, List<Object> values) {
-        if (CollectionUtils.isNotEmpty(values) && values.size() == JostConst.TWO_QUERY_COUNT) {
+        if (CollectionUtils.isNotEmpty(values) && values.size() == JoyaConst.TWO_QUERY_COUNT) {
             String tableColumn = AliasThreadLocalCache.getColumn(fn).getColumnAlias();
             segments.add(StringUtils.format("{} BETWEEN ?{} AND ?{}", tableColumn, counts++, counts++));
             params.addAll(values);
@@ -624,7 +624,7 @@ public class WhereCriterion {
      * @return where criterion
      */
     public WhereCriterion notBetween(String columnName, List<Object> values) {
-        if (CollectionUtils.isNotEmpty(values) && values.size() == JostConst.TWO_QUERY_COUNT) {
+        if (CollectionUtils.isNotEmpty(values) && values.size() == JoyaConst.TWO_QUERY_COUNT) {
             segments.add(StringUtils.format("{} NOT BETWEEN ?{} AND ?{}", warpColumn(columnName), counts++, counts++));
             params.addAll(values);
         }
@@ -639,7 +639,7 @@ public class WhereCriterion {
      * @return where criterion
      */
     public <T> WhereCriterion notBetween(TaraFunction<T, ?> fn, List<Object> values) {
-        if (CollectionUtils.isNotEmpty(values) && values.size() == JostConst.TWO_QUERY_COUNT) {
+        if (CollectionUtils.isNotEmpty(values) && values.size() == JoyaConst.TWO_QUERY_COUNT) {
             String tableColumn = AliasThreadLocalCache.getColumn(fn).getColumnAlias();
             segments.add(StringUtils.format("{} NOT BETWEEN ?{} AND ?{}", tableColumn, counts++, counts++));
             params.addAll(values);

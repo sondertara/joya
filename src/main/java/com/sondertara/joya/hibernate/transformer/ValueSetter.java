@@ -12,7 +12,7 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
 
-import static com.sondertara.joya.core.constant.JostConst.ALIAS_SPLIT;
+import static com.sondertara.joya.core.constant.JoyaConst.ALIAS_SPLIT;
 
 /**
  * @author huangxiaohu

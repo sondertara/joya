@@ -22,7 +22,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
-import static com.sondertara.joya.core.constant.JostConst.JOST_SQL;
+import static com.sondertara.joya.core.constant.JoyaConst.JOYA_SQL;
 
 /**
  * (non-Javadoc)
@@ -56,7 +56,7 @@ public final class AliasThreadLocalCache {
 
 
         LocalEntityCache.getInstance().get(aClass.getName()).ifPresent(t -> {
-            LinkedHashMap<String, TableAliasDTO> aliasMap = (LinkedHashMap<String, TableAliasDTO>) ThreadLocalUtil.get(JOST_SQL);
+            LinkedHashMap<String, TableAliasDTO> aliasMap = (LinkedHashMap<String, TableAliasDTO>) ThreadLocalUtil.get(JOYA_SQL);
 
             TableAliasDTO aliasDTO = new TableAliasDTO();
             aliasDTO.setClassName(aClass.getName());
@@ -106,7 +106,7 @@ public final class AliasThreadLocalCache {
                     return StringUtils.toUnderlineCase(finalGetter);
                 }
             }).orElseThrow(() -> new EntityNotFoundException("no entity found for " + implClass));
-            LinkedHashMap<String, TableAliasDTO> aliasMap = (LinkedHashMap<String, TableAliasDTO>) ThreadLocalUtil.get(JOST_SQL);
+            LinkedHashMap<String, TableAliasDTO> aliasMap = (LinkedHashMap<String, TableAliasDTO>) ThreadLocalUtil.get(JOYA_SQL);
             TableAliasDTO tableAlias = aliasMap.computeIfAbsent(className, k -> {
                 TableAliasDTO aliasDTO = new TableAliasDTO();
                 aliasDTO.setTableName(tableName.get());
@@ -135,7 +135,7 @@ public final class AliasThreadLocalCache {
      */
     @SuppressWarnings("unchecked")
     public static List<TableAliasDTO> getTables() {
-        LinkedHashMap<String, TableAliasDTO> aliasMap = (LinkedHashMap<String, TableAliasDTO>) ThreadLocalUtil.get(JOST_SQL);
+        LinkedHashMap<String, TableAliasDTO> aliasMap = (LinkedHashMap<String, TableAliasDTO>) ThreadLocalUtil.get(JOYA_SQL);
         return new ArrayList<>(aliasMap.values());
 
     }

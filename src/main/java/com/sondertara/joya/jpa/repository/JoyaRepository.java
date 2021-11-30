@@ -6,9 +6,9 @@ import com.sondertara.joya.core.query.NativeSqlQuery;
 import com.sondertara.joya.core.query.criterion.JoinCriterion;
 import com.sondertara.joya.core.query.pagination.PageQueryParam;
 import com.sondertara.joya.core.query.pagination.PageResult;
-import com.sondertara.joya.ext.JostSpringContext;
+import com.sondertara.joya.ext.JoyaSpringContext;
 import com.sondertara.joya.hibernate.transformer.AliasToBeanTransformer;
-import com.sondertara.joya.utils.JostPageUtil;
+import com.sondertara.joya.utils.JoyaPageUtil;
 import com.sondertara.joya.utils.SqlUtils;
 import org.hibernate.query.internal.NativeQueryImpl;
 import org.slf4j.Logger;
@@ -68,7 +68,7 @@ public class JoyaRepository {
      * @return 分页数据
      */
     public <T> PageResult<T> queryPage(PageQueryParam queryParam, Class<T> resultClass, Class<?>... targetClass) {
-        NativeSqlQuery nativeSqlQuery = JostPageUtil.buildNativeQuery(queryParam, targetClass);
+        NativeSqlQuery nativeSqlQuery = JoyaPageUtil.buildNativeQuery(queryParam, targetClass);
         return queryPage(nativeSqlQuery, resultClass, queryParam.getPage(), queryParam.getPageSize());
 
     }
@@ -84,7 +84,7 @@ public class JoyaRepository {
      */
     public <T> PageResult<T> queryPage(PageQueryParam queryParam, Class<T> resultClass, UnaryOperator<JoinCriterion> joinPart) {
 
-        NativeSqlQuery nativeSqlQuery = JostPageUtil.buildNativeQuery(queryParam, joinPart);
+        NativeSqlQuery nativeSqlQuery = JoyaPageUtil.buildNativeQuery(queryParam, joinPart);
         return queryPage(nativeSqlQuery, resultClass, queryParam.getPage(), queryParam.getPageSize());
 
     }
@@ -101,7 +101,7 @@ public class JoyaRepository {
      */
     @SuppressWarnings("unchecked")
     public <T> PageResult<T> queryPage(NativeSqlQuery nativeSql, Class<T> resultClass, Integer pageNo, Integer pageSize) {
-        Boolean opened = JostSpringContext.getConfig(SQL_VIEW_SWITCH, false);
+        Boolean opened = JoyaSpringContext.getConfig(SQL_VIEW_SWITCH, false);
 
         String sqlStr = nativeSql.toSql();
 

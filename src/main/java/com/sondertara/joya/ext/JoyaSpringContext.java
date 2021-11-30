@@ -22,7 +22,7 @@ import java.util.Map;
  * @author huangxiaohu
  */
 
-public class JostSpringContext implements ApplicationContextAware {
+public class JoyaSpringContext implements ApplicationContextAware {
 
     private static ApplicationContext applicationContext;
 

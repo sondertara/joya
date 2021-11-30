@@ -1,7 +1,7 @@
 package com.sondertara.joya.init;
 
 import com.sondertara.common.util.StringFormatter;
-import com.sondertara.joya.ext.JostSpringContext;
+import com.sondertara.joya.ext.JoyaSpringContext;
 import com.sondertara.joya.jpa.repository.JoyaRepository;
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.config.AbstractFactoryBean;
@@ -18,9 +18,9 @@ import javax.persistence.EntityManager;
 import javax.persistence.PersistenceContext;
 
 /**
- * JostRepository Factory
+ * JoyaRepository Factory
  * <p>
- * It will inject the jostRepository and jostSpringContext {@link JostSpringContext}which is a SpringContext util
+ * It will inject the joyaRepository and joyaSpringContext {@link JoyaSpringContext}which is a SpringContext util
  *
  * @author huangxiaohu
  * @date 2021/11/15 12:09
@@ -30,7 +30,7 @@ public class JoyaRepositoryFactoryBean extends AbstractFactoryBean<JoyaRepositor
     private EntityManager entityManager;
 
 
-    private static final String CONTEXT_HOLDER = "jostSpringContext";
+    private static final String CONTEXT_HOLDER = "joyaSpringContext";
 
     private ConfigurableApplicationContext applicationContext;
 
@@ -42,7 +42,7 @@ public class JoyaRepositoryFactoryBean extends AbstractFactoryBean<JoyaRepositor
 
     @Override
     public Class<?> getObjectType() {
-        return JoyaRepositoryFactoryBean.class;
+        return JoyaRepository.class;
     }
 
     @Override
@@ -51,8 +51,8 @@ public class JoyaRepositoryFactoryBean extends AbstractFactoryBean<JoyaRepositor
         if (this.entityManager == null) {
             throw new IllegalArgumentException("'entityManager' is required");
         }
-        registerJostSpringContext();
-        logger.info("Initializing JostTara Sql.");
+        registerJoyaSpringContext();
+        logger.info("Initializing Joya Sql.");
         return new JoyaRepository(entityManager);
     }
 
@@ -64,20 +64,20 @@ public class JoyaRepositoryFactoryBean extends AbstractFactoryBean<JoyaRepositor
         this.applicationContext = (ConfigurableApplicationContext) applicationContext;
     }
 
-    public void registerJostSpringContext() {
+    public void registerJoyaSpringContext() {
         if (applicationContext.containsBean(CONTEXT_HOLDER)) {
             Object bean = applicationContext.getBean(CONTEXT_HOLDER);
-            if (bean.getClass().isAssignableFrom(JostSpringContext.class)) {
+            if (bean.getClass().isAssignableFrom(JoyaSpringContext.class)) {
                 return;
             } else {
                 throw new RuntimeException(StringFormatter.format("The bean name of '{}' is duplicated", CONTEXT_HOLDER));
             }
         }
-        BeanDefinitionBuilder beanDefinitionBuilder = BeanDefinitionBuilder.genericBeanDefinition(JostSpringContext.class);
+        BeanDefinitionBuilder beanDefinitionBuilder = BeanDefinitionBuilder.genericBeanDefinition(JoyaSpringContext.class);
 
         BeanDefinition beanDefinition = beanDefinitionBuilder.getRawBeanDefinition();
         BeanDefinitionRegistry definitionRegistry = (BeanDefinitionRegistry) applicationContext.getBeanFactory();
         definitionRegistry.registerBeanDefinition(CONTEXT_HOLDER, beanDefinition);
-        applicationContext.getBean(CONTEXT_HOLDER, JostSpringContext.class);
+        applicationContext.getBean(CONTEXT_HOLDER, JoyaSpringContext.class);
     }
 }

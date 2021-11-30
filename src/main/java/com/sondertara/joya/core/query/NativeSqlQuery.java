@@ -10,7 +10,7 @@ import com.sondertara.common.util.StringFormatter;
 import com.sondertara.common.util.StringUtils;
 import com.sondertara.joya.cache.AliasThreadLocalCache;
 import com.sondertara.joya.cache.LocalEntityCache;
-import com.sondertara.joya.core.constant.JostConst;
+import com.sondertara.joya.core.constant.JoyaConst;
 import com.sondertara.joya.core.model.ColumnAliasDTO;
 import com.sondertara.joya.core.model.EntityFieldDTO;
 import com.sondertara.joya.core.model.TableAliasDTO;
@@ -46,7 +46,7 @@ public class NativeSqlQuery {
 
     private static final String SELECT_ALL = "*";
 
-    private static final String JOST_SQL = "JOST_SQL";
+
 
     /**
      * 查询语句
@@ -70,7 +70,7 @@ public class NativeSqlQuery {
 
 
     public static NativeSqlQueryBuilder builder() {
-        ThreadLocalUtil.put(JOST_SQL, Maps.newLinkedHashMap());
+        ThreadLocalUtil.put(JoyaConst.JOYA_SQL, Maps.newLinkedHashMap());
         return new NativeSqlQueryBuilder();
     }
 
@@ -404,7 +404,7 @@ public class NativeSqlQuery {
             if (StringUtils.isBlank(this.from) && null != joinCriterion) {
                 NodeList<ColumnAliasDTO> nodeList = joinCriterion.getSegments();
                 List<String> join = joinCriterion.getJoin();
-                if ((nodeList.getSize() / join.size()) != JostConst.TWO_QUERY_COUNT) {
+                if ((nodeList.getSize() / join.size()) != JoyaConst.TWO_QUERY_COUNT) {
                     throw new TaraException("The join part is incorrect!");
                 }
                 StringJoiner sb = new StringJoiner(" ");

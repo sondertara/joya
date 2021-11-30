@@ -2,13 +2,13 @@ package com.sondertara.joya.utils;
 
 import com.sondertara.common.util.StringFormatter;
 import com.sondertara.common.util.StringUtils;
+import com.sondertara.joya.core.query.NativeSqlQuery;
+import com.sondertara.joya.core.query.criterion.JoinCriterion;
+import com.sondertara.joya.core.query.criterion.WhereCriterion;
 import com.sondertara.joya.core.query.pagination.FieldParam;
 import com.sondertara.joya.core.query.pagination.OrderParam;
 import com.sondertara.joya.core.query.pagination.PageQueryParam;
 import com.sondertara.joya.core.query.pagination.SearchParam;
-import com.sondertara.joya.core.query.criterion.JoinCriterion;
-import com.sondertara.joya.core.query.NativeSqlQuery;
-import com.sondertara.joya.core.query.criterion.WhereCriterion;
 
 import java.util.Collections;
 import java.util.List;
@@ -21,7 +21,7 @@ import java.util.function.UnaryOperator;
  *
  * @author huangxiaohu
  */
-public class JostPageUtil {
+public class JoyaPageUtil {
 
     /**
      * 带join查询

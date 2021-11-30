@@ -5,7 +5,7 @@ import com.sondertara.joya.utils.cache.ILocalCache;
 import com.sondertara.common.util.StringFormatter;
 import com.sondertara.common.util.StringUtils;
 import com.sondertara.joya.core.model.EntityFieldDTO;
-import com.sondertara.joya.ext.JostSpringContext;
+import com.sondertara.joya.ext.JoyaSpringContext;
 import com.sondertara.joya.core.model.TableDTO;
 import lombok.extern.slf4j.Slf4j;
 
@@ -52,7 +52,7 @@ public class LocalEntityCache extends GuavaAbstractLoadingCache<String, TableDTO
 
     @Override
     protected TableDTO fetchData(String key) {
-        EntityManager entityManager = JostSpringContext.getBean(EntityManager.class);
+        EntityManager entityManager = JoyaSpringContext.getBean(EntityManager.class);
         Metamodel metamodel = entityManager.getEntityManagerFactory().getMetamodel();
         for (EntityType<?> entity : metamodel.getEntities()) {
             Class<?> aClass = entity.getJavaType();

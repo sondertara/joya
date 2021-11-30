@@ -5,7 +5,7 @@ import com.sondertara.common.structure.NodeList;
 import com.sondertara.common.exception.TaraException;
 import com.sondertara.common.function.TaraFunction;
 import com.sondertara.joya.cache.AliasThreadLocalCache;
-import com.sondertara.joya.core.constant.JostConst;
+import com.sondertara.joya.core.constant.JoyaConst;
 import com.sondertara.joya.core.model.ColumnAliasDTO;
 
 import java.util.ArrayList;
@@ -13,7 +13,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
-import static com.sondertara.joya.core.constant.JostConst.MAX_JOIN_COUNT;
+import static com.sondertara.joya.core.constant.JoyaConst.MAX_JOIN_COUNT;
 
 /**
  * the form  part of query with join
@@ -112,7 +112,7 @@ public class JoinCriterion {
      * @return node list for join field
      */
     public NodeList<ColumnAliasDTO> getSegments() {
-        if (tableNames.size() >= JostConst.MAX_JOIN_TABLE) {
+        if (tableNames.size() >= JoyaConst.MAX_JOIN_TABLE) {
 
             throw new TaraException("Only support link three tables associated");
 

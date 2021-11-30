@@ -7,11 +7,11 @@ package com.sondertara.joya.core.constant;
  * @date 2021/11/19 16:01
  * @since 1.0.1
  */
-public class JostConst {
+public class JoyaConst {
     /**
      * the local cache key
      */
-    public static final String JOST_SQL = "JOST_SQL";
+    public static final String JOYA_SQL = "JOYA_SQL";
     /**
      * column alias split
      */
