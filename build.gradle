@@ -1,0 +1,136 @@
+import io.github.gradlenexus.publishplugin.InitializeNexusStagingRepository
+
+plugins {
+    id "java-library"
+    id 'maven-publish'
+    id("io.github.gradle-nexus.publish-plugin") version '1.1.0'
+    id 'signing'
+}
+
+group = 'com.sondertara'
+version = '0.0.4'
+archivesBaseName = 'joya'
+sourceCompatibility = '1.8'
+
+
+ext.versions = [
+        springBoot     : '2.6.0',
+        springData     : '2.6.0',
+        springframework: '5.3.13',
+        lombok         : '1.18.22'
+]
+
+configurations {
+    compileOnly {
+        extendsFrom annotationProcessor
+    }
+
+
+}
+tasks.withType(JavaCompile) {
+    options.encoding = 'UTF-8'
+}
+
+tasks.withType(Javadoc) {
+    options.encoding = 'UTF-8'
+    options.addStringOption('Xdoclint:none', '-quiet')
+}
+java {
+    withJavadocJar()
+    withSourcesJar()
+}
+
+jar {
+    into('META-INF') {
+        from files('LICENSE')
+    }
+    manifest {
+        attributes(
+                'Built-By': 'huangxiaohu',
+                'Build-Jdk-Spec': '1.8'
+        )
+    }
+}
+
+
+repositories {
+    mavenCentral()
+}
+
+
+dependencies {
+    implementation "org.springframework.data:spring-data-jpa:${versions.springData}"
+    implementation "org.springframework.boot:spring-boot:${versions.springBoot}"
+    implementation "org.springframework:spring-web:${versions.springframework}"
+    implementation 'org.hibernate:hibernate-core:5.6.1.Final'
+    implementation 'com.github.vertical-blank:sql-formatter:2.0.2'
+    implementation 'com.sondertara:common-tara:0.0.3.306'
+    compileOnly "org.projectlombok:lombok:${versions.lombok}"
+    annotationProcessor "org.projectlombok:lombok:${versions.lombok}"
+}
+
+
+nexusPublishing {
+    repositories {
+        sonatype {
+            username = "${ossrhUsername}"
+            password = "${ossrhPassword}"
+        }
+    }
+}
+
+publishing {
+    publications {
+        mavenJava(MavenPublication) {
+            from(components.java)
+            pom {
+                name = 'joya'
+                description = 'JPA extensions and dynamic query feature.'
+                url = 'https://github.com/sondertara/joya'
+                inceptionYear = '2021'
+                licenses {
+                    license {
+                        name = 'The Apache License, Version 2.0'
+                        url = 'https://www.apache.org/licenses/LICENSE-2.0.txt'
+                    }
+                }
+                developers {
+                    developer {
+                        id = 'sondertara'
+                        name = 'huangxiaohu'
+                    }
+                }
+                scm {
+                    connection = 'scm:https://github.com/sondertara/joya.git'
+                    developerConnection = 'scm:git@github.com:sondertara/joya.git'
+                    url = 'https://github.com/sondertara/joya'
+                }
+            }
+        }
+    }
+}
+
+
+signing {
+    required { !project.version.endsWith("-SNAPSHOT") && !project.hasProperty("skipSigning") }
+    if (project.findProperty("signingKeyId")) {
+        def signingKeyId = findProperty("signingKeyId")
+        def signingKey = findProperty("signingKey")
+        def signingPassword = findProperty("signingPassword")
+        useInMemoryPgpKeys(signingKeyId as String, signingKey as String, signingPassword as String)
+    } else {
+        useGpgCmd()
+    }
+    sign publishing.publications.mavenJava
+}
+
+//do not generate extra load on Nexus with new staging repository if signing fails
+tasks.withType(InitializeNexusStagingRepository).configureEach {
+    shouldRunAfter(tasks.withType(Sign))
+}
+
+javadoc {
+    if (JavaVersion.current().isJava9Compatible()) {
+        options.addBooleanOption('html5', true)
+    }
+}
