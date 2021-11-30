@@ -9,7 +9,7 @@ plugins {
 allprojects{
 
 }
-
+def isRelease=false
 
 group = 'com.sondertara'
 version = '0.0.4'
@@ -23,6 +23,8 @@ ext.versions = [
         springframework: '5.3.13',
         lombok         : '1.18.22'
 ]
+
+[compileJava, compileTestJava, javadoc]*.options*.encoding = "UTF-8"
 
 configurations {
     compileOnly {
@@ -132,6 +134,10 @@ signing {
 
 
 tasks.withType(InitializeNexusStagingRepository).configureEach {
+
+    if (!isRelease){
+        return
+    }
     shouldRunAfter(tasks.withType(Sign))
 }
 
