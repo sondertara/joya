@@ -77,8 +77,8 @@ dependencies {
 nexusPublishing {
     repositories {
         sonatype {
-            username = findProperty("ossrhUsername")
-            password = findProperty(ossrhPassword)
+            username = "${ossrhUsername}"
+            password = "${ossrhPassword}"
         }
     }
 }
