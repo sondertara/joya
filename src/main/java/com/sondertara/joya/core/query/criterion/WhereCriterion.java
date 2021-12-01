@@ -5,11 +5,11 @@ import com.sondertara.common.exception.TaraException;
 import com.sondertara.common.function.TaraFunction;
 import com.sondertara.common.util.CollectionUtils;
 import com.sondertara.common.util.RegexUtils;
-import com.sondertara.joya.utils.SqlUtils;
 import com.sondertara.common.util.StringFormatter;
 import com.sondertara.common.util.StringUtils;
 import com.sondertara.joya.cache.AliasThreadLocalCache;
 import com.sondertara.joya.core.constant.JoyaConst;
+import com.sondertara.joya.utils.SqlUtils;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -26,15 +26,12 @@ import java.util.function.UnaryOperator;
 public class WhereCriterion {
 
 
-
-
-
     /**
-     * where 条件拼接
+     * where condition segments
      */
     private final StringJoiner segments;
     /**
-     * 追加到 where 条件尾部的自定义sql字符串片段
+     * the special where condition
      */
     private String specificW;
     /**
@@ -42,9 +39,14 @@ public class WhereCriterion {
      */
     private int counts = 1;
     /**
-     * 参数
+     * params
      */
     private final List<Object> params;
+
+    /**
+     * the link type for where segments
+     */
+    private Operator currentOpt;
 
     public enum Operator {
         /**
@@ -70,6 +72,7 @@ public class WhereCriterion {
      * @param operator Operator.AND/Operator.OR
      */
     public WhereCriterion(Operator operator) {
+        this.currentOpt = operator;
         this.segments = new StringJoiner(" " + operator.name() + " ");
         this.params = new ArrayList<>();
     }
@@ -117,7 +120,8 @@ public class WhereCriterion {
      */
     public WhereCriterion subQuery(UnaryOperator<WhereCriterion> func) throws RuntimeException {
 
-        WhereCriterion apply = func.apply(new WhereCriterion(Operator.OR));
+        WhereCriterion apply = func.apply(new WhereCriterion(Operator.OR.equals(this.currentOpt) ? Operator.AND : Operator.OR));
+
         StringJoiner joiner = apply.getSegments();
 
         if (Objects.isNull(joiner)) {

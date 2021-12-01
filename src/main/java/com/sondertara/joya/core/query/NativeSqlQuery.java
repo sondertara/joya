@@ -47,7 +47,6 @@ public class NativeSqlQuery {
     private static final String SELECT_ALL = "*";
 
 
-
     /**
      * 查询语句
      */
@@ -572,5 +571,8 @@ public class NativeSqlQuery {
         return sb.toString();
     }
 
-
+    @Override
+    public String toString() {
+        return "NativeSqlQuery{" + this.toSql() + "}";
+    }
 }

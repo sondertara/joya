@@ -43,6 +43,14 @@ public class JoyaRepository {
     }
 
 
+    /**
+     * 查询list
+     * @param sql 原生sql
+     * @param clazz 目标实体
+     * @param params 参数
+     * @param <T> 泛型
+     * @return list
+     */
     @SuppressWarnings("unchecked")
     public <T> List<T> findListBySql(String sql, Class<T> clazz, Object... params) {
         Query query = em.createNativeQuery(sql);
@@ -50,6 +58,13 @@ public class JoyaRepository {
         return query.unwrap(NativeQueryImpl.class).setResultTransformer(new AliasToBeanTransformer<T>(clazz)).list();
     }
 
+    /**
+     *  find to list
+     * @param nativeSql native query
+     * @param resultClass result class
+     * @param <T> generic
+     * @return list
+     */
     @SuppressWarnings("unchecked")
     public <T> List<T> findListBySql(NativeSqlQuery nativeSql, Class<T> resultClass) {
 
@@ -160,7 +175,7 @@ public class JoyaRepository {
      * @param params List<Order> orders = this.find("SELECT o FROM Order o WHERE o.storeId = ? and o.code = ? order by o.createTime desc", storeId, code);
      * @return
      */
-    public <T> List<T> findAllByQL(final String ql, final Sort sort, final Object... params) {
+    public <T> List<T> findAllByHql(final String ql, final Sort sort, final Object... params) {
         Query query = em.createQuery(ql + prepareOrder(sort));
         setParameters(query, params);
         return query.getResultList();

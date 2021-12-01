@@ -12,7 +12,7 @@ allprojects {
 def isRelease = false
 
 group = 'com.sondertara'
-version = '0.0.5'
+version = '0.0.6'
 archivesBaseName = 'joya'
 sourceCompatibility = '1.8'
 
@@ -38,6 +38,8 @@ tasks.withType(JavaCompile) {
 }
 
 tasks.withType(Javadoc) {
+
+    options.tags = ['date:a:head']
     options.encoding = 'UTF-8'
     options.addStringOption('Xdoclint:none', '-quiet')
 }
