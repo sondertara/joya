@@ -391,7 +391,7 @@ public class PageQueryParam extends JoyaQuery implements Serializable {
 
 使用Joya查询方法有如下两种：
 
--分页查询(指定join字段)
+- 分页查询(指定join字段)
 
 ```java
 PageQueryParam pageQueryParam=JSON.parseObject(jsonString,PageQueryParam.class);
@@ -399,7 +399,7 @@ PageQueryParam pageQueryParam=JSON.parseObject(jsonString,PageQueryParam.class);
 PageResult<UserDTO> pageResult=joyaRepository.queryPage(pageQueryParam,UserDTO.class,j->j.join(UserPo::getId,UserExtendPo::getUserId));
 ```
 
--分页查询(指定where语句中的联接字段)
+- 分页查询(指定where语句中的联接字段)
 
 ```java
  PageQueryParam pageQueryParam1=JSON.parseObject("",PageQueryParam.class);
