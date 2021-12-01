@@ -1,13 +1,14 @@
 package com.sondertara.joya.cache;
 
-import com.sondertara.joya.utils.cache.GuavaAbstractLoadingCache;
-import com.sondertara.joya.utils.cache.ILocalCache;
 import com.sondertara.common.util.StringFormatter;
 import com.sondertara.common.util.StringUtils;
 import com.sondertara.joya.core.model.EntityFieldDTO;
-import com.sondertara.joya.ext.JoyaSpringContext;
 import com.sondertara.joya.core.model.TableDTO;
-import lombok.extern.slf4j.Slf4j;
+import com.sondertara.joya.ext.JoyaSpringContext;
+import com.sondertara.joya.utils.cache.GuavaAbstractLoadingCache;
+import com.sondertara.joya.utils.cache.ILocalCache;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javax.persistence.Column;
 import javax.persistence.EntityManager;
@@ -27,9 +28,9 @@ import java.util.Set;
  *
  * @author huangxiaohu
  */
-@Slf4j
 public class LocalEntityCache extends GuavaAbstractLoadingCache<String, TableDTO> implements ILocalCache<String, TableDTO> {
 
+    private static final Logger log = LoggerFactory.getLogger(LocalEntityCache.class);
 
     private static volatile LocalEntityCache cache = null;
 
@@ -93,8 +94,6 @@ public class LocalEntityCache extends GuavaAbstractLoadingCache<String, TableDTO
         TableDTO value = null;
         try {
             value = getValue(key);
-            log.info("获取缓存成功key=[{}],value=[{}]", key, value);
-
         } catch (Exception e) {
             log.error("key={}获取数据异常", key, e);
         }

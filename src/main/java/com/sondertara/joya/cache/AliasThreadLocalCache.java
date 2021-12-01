@@ -3,11 +3,11 @@ package com.sondertara.joya.cache;
 import com.sondertara.common.function.TaraFunction;
 import com.sondertara.common.util.StringFormatter;
 import com.sondertara.common.util.StringUtils;
-import com.sondertara.joya.utils.ThreadLocalUtil;
 import com.sondertara.joya.core.model.ColumnAliasDTO;
 import com.sondertara.joya.core.model.EntityFieldDTO;
 import com.sondertara.joya.core.model.TableAliasDTO;
 import com.sondertara.joya.core.model.TableDTO;
+import com.sondertara.joya.utils.ThreadLocalUtil;
 
 import javax.persistence.EntityNotFoundException;
 import java.lang.invoke.SerializedLambda;
