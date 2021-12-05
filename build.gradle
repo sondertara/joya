@@ -120,7 +120,7 @@ signing {
     required { !project.version.endsWith("-SNAPSHOT") && !project.hasProperty("skipSigning") }
     if ('useInMemoryPgpKeys' == project.findProperty("signType") && project.findProperty("signingKeyId")) {
 
-
+        println "ffff"
         def signingKey = findProperty("signingKey") as String
         if (signingKey == null || signingKey.length() == 0) {
             signingKey = file(project.findProperty("secretKeyRingFile")).getText()
