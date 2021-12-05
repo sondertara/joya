@@ -69,12 +69,12 @@ public class JSONType implements UserType, DynamicParameterizedType, Serializabl
      * (此方法要求对可能出现null值进行处理)
      * names中包含了当前自定义类型的映射字段名称
      *
-     * @param rs
-     * @param names
-     * @param owner
-     * @return
-     * @throws HibernateException
-     * @throws SQLException
+     * @param rs result
+     * @param  names list
+     * @param owner owner
+     * @return obj
+     * @throws HibernateException e
+     * @throws SQLException e
      */
     @Override
     public Object nullSafeGet(ResultSet rs, String[] names, SharedSessionContractImplementor sharedSessionContractImplementor, Object owner) throws HibernateException, SQLException {
@@ -93,13 +93,13 @@ public class JSONType implements UserType, DynamicParameterizedType, Serializabl
 
     /**
      * 本方法将在Hibernate进行数据保存时被调用
-     * 我们可以通过PreparedStateme将自定义数据写入到对应的数据库表字段
+     * 我们可以通过PreparedStatement将自定义数据写入到对应的数据库表字段
      *
-     * @param st
-     * @param value
-     * @param index
-     * @throws HibernateException
-     * @throws SQLException
+     * @param st statement
+     * @param value v
+     * @param index index
+     * @throws HibernateException e
+     * @throws SQLException e
      */
     @Override
     public void nullSafeSet(PreparedStatement st, Object value, int index, SharedSessionContractImplementor sharedSessionContractImplementor) throws HibernateException, SQLException {
@@ -134,9 +134,9 @@ public class JSONType implements UserType, DynamicParameterizedType, Serializabl
      * 稍后的脏数据检查依据；Hibernate将在脏数据检查过程中将两个版本的数据进行对比（通过调用
      * equals方法），如果数据发生了变化（equals方法返回false），则执行对应的持久化操作
      *
-     * @param value
-     * @return
-     * @throws HibernateException
+     * @param value v
+     * @return object
+     * @throws HibernateException e
      */
     @Override
     public Object deepCopy(Object value) throws HibernateException {
@@ -155,20 +155,18 @@ public class JSONType implements UserType, DynamicParameterizedType, Serializabl
     /**
      * 本类型实例是否可变
      *
-     * @return
+     * @return is mutable
      */
     @Override
     public boolean isMutable() {
         return true;
     }
 
-    /* 序列化 */
     @Override
     public Serializable disassemble(Object value) throws HibernateException {
         return (Serializable) value;
     }
 
-    /* 反序列化 */
     @Override
     public Object assemble(Serializable cached, Object owner) throws HibernateException {
         return cached;
