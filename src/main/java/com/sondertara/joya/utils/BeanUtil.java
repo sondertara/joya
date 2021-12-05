@@ -16,11 +16,11 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Bean<-->Bean属性拷贝
- * Bean<-->Map深度转换
- * Bean<-->Bean深度转换
+ * Bean属性拷贝
+ * Bean深度转换
+ * Bean深度转换
  *
- * @author 刘志新
+ * @author huangxiaohu
  */
 public abstract class BeanUtil extends org.springframework.beans.BeanUtils {
 
@@ -90,9 +90,7 @@ public abstract class BeanUtil extends org.springframework.beans.BeanUtils {
         return (T) beanMap.getBean();
     }
 
-    /**
-     * List<Bean> --> List<Map<String,Object>>
-     */
+
     public static <T> List<Map<String, Object>> beansToMaps(List<T> beanList) {
         List<Map<String, Object>> maps = new ArrayList<>();
         if (beanList == null || beanList.size() == 0) {
@@ -107,9 +105,7 @@ public abstract class BeanUtil extends org.springframework.beans.BeanUtils {
         return maps;
     }
 
-    /**
-     * List<Map<String,Objetc>> --> List<Bean>
-     */
+
     public static <T> List<T> mapsToBeans(List<Map<String, Object>> mapList, Class<T> t) {
         List<T> beans = new ArrayList<>();
         if (CollectionUtils.isEmpty(mapList)) {
