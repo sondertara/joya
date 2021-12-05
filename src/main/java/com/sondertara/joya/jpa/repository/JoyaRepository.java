@@ -1,4 +1,3 @@
-
 package com.sondertara.joya.jpa.repository;
 
 
@@ -45,32 +44,40 @@ public class JoyaRepository {
 
     /**
      * 查询list
-     * @param sql 原生sql
-     * @param clazz 目标实体
+     *
+     * @param sql    原生sql
+     * @param clazz  目标实体
      * @param params 参数
-     * @param <T> 泛型
+     * @param <T>    泛型
      * @return list
      */
     @SuppressWarnings("unchecked")
     public <T> List<T> findListBySql(String sql, Class<T> clazz, Object... params) {
+        if (JoyaSpringContext.getConfig(SQL_VIEW_SWITCH, true)) {
+            log.info("[findListBySql] SQL:\n{}", sql);
+        }
         Query query = em.createNativeQuery(sql);
         setParameters(query, params);
-        return query.unwrap(NativeQueryImpl.class).setResultTransformer(new AliasToBeanTransformer<T>(clazz)).list();
+        return query.unwrap(NativeQueryImpl.class).setResultTransformer(new AliasToBeanTransformer<>(clazz)).list();
     }
 
     /**
-     *  find to list
-     * @param nativeSql native query
+     * find to list
+     *
+     * @param nativeSql   native query
      * @param resultClass result class
-     * @param <T> generic
+     * @param <T>         generic
      * @return list
      */
     @SuppressWarnings("unchecked")
     public <T> List<T> findListBySql(NativeSqlQuery nativeSql, Class<T> resultClass) {
 
+        if (JoyaSpringContext.getConfig(SQL_VIEW_SWITCH, true)) {
+            log.info("[findListBySql] SQL:\n{}", nativeSql.toSql());
+        }
         Query query = em.createNativeQuery(nativeSql.toSql());
         setParameters(query, nativeSql.getParams());
-        return query.unwrap(NativeQueryImpl.class).setResultTransformer(new AliasToBeanTransformer<T>(resultClass)).list();
+        return query.unwrap(NativeQueryImpl.class).setResultTransformer(new AliasToBeanTransformer<>(resultClass)).list();
     }
 
     /**
@@ -139,18 +146,11 @@ public class JoyaRepository {
         setParameters(pageQuery, nativeSql.getParams());
 
 
-        List<T> result = totalRecord == 0 ? new ArrayList<T>(0) :
-                pageQuery.setFirstResult(pageNo)
-                        .setMaxResults(pageSize)
-                        .unwrap(NativeQueryImpl.class)
-                        .setResultTransformer(new AliasToBeanTransformer<T>(resultClass))
-                        .list();
+        List<T> result = totalRecord == 0 ? new ArrayList<T>(0) : pageQuery.setFirstResult(pageNo).setMaxResults(pageSize).unwrap(NativeQueryImpl.class).setResultTransformer(new AliasToBeanTransformer<T>(resultClass)).list();
 
         return new PageResult<>(pageNo, pageSize, totalRecord, result);
     }
 
-
-    /***********************************ql*************************************************/
 
     /**
      * 根据ql和按照索引顺序的params查询一个实体
@@ -173,8 +173,9 @@ public class JoyaRepository {
      * @param ql
      * @param sort   null表示不排序
      * @param params List<Order> orders = this.find("SELECT o FROM Order o WHERE o.storeId = ? and o.code = ? order by o.createTime desc", storeId, code);
-     * @return
+     * @return list
      */
+    @SuppressWarnings("unchecked")
     public <T> List<T> findAllByHql(final String ql, final Sort sort, final Object... params) {
         Query query = em.createQuery(ql + prepareOrder(sort));
         setParameters(query, params);
@@ -184,11 +185,12 @@ public class JoyaRepository {
     /**
      * 根据ql和按照索引顺序的params执行ql，pageable存储分页信息 null表示不分页
      *
-     * @param ql  hql
+     * @param ql       hql
      * @param pageable null表示不分页
-     * @param params query
+     * @param params   query
      * @return list
      */
+    @SuppressWarnings("unchecked")
     public <T> List<T> findAllByHql(final String ql, final Pageable pageable, final Object... params) {
         Query query = em.createQuery(ql + prepareOrder(pageable != null ? pageable.getSort() : null));
         setParameters(query, params);
@@ -213,8 +215,7 @@ public class JoyaRepository {
      * 拼排序
      */
     private String prepareOrder(Sort sort) {
-        return (sort == null || !sort.iterator().hasNext()) ? "" :
-                (" order by " + sort.toString().replace(":", " "));
+        return (sort == null || !sort.iterator().hasNext()) ? "" : (" order by " + sort.toString().replace(":", " "));
     }
 
     /**

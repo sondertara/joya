@@ -25,9 +25,9 @@ public class JoyaPageUtil {
     /**
      * 带join查询
      *
-     * @param queryParam
-     * @param joinPart
-     * @return
+     * @param queryParam page query
+     * @param joinPart join part
+     * @return native sql
      */
     public static NativeSqlQuery buildNativeQuery(PageQueryParam queryParam, UnaryOperator<JoinCriterion> joinPart) {
 
@@ -38,9 +38,9 @@ public class JoyaPageUtil {
     /**
      * 联表查询 关联条件在 sqlStr中
      *
-     * @param queryParam
-     * @param targetClass
-     * @return
+     * @param queryParam page query
+     * @param targetClass the query table entity class
+     * @return native sql
      */
     public static NativeSqlQuery buildNativeQuery(PageQueryParam queryParam, Class<?>... targetClass) {
 

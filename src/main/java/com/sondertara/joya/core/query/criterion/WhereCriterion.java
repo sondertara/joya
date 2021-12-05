@@ -31,10 +31,6 @@ public class WhereCriterion {
      */
     private final StringJoiner segments;
     /**
-     * the special where condition
-     */
-    private String specificW;
-    /**
      * 占位符计数器 ?1 ?2 ?3
      */
     private int counts = 1;
@@ -120,7 +116,9 @@ public class WhereCriterion {
      */
     public WhereCriterion subQuery(UnaryOperator<WhereCriterion> func) throws RuntimeException {
 
-        WhereCriterion apply = func.apply(new WhereCriterion(Operator.OR.equals(this.currentOpt) ? Operator.AND : Operator.OR));
+        Operator operator = Operator.OR.equals(this.currentOpt) ? Operator.AND : Operator.OR;
+        WhereCriterion apply = func.apply(new WhereCriterion(operator));
+
 
         StringJoiner joiner = apply.getSegments();
 
@@ -128,20 +126,20 @@ public class WhereCriterion {
             throw new RuntimeException("sub query is null!");
         }
         List<Object> params = apply.getParams();
-        int counts = apply.getCounts();
-        if (counts < JoyaConst.TWO_QUERY_COUNT) {
+        if (apply.getCounts() < JoyaConst.TWO_QUERY_COUNT) {
             throw new RuntimeException("sub query must a least two part!");
         }
         String subSql = joiner.toString();
-        List<String> all = RegexUtils.findAll("(=\\s\\?)[0-9]+", subSql, 0);
+        List<String> all = RegexUtils.findAll("(\\s\\?)[0-9]+", subSql, 0);
 
-        String[] split = subSql.split(" OR ");
+        String[] split = subSql.split(" " + operator.name() + " ");
         if (CollectionUtils.isNotEmpty(all)) {
             for (int i = 0; i < all.size(); i++) {
-                split[i] = split[i].replace(all.get(i), StringFormatter.format("= ?{}", counts + i));
+                this.counts += i;
+                split[i] = split[i].replace(all.get(i), StringFormatter.format(" ?{}", this.counts));
             }
         }
-        subSql = String.join(" OR ", split);
+        subSql = String.join(" " + operator.name() + " ", split);
         this.params.addAll(params);
         this.segments.add(StringFormatter.format("( {} )", subSql));
 
@@ -653,15 +651,15 @@ public class WhereCriterion {
     }
 
     /**
-     * 追加到 where条件尾部的自定义sql字符串片段
+     * 追加到 where条件中自定义sql字符串片段
      */
     public void specificW(String part) {
-        this.specificW = part;
+        this.segments.add(SqlUtils.underlineColumn(part));
     }
 
 
     public StringJoiner getSegments() {
-        return specificW != null ? segments.add(SqlUtils.underlineColumn(specificW)) : segments;
+        return this.segments;
     }
 
     public int getCounts() {
@@ -670,15 +668,6 @@ public class WhereCriterion {
 
     public List<Object> getParams() {
         return params;
-    }
-
-    private String warpColumn(String column) {
-        int index = column.indexOf(".");
-        if (index > 0) {
-            return SqlUtils.underlineColumn(column);
-        } else {
-            return "t0." + StringUtils.toUnderlineCase(column);
-        }
     }
 
 

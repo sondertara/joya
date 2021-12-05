@@ -3,6 +3,7 @@ package com.sondertara.joya.cache;
 
 import com.sondertara.common.exception.TaraException;
 import com.sondertara.common.function.TaraFunction;
+import com.sondertara.common.lang.Assert;
 import com.sondertara.common.util.StringFormatter;
 import com.sondertara.common.util.StringUtils;
 import com.sondertara.joya.core.model.ColumnAliasDTO;
@@ -62,6 +63,23 @@ public final class AliasThreadLocalCache {
             aliasDTO.setTableName(t.getTableName());
             aliasDTO.setAliasName(StringFormatter.format("t{}", aliasMap.size()));
             aliasMap.putIfAbsent(aClass.getName(), aliasDTO);
+        });
+    }
+
+    @SuppressWarnings("unchecked")
+    public static void generateTableAlias(String tableAndAlias) {
+        Assert.notBlank(tableAndAlias);
+
+        String[] strings = tableAndAlias.split(" AS ");
+
+        LocalEntityCache.getInstance().get(strings[0].toLowerCase()).ifPresent(t -> {
+            LinkedHashMap<String, TableAliasDTO> aliasMap = (LinkedHashMap<String, TableAliasDTO>) ThreadLocalUtil.get(JOYA_SQL);
+
+            TableAliasDTO aliasDTO = new TableAliasDTO();
+            aliasDTO.setClassName(t.getClassName());
+            aliasDTO.setTableName(t.getTableName());
+            aliasDTO.setAliasName(StringFormatter.format("t{}", aliasMap.size()));
+            aliasMap.putIfAbsent(t.getClassName(), aliasDTO);
         });
     }
 

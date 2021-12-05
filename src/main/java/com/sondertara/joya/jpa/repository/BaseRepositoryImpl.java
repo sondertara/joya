@@ -1,10 +1,10 @@
-
 package com.sondertara.joya.jpa.repository;
 
 
 import com.sondertara.joya.core.query.NativeSqlQuery;
 import com.sondertara.joya.hibernate.transformer.AliasToBeanTransformer;
 import com.sondertara.joya.utils.BeanUtil;
+import com.sondertara.joya.utils.SqlUtils;
 import org.apache.commons.beanutils.BeanUtils;
 import org.hibernate.Session;
 import org.hibernate.query.internal.NativeQueryImpl;
@@ -166,27 +166,21 @@ public class BaseRepositoryImpl<T, ID extends Serializable> extends SimpleJpaRep
 
         //获取总记录数
         Session session = em.unwrap(Session.class);
-        Query countQuery = session.createNativeQuery("select count(*) from (" + sqlStr + ") as t");
+        String countSql = SqlUtils.buildCountSql(sqlStr);
+        Query countQuery = session.createNativeQuery(countSql);
         setParameters(countQuery, nativeSql.getParams());
 
+        long totalRecord = ((Number) countQuery.getSingleResult()).longValue();
 
         //获取分页结果
         Query pageQuery = session.createNativeQuery(sqlStr);
         setParameters(pageQuery, nativeSql.getParams());
 
-        long totalRecord = ((Number) countQuery.getSingleResult()).longValue();
-        List<X> result = totalRecord == 0 ? new ArrayList<X>(0) :
-                pageQuery.setFirstResult(pageNo - 1)
-                        .setMaxResults(pageSize)
-                        .unwrap(NativeQueryImpl.class)
-                        .setResultTransformer(new AliasToBeanTransformer<X>(resultClass))
-                        .list();
+        List<X> result = totalRecord == 0 ? new ArrayList<X>(0) : pageQuery.setFirstResult(pageNo).setMaxResults(pageSize).unwrap(NativeQueryImpl.class).setResultTransformer(new AliasToBeanTransformer<X>(resultClass)).list();
 
-        return new PageImpl<X>(result, PageRequest.of(pageNo - 1, pageSize), totalRecord);
+        return new PageImpl<X>(result, PageRequest.of(pageNo, pageSize), totalRecord);
     }
 
-
-    /***********************************ql*************************************************/
 
     /**
      * 根据ql和按照索引顺序的params查询一个实体
@@ -209,7 +203,7 @@ public class BaseRepositoryImpl<T, ID extends Serializable> extends SimpleJpaRep
      * @param ql
      * @param sort   null表示不排序
      * @param params List<Order> orders = this.find("SELECT o FROM Order o WHERE o.storeId = ? and o.code = ? order by o.createTime desc", storeId, code);
-     * @return
+     * @return list
      */
     public List<T> findAllByQL(final String ql, final Sort sort, final Object... params) {
         Query query = em.createQuery(ql + prepareOrder(sort));
@@ -220,11 +214,12 @@ public class BaseRepositoryImpl<T, ID extends Serializable> extends SimpleJpaRep
     /**
      * 根据ql和按照索引顺序的params执行ql，pageable存储分页信息 null表示不分页
      *
-     * @param ql
+     * @param ql hql
      * @param pageable null表示不分页
-     * @param params
-     * @return
+     * @param params param
+     * @return list
      */
+    @SuppressWarnings("unchecked")
     public List<T> findAllByQL(final String ql, final Pageable pageable, final Object... params) {
         Query query = em.createQuery(ql + prepareOrder(pageable != null ? pageable.getSort() : null));
         setParameters(query, params);
@@ -250,8 +245,7 @@ public class BaseRepositoryImpl<T, ID extends Serializable> extends SimpleJpaRep
      * 拼排序
      */
     private String prepareOrder(Sort sort) {
-        return (sort == null || !sort.iterator().hasNext()) ? "" :
-                (" order by " + sort.toString().replace(":", " "));
+        return (sort == null || !sort.iterator().hasNext()) ? "" : (" order by " + sort.toString().replace(":", " "));
     }
 
     /**

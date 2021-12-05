@@ -28,9 +28,9 @@ public interface BaseRepository<T, ID extends Serializable> extends PagingAndSor
     /**
      * 使用SQL查询列表，数据已map形式封装
      *
-     * @param querySql
-     * @param params
-     * @return
+     * @param querySql hql
+     * @param params   param
+     * @return the list of row map
      */
     List<Map<String, Object>> findMapListByHql(String querySql, final Map<String, ?> params);
 
@@ -55,20 +55,20 @@ public interface BaseRepository<T, ID extends Serializable> extends PagingAndSor
     <X> X findObjectByHql(String hql, final Map<String, ?> params);
 
     /**
-     * 使用SQL查询对象，数据已map形式封装
+     * sql query to Map
      *
-     * @param querySql
-     * @param params
-     * @return
+     * @param querySql sql
+     * @param params   param
+     * @return Map
      */
     public Map<String, Object> findMapBySql(String querySql, final Map<String, ?> params);
 
     /**
      * 执行SQL语句
      *
-     * @param sql
-     * @param params
-     * @return
+     * @param sql    sql
+     * @param params param
+     * @return the effect row count
      */
     public int executeSql(String sql, final Map<String, ?> params);
 
@@ -78,7 +78,7 @@ public interface BaseRepository<T, ID extends Serializable> extends PagingAndSor
      *
      * @param querySql 查询语句
      * @param params   参数MAP格式
-     * @return
+     * @return list
      */
     List<Object> findListBySql(String querySql, Map<String, ?> params);
 
@@ -150,9 +150,9 @@ public interface BaseRepository<T, ID extends Serializable> extends PagingAndSor
     /**
      * 根据Hql查询列表
      *
-     * @param queryJql
-     * @param params
-     * @return
+     * @param queryJql hql
+     * @param params   param
+     * @return list
      */
     <X> X findListByHql(String queryJql, final Map<String, ?> params);
 
@@ -167,22 +167,22 @@ public interface BaseRepository<T, ID extends Serializable> extends PagingAndSor
     <X> List<X> findListBySql(NativeSqlQuery nativeSql, Class<X> resultClass);
 
     /**
-     * 查询分页对象
+     * query page
      *
      * @param nativeSql   native query
      * @param resultClass result bean
-     * @param pageNo      pageNo minimum is 1
+     * @param pageNo      pageNo minimum is 0
      * @param pageSize    pageSize
      * @return Page
      */
     <X> Page<X> queryPageBySql(NativeSqlQuery nativeSql, Class<X> resultClass, Integer pageNo, Integer pageSize);
 
     /**
-     * 获取数量 by hql
+     * count by hql
      *
-     * @param hql
-     * @param params
-     * @return
+     * @param hql    hql
+     * @param params param
+     * @return count
      */
     long countByHql(final String hql, final Object... params);
 

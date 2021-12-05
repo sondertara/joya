@@ -7,6 +7,7 @@ import com.sondertara.common.exception.TaraException;
 import com.sondertara.common.function.TaraFunction;
 import com.sondertara.common.structure.NodeList;
 import com.sondertara.common.util.CollectionUtils;
+import com.sondertara.common.util.PatternPool;
 import com.sondertara.common.util.StringFormatter;
 import com.sondertara.common.util.StringUtils;
 import com.sondertara.joya.cache.AliasThreadLocalCache;
@@ -64,12 +65,6 @@ public class NativeSqlQuery {
         this.params = params;
     }
 
-
-    private NativeSqlQuery() {
-
-    }
-
-
     public static NativeSqlQueryBuilder builder() {
         ThreadLocalUtil.put(JoyaConst.JOYA_SQL, Maps.newLinkedHashMap());
         return new NativeSqlQueryBuilder();
@@ -111,8 +106,13 @@ public class NativeSqlQuery {
          * select 要查询的列 格式为[t0.user_name] 或者[t0.usr_name AS userName]
          */
         public NativeSqlQueryBuilder select(String... columns) {
-
-            this.select = String.join(", ", columns);
+            StringJoiner sj = new StringJoiner(", ");
+            for (String column : columns) {
+                String s = SqlUtils.replaceAs(column);
+                String columnName = SqlUtils.warpColumn(s);
+                sj.add(columnName);
+            }
+            this.select = sj.toString();
             return this;
         }
 
@@ -167,115 +167,68 @@ public class NativeSqlQuery {
          */
         public <T1, T2> NativeSqlQueryBuilder select(TaraFunction<T1, ?> f1, TaraFunction<T2, ?> f2) {
             StringJoiner sj = new StringJoiner(", ");
-            this.select = sj.add(AliasThreadLocalCache.getColumn(f1).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f2).getColumnAlias())
-                    .toString();
+            this.select = sj.add(AliasThreadLocalCache.getColumn(f1).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f2).getColumnAlias()).toString();
             return this;
         }
 
 
         public <T1, T2, T3> NativeSqlQueryBuilder select(TaraFunction<T1, ?> f1, TaraFunction<T2, ?> f2, TaraFunction<T3, ?> f3) {
             StringJoiner sj = new StringJoiner(", ");
-            this.select = sj.add(AliasThreadLocalCache.getColumn(f1).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f2).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f3).getColumnAlias())
-                    .toString();
+            this.select = sj.add(AliasThreadLocalCache.getColumn(f1).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f2).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f3).getColumnAlias()).toString();
             return this;
         }
 
-        public <T1, T2, T3, T4> NativeSqlQueryBuilder select(TaraFunction<T1, ?> f1, TaraFunction<T2, ?> f2, TaraFunction<T3, ?> f3,
-                                                                            TaraFunction<T4, ?> f4) {
+        public <T1, T2, T3, T4> NativeSqlQueryBuilder select(TaraFunction<T1, ?> f1, TaraFunction<T2, ?> f2, TaraFunction<T3, ?> f3, TaraFunction<T4, ?> f4) {
             StringJoiner sj = new StringJoiner(", ");
-            this.select = sj.add(AliasThreadLocalCache.getColumn(f1).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f2).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f3).getColumnAlias())
-                    .add(AliasThreadLocalCache.getColumn(f4).getColumnAlias())
-                    .toString();
+            this.select = sj.add(AliasThreadLocalCache.getColumn(f1).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f2).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f3).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f4).getColumnAlias()).toString();
             return this;
         }
 
-        public <T1, T2, T3, T4, T5> NativeSqlQueryBuilder select(TaraFunction<T1, ?> f1, TaraFunction<T2, ?> f2, TaraFunction<T3, ?> f3,
-                                                                                TaraFunction<T4, ?> f4, TaraFunction<T5, ?> f5) {
+        public <T1, T2, T3, T4, T5> NativeSqlQueryBuilder select(TaraFunction<T1, ?> f1, TaraFunction<T2, ?> f2, TaraFunction<T3, ?> f3, TaraFunction<T4, ?> f4, TaraFunction<T5, ?> f5) {
             StringJoiner sj = new StringJoiner(", ");
-            this.select = sj.add(AliasThreadLocalCache.getColumn(f1).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f2).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f3).getColumnAlias())
-                    .add(AliasThreadLocalCache.getColumn(f4).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f5).getColumnAlias())
-                    .toString();
+            this.select = sj.add(AliasThreadLocalCache.getColumn(f1).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f2).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f3).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f4).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f5).getColumnAlias()).toString();
             return this;
         }
 
-        public <T1, T2, T3, T4, T5, T6> NativeSqlQueryBuilder select(TaraFunction<T1, ?> f1, TaraFunction<T2, ?> f2, TaraFunction<T3, ?> f3,
-                                                                                    TaraFunction<T4, ?> f4, TaraFunction<T5, ?> f5, TaraFunction<T6, ?> f6) {
+        public <T1, T2, T3, T4, T5, T6> NativeSqlQueryBuilder select(TaraFunction<T1, ?> f1, TaraFunction<T2, ?> f2, TaraFunction<T3, ?> f3, TaraFunction<T4, ?> f4, TaraFunction<T5, ?> f5, TaraFunction<T6, ?> f6) {
             StringJoiner sj = new StringJoiner(", ");
-            this.select = sj.add(AliasThreadLocalCache.getColumn(f1).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f2).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f3).getColumnAlias())
-                    .add(AliasThreadLocalCache.getColumn(f4).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f5).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f6).getColumnAlias())
-                    .toString();
+            this.select = sj.add(AliasThreadLocalCache.getColumn(f1).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f2).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f3).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f4).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f5).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f6).getColumnAlias()).toString();
             return this;
         }
 
-        public <T1, T2, T3, T4, T5, T6, T7> NativeSqlQueryBuilder select(TaraFunction<T1, ?> f1, TaraFunction<T2, ?> f2, TaraFunction<T3, ?> f3,
-                                                                                        TaraFunction<T4, ?> f4, TaraFunction<T5, ?> f5, TaraFunction<T6, ?> f6,
-                                                                                        TaraFunction<T7, ?> f7) {
+        public <T1, T2, T3, T4, T5, T6, T7> NativeSqlQueryBuilder select(TaraFunction<T1, ?> f1, TaraFunction<T2, ?> f2, TaraFunction<T3, ?> f3, TaraFunction<T4, ?> f4, TaraFunction<T5, ?> f5, TaraFunction<T6, ?> f6, TaraFunction<T7, ?> f7) {
             StringJoiner sj = new StringJoiner(", ");
-            this.select = sj.add(AliasThreadLocalCache.getColumn(f1).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f2).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f3).getColumnAlias())
-                    .add(AliasThreadLocalCache.getColumn(f4).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f5).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f6).getColumnAlias())
-                    .add(AliasThreadLocalCache.getColumn(f7).getColumnAlias())
-                    .toString();
+            this.select = sj.add(AliasThreadLocalCache.getColumn(f1).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f2).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f3).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f4).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f5).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f6).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f7).getColumnAlias()).toString();
             return this;
         }
 
-        public <T1, T2, T3, T4, T5, T6, T7, T8> NativeSqlQueryBuilder select(TaraFunction<T1, ?> f1, TaraFunction<T2, ?> f2, TaraFunction<T3, ?> f3,
-                                                                                            TaraFunction<T4, ?> f4, TaraFunction<T5, ?> f5, TaraFunction<T6, ?> f6,
-                                                                                            TaraFunction<T7, ?> f7, TaraFunction<T8, ?> f8) {
+        public <T1, T2, T3, T4, T5, T6, T7, T8> NativeSqlQueryBuilder select(TaraFunction<T1, ?> f1, TaraFunction<T2, ?> f2, TaraFunction<T3, ?> f3, TaraFunction<T4, ?> f4, TaraFunction<T5, ?> f5, TaraFunction<T6, ?> f6, TaraFunction<T7, ?> f7, TaraFunction<T8, ?> f8) {
             StringJoiner sj = new StringJoiner(", ");
-            this.select = sj.add(AliasThreadLocalCache.getColumn(f1).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f2).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f3).getColumnAlias())
-                    .add(AliasThreadLocalCache.getColumn(f4).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f5).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f6).getColumnAlias())
-                    .add(AliasThreadLocalCache.getColumn(f7).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f8).getColumnAlias())
-                    .toString();
+            this.select = sj.add(AliasThreadLocalCache.getColumn(f1).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f2).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f3).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f4).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f5).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f6).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f7).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f8).getColumnAlias()).toString();
             return this;
         }
 
-        public <T1, T2, T3, T4, T5, T6, T7, T8, T9> NativeSqlQueryBuilder select(TaraFunction<T1, ?> f1, TaraFunction<T2, ?> f2, TaraFunction<T3, ?> f3,
-                                                                                                TaraFunction<T4, ?> f4, TaraFunction<T5, ?> f5, TaraFunction<T6, ?> f6,
-                                                                                                TaraFunction<T7, ?> f7, TaraFunction<T8, ?> f8, TaraFunction<T9, ?> f9) {
+        public <T1, T2, T3, T4, T5, T6, T7, T8, T9> NativeSqlQueryBuilder select(TaraFunction<T1, ?> f1, TaraFunction<T2, ?> f2, TaraFunction<T3, ?> f3, TaraFunction<T4, ?> f4, TaraFunction<T5, ?> f5, TaraFunction<T6, ?> f6, TaraFunction<T7, ?> f7, TaraFunction<T8, ?> f8, TaraFunction<T9, ?> f9) {
             StringJoiner sj = new StringJoiner(", ");
-            this.select = sj.add(AliasThreadLocalCache.getColumn(f1).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f2).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f3).getColumnAlias())
-                    .add(AliasThreadLocalCache.getColumn(f4).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f5).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f6).getColumnAlias())
-                    .add(AliasThreadLocalCache.getColumn(f7).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f8).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f9).getColumnAlias())
-                    .toString();
+            this.select = sj.add(AliasThreadLocalCache.getColumn(f1).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f2).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f3).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f4).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f5).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f6).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f7).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f8).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f9).getColumnAlias()).toString();
             return this;
         }
 
-        public <T1, T2, T3, T4, T5, T6, T7, T8, T9, T10> NativeSqlQueryBuilder select(TaraFunction<T1, ?> f1, TaraFunction<T2, ?> f2, TaraFunction<T3, ?> f3,
-                                                                                                     TaraFunction<T4, ?> f4, TaraFunction<T5, ?> f5, TaraFunction<T6, ?> f6,
-                                                                                                     TaraFunction<T7, ?> f7, TaraFunction<T8, ?> f8, TaraFunction<T9, ?> f9,
-                                                                                                     TaraFunction<T10, ?> f10) {
+        public <T1, T2, T3, T4, T5, T6, T7, T8, T9, T10> NativeSqlQueryBuilder select(TaraFunction<T1, ?> f1, TaraFunction<T2, ?> f2, TaraFunction<T3, ?> f3, TaraFunction<T4, ?> f4, TaraFunction<T5, ?> f5, TaraFunction<T6, ?> f6, TaraFunction<T7, ?> f7, TaraFunction<T8, ?> f8, TaraFunction<T9, ?> f9, TaraFunction<T10, ?> f10) {
             StringJoiner sj = new StringJoiner(", ");
-            this.select = sj.add(AliasThreadLocalCache.getColumn(f1).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f2).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f3).getColumnAlias())
-                    .add(AliasThreadLocalCache.getColumn(f4).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f5).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f6).getColumnAlias())
-                    .add(AliasThreadLocalCache.getColumn(f7).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f8).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f9).getColumnAlias())
-                    .add(AliasThreadLocalCache.getColumn(f10).getColumnAlias())
-                    .toString();
+            this.select = sj.add(AliasThreadLocalCache.getColumn(f1).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f2).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f3).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f4).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f5).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f6).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f7).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f8).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f9).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f10).getColumnAlias()).toString();
             return this;
         }
 
-        public <T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11> NativeSqlQueryBuilder select(TaraFunction<T1, ?> f1, TaraFunction<T2, ?> f2, TaraFunction<T3, ?> f3,
-                                                                                                          TaraFunction<T4, ?> f4, TaraFunction<T5, ?> f5, TaraFunction<T6, ?> f6,
-                                                                                                          TaraFunction<T7, ?> f7, TaraFunction<T8, ?> f8, TaraFunction<T9, ?> f9,
-                                                                                                          TaraFunction<T10, ?> f10, TaraFunction<T11, ?> f11) {
+        public <T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11> NativeSqlQueryBuilder select(TaraFunction<T1, ?> f1, TaraFunction<T2, ?> f2, TaraFunction<T3, ?> f3, TaraFunction<T4, ?> f4, TaraFunction<T5, ?> f5, TaraFunction<T6, ?> f6, TaraFunction<T7, ?> f7, TaraFunction<T8, ?> f8, TaraFunction<T9, ?> f9, TaraFunction<T10, ?> f10, TaraFunction<T11, ?> f11) {
             StringJoiner sj = new StringJoiner(", ");
-            this.select = sj.add(AliasThreadLocalCache.getColumn(f1).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f2).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f3).getColumnAlias())
-                    .add(AliasThreadLocalCache.getColumn(f4).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f5).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f6).getColumnAlias())
-                    .add(AliasThreadLocalCache.getColumn(f7).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f8).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f9).getColumnAlias())
-                    .add(AliasThreadLocalCache.getColumn(f10).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f11).getColumnAlias())
-                    .toString();
+            this.select = sj.add(AliasThreadLocalCache.getColumn(f1).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f2).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f3).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f4).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f5).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f6).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f7).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f8).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f9).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f10).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f11).getColumnAlias()).toString();
             return this;
         }
 
-        public <T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12> NativeSqlQueryBuilder select(TaraFunction<T1, ?> f1, TaraFunction<T2, ?> f2, TaraFunction<T3, ?> f3,
-                                                                                                               TaraFunction<T4, ?> f4, TaraFunction<T5, ?> f5, TaraFunction<T6, ?> f6,
-                                                                                                               TaraFunction<T7, ?> f7, TaraFunction<T8, ?> f8, TaraFunction<T9, ?> f9,
-                                                                                                               TaraFunction<T10, ?> f10, TaraFunction<T11, ?> f11, TaraFunction<T12, ?> f12) {
+        public <T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12> NativeSqlQueryBuilder select(TaraFunction<T1, ?> f1, TaraFunction<T2, ?> f2, TaraFunction<T3, ?> f3, TaraFunction<T4, ?> f4, TaraFunction<T5, ?> f5, TaraFunction<T6, ?> f6, TaraFunction<T7, ?> f7, TaraFunction<T8, ?> f8, TaraFunction<T9, ?> f9, TaraFunction<T10, ?> f10, TaraFunction<T11, ?> f11, TaraFunction<T12, ?> f12) {
             StringJoiner sj = new StringJoiner(", ");
-            this.select = sj.add(AliasThreadLocalCache.getColumn(f1).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f2).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f3).getColumnAlias())
-                    .add(AliasThreadLocalCache.getColumn(f4).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f5).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f6).getColumnAlias())
-                    .add(AliasThreadLocalCache.getColumn(f7).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f8).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f9).getColumnAlias())
-                    .add(AliasThreadLocalCache.getColumn(f10).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f11).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f12).getColumnAlias())
-                    .toString();
+            this.select = sj.add(AliasThreadLocalCache.getColumn(f1).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f2).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f3).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f4).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f5).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f6).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f7).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f8).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f9).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f10).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f11).getColumnAlias()).add(AliasThreadLocalCache.getColumn(f12).getColumnAlias()).toString();
             return this;
         }
 
@@ -296,7 +249,22 @@ public class NativeSqlQuery {
          * from 要查询的表以及关联表
          */
         public NativeSqlQueryBuilder from(String... tableAndJoinTable) {
-            this.from = String.join(", ", tableAndJoinTable);
+
+            StringJoiner sj = new StringJoiner(", ");
+            for (String s : tableAndJoinTable) {
+                String[] split = s.split(",");
+                for (String s1 : split) {
+                    String tableAndAlias = SqlUtils.replaceAs(s1).trim();
+                    Pattern pattern = PatternPool.get("[A-Za-z0-9_]+( AS )[A-Za-z0-9_]+");
+                    Matcher matcher = pattern.matcher(tableAndAlias);
+                    while (matcher.find()) {
+                        AliasThreadLocalCache.generateTableAlias(matcher.group());
+
+                    }
+                    sj.add(tableAndAlias);
+                }
+            }
+            this.from = sj.toString();
             return this;
         }
 
@@ -419,7 +387,7 @@ public class NativeSqlQuery {
                     sb.add(second.getTableName()).add("AS").add(second.getTableAlias());
                     sb.add("ON");
                     sb.add(first.getColumnAlias()).add("=").add(second.getColumnAlias());
-                    if (nodeList.getSize() > 2) {
+                    if (nodeList.getSize() > JoyaConst.TWO_QUERY_COUNT) {
                         ColumnAliasDTO third = nodeList.get(2);
                         ColumnAliasDTO forth = nodeList.get(3);
 
@@ -440,11 +408,9 @@ public class NativeSqlQuery {
 
         /**
          * order By
-         *
-         * @return order by str
          */
         private void buildOrderBy(StringJoiner sj) {
-            if (CollectionUtils.isNotEmpty(this.orderBy)) {
+            if (CollectionUtils.isEmpty(this.orderBy)) {
                 return;
 
             }
@@ -457,7 +423,7 @@ public class NativeSqlQuery {
                 String columnName = AliasThreadLocalCache.getColumnName(column);
                 sjOrderBy.add(StringFormatter.format("{} {}", columnName, orderByType));
             }
-            sj.add(new StringBuilder("ORDER BY ").append(orderBy));
+            sj.add(new StringBuilder("ORDER BY ").append(sjOrderBy));
         }
 
         private void buildSelect(StringJoiner sj, List<TableAliasDTO> tables) {
@@ -482,9 +448,7 @@ public class NativeSqlQuery {
                             String fieldName = entity.getKey();
 
                             if (null != finalMap) {
-                                String s1 = fieldName.equalsIgnoreCase(StringUtils.toCamelCase(columnName)) ?
-                                        StringFormatter.format("{}.{}", table.getAliasName(), columnName)
-                                        : StringFormatter.format("{}.{} AS {} ", table.getAliasName(), columnName, fieldName);
+                                String s1 = fieldName.equalsIgnoreCase(StringUtils.toCamelCase(columnName)) ? StringFormatter.format("{}.{}", table.getAliasName(), columnName) : StringFormatter.format("{}.{} AS {} ", table.getAliasName(), columnName, fieldName);
                                 if (finalMap.containsKey(s1)) {
                                     stringJoiner.add(finalMap.get(s1));
                                     continue;
@@ -494,9 +458,7 @@ public class NativeSqlQuery {
                                 continue;
                             }
                             columns.add(columnName);
-                            String s = fieldName.equalsIgnoreCase(StringUtils.toCamelCase(columnName)) ?
-                                    StringFormatter.format("{}.{}", table.getAliasName(), columnName) :
-                                    StringFormatter.format("{}.{} AS {}", table.getAliasName(), columnName, fieldName);
+                            String s = fieldName.equalsIgnoreCase(StringUtils.toCamelCase(columnName)) ? StringFormatter.format("{}.{}", table.getAliasName(), columnName) : StringFormatter.format("{}.{} AS {}", table.getAliasName(), columnName, fieldName);
                             stringJoiner.add(s);
                         }
                     });

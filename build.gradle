@@ -12,9 +12,9 @@ allprojects {
 def isRelease = false
 
 group = 'com.sondertara'
-version = '0.0.7'
+version = '0.0.7.101'
 archivesBaseName = 'joya'
-sourceCompatibility = '11'
+sourceCompatibility = '1.8'
 
 ext.versions = [springBoot     : '2.6.0',
                 springData     : '2.6.0',
@@ -50,7 +50,7 @@ jar {
     }
     manifest {
         attributes('Built-By': 'huangxiaohu',
-                'Build-Jdk-Spec': '11')
+                'Build-Jdk-Spec': '1.8')
     }
 }
 

@@ -17,9 +17,13 @@ public class SqlUtils {
     }
 
     /**
-     * 字段提取
+     * 左边字段提取
      */
-    public static final Pattern COLUMN_FORMAT = Pattern.compile("^[t|T][0-9]+(.)[A-Za-z0-9]+[\\s]*[=]?|[\\s][t|T][0-9]+(.)[A-Za-z0-9]+[\\s]*[=]?");
+    public static final Pattern LEFT_COLUMN_FORMAT = Pattern.compile("^[t|T][0-9]+(.)[A-Za-z0-9]+[\\s]*[=]?|[\\s][t|T][0-9]+(.)[A-Za-z0-9]+[\\s]*[=]?");
+    /**
+     * 带表别名的列
+     */
+    public static final Pattern COLUMN_WITH_TABLE_ALIAS = Pattern.compile("(?![\"'])[t|T][0-9]+(.)[A-Za-z0-9]+[\\s]*(?![\"'])");
 
     /**
      * 根据查询列表SQL语句自动构造查询记录总数的SQL语句
@@ -31,7 +35,7 @@ public class SqlUtils {
 
         StringBuilder countBuff = new StringBuilder();
         if (strSql != null) {
-            String sql = null;
+            String sql;
             if (strSql instanceof String) {
                 sql = (String) strSql;
             } else if (strSql instanceof StringBuffer) {
@@ -43,8 +47,7 @@ public class SqlUtils {
             if (containsDistinctKeywords(sql)) {
 
                 // 查询字段
-                String queryField = sql.substring(findStrPosition(sql, "distinct") + 8, findStrPosition(sql, "from"))
-                        .trim();
+                String queryField = sql.substring(findStrPosition(sql, "distinct") + 8, findStrPosition(sql, "from")).trim();
 
                 countBuff.append("select count(distinct ").append(queryField).append(") ");
             } else {
@@ -73,15 +76,12 @@ public class SqlUtils {
     /**
      * 判断SQL语句中是否包含distinct关键字
      *
-     * @param sql
+     * @param sql str
      * @return is contains distinct
      */
     public static boolean containsDistinctKeywords(String sql) {
 
-        StringBuilder patternString = new StringBuilder();
-        patternString.append("\\s*").append(buildRegexStr("select")).append("\\s*").append(buildRegexStr("distinct"));
-
-        Pattern pattern = Pattern.compile(patternString.toString());
+        Pattern pattern = Pattern.compile("\\s*" + buildRegexStr("select") + "\\s*" + buildRegexStr("distinct"));
         Matcher matcher = pattern.matcher(sql);
 
         return matcher.find() && matcher.start() == 0;
@@ -135,34 +135,58 @@ public class SqlUtils {
         String patternString = "\\s*[Aa][Ss]\\s*";
         Pattern pattern = Pattern.compile(patternString);
         Matcher matcher = pattern.matcher(sql);
-        return matcher.replaceAll(" AS ");
+        return matcher.replaceAll(" AS ").trim();
     }
 
     /**
-     * 列格式化为下划线
+     * 格式化列,只格式化左边部分
      *
-     * @param sql
-     * @return
+     * @param sql str
+     * @return underLine str
      */
-    public static String underlineColumn(String sql) {
+    public static String formatColumn(String sql) {
         if (StringUtils.isBlank(sql)) {
             return "";
         }
 
-        return RegexUtils.replaceAll(sql, COLUMN_FORMAT, m -> {
+        return RegexUtils.replaceAll(sql, LEFT_COLUMN_FORMAT, m -> {
             String group = m.group();
             return StringUtils.toUnderlineCase(group);
         });
     }
 
     /**
+     * 格式化列
+     *
+     * @param sql str
+     * @return underLine str
+     */
+    public static String underlineColumn(String sql) {
+        if (StringUtils.isBlank(sql)) {
+            return "";
+        }
+
+        return RegexUtils.replaceAll(sql, COLUMN_WITH_TABLE_ALIAS, m -> {
+            String group = m.group();
+            return StringUtils.toUnderlineCase(group);
+        });
+    }
+
+
+    public static void main(String[] args) {
+        String column = underlineColumn("t0.userName=t1.idFk");
+        System.out.println(column);
+    }
+
+
+    /**
      * 过滤 sql语句中的order by 子句
      *
-     * @param sql
+     * @param sql str
      * @return String
      */
     public static String removeOrderBy(String sql) {
-        String patternString = "\\sORDER\\sBY\\s[a-zA-Z0-9\\.\\_\\,\\s]+";
+        String patternString = "\\sORDER\\sBY\\s[a-zA-Z0-9._,\\s]+";
         Pattern pattern = Pattern.compile(patternString);
         Matcher matcher = pattern.matcher(replaceOrderBy(sql));
         return matcher.replaceAll("");
@@ -171,9 +195,9 @@ public class SqlUtils {
     /**
      * 查找匹配字符串的位置
      *
-     * @param sql
-     * @param targetStr
-     * @return
+     * @param sql       str
+     * @param targetStr target
+     * @return index
      */
     public static int findStrPosition(String sql, String targetStr) {
         String patternString = buildRegexStr(targetStr);
@@ -198,7 +222,15 @@ public class SqlUtils {
         return sql.toFormattedSql();
     }
 
-
+    /**
+     * format column name
+     * <p>
+     * t0.userName ->t0.user_name
+     * t0.userId AA user -> t0.user_id AS user
+     *
+     * @param columnName name
+     * @return formatted name
+     */
     public static String warpColumn(String columnName) {
         if (null == columnName) {
             return null;
@@ -215,24 +247,20 @@ public class SqlUtils {
         }
         // 有别名
         int index = column.indexOf(".");
+        StringBuilder sb;
         if (index > -1) {
-            StringBuilder sb = new StringBuilder(column.substring(0, index));
+            sb = new StringBuilder(column.substring(0, index));
             sb.append(".");
             String col = column.substring(index + 1);
             sb.append(StringUtils.toUnderlineCase(col));
-            if (null != asPart) {
-                sb.append(" AS ");
-                sb.append(asPart);
-            }
-            return sb.toString();
         } else {
-            StringBuilder sb = new StringBuilder(StringUtils.toUnderlineCase(column));
+            sb = new StringBuilder(StringUtils.toUnderlineCase(column));
             sb.append(asPart);
-            if (null != asPart) {
-                sb.append(" AS ");
-                sb.append(asPart);
-            }
-            return sb.toString();
         }
+        if (null != asPart) {
+            sb.append(" AS ");
+            sb.append(asPart);
+        }
+        return sb.toString();
     }
 }

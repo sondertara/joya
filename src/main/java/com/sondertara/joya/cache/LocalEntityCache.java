@@ -58,7 +58,7 @@ public class LocalEntityCache extends GuavaAbstractLoadingCache<String, TableDTO
             Class<?> aClass = entity.getJavaType();
             Table annotation = aClass.getAnnotation(Table.class);
             String tableName = Optional.of(annotation).map(Table::name).orElseThrow(() -> new EntityNotFoundException(StringFormatter.format("no entity found by class [{}]", key)));
-            if (key.equals(aClass.getName())) {
+            if (key.equals(aClass.getName()) || key.equalsIgnoreCase(tableName)) {
                 Map<String, String> fieldNames = new LinkedHashMap<>();
                 Field[] fields = aClass.getDeclaredFields();
                 for (Field field : fields) {
@@ -72,9 +72,15 @@ public class LocalEntityCache extends GuavaAbstractLoadingCache<String, TableDTO
                     field.setAccessible(false);
                 }
                 TableDTO tableDTO = new TableDTO();
+                tableDTO.setClassName(aClass.getName());
                 tableDTO.setTableName(tableName);
                 tableDTO.setFields(fieldNames);
                 log.info("load key=[{}] from dataSource success!", key);
+                if (key.equals(aClass.getName())) {
+                    put(tableName, tableDTO);
+                } else {
+                    put(aClass.getName(), tableDTO);
+                }
                 return tableDTO;
             }
         }
