@@ -2,7 +2,6 @@ package com.sondertara.joya.cache;
 
 import com.sondertara.common.util.StringFormatter;
 import com.sondertara.common.util.StringUtils;
-import com.sondertara.joya.core.model.EntityFieldDTO;
 import com.sondertara.joya.core.model.TableDTO;
 import com.sondertara.joya.ext.JoyaSpringContext;
 import com.sondertara.joya.utils.cache.GuavaAbstractLoadingCache;
@@ -18,9 +17,9 @@ import javax.persistence.metamodel.EntityType;
 import javax.persistence.metamodel.Metamodel;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
-import java.util.LinkedHashSet;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 
 
 /**
@@ -60,7 +59,7 @@ public class LocalEntityCache extends GuavaAbstractLoadingCache<String, TableDTO
             Table annotation = aClass.getAnnotation(Table.class);
             String tableName = Optional.of(annotation).map(Table::name).orElseThrow(() -> new EntityNotFoundException(StringFormatter.format("no entity found by class [{}]", key)));
             if (key.equals(aClass.getName())) {
-                Set<EntityFieldDTO> fieldNames = new LinkedHashSet<>();
+                Map<String, String> fieldNames = new LinkedHashMap<>();
                 Field[] fields = aClass.getDeclaredFields();
                 for (Field field : fields) {
                     if (Modifier.isStatic(field.getModifiers())) {
@@ -69,16 +68,12 @@ public class LocalEntityCache extends GuavaAbstractLoadingCache<String, TableDTO
                     field.setAccessible(true);
                     Column fieldAnnotation = field.getAnnotation(Column.class);
                     String columnName = Optional.ofNullable(fieldAnnotation).map(f -> StringUtils.toLowerCase(f.name())).orElse(StringUtils.toUnderlineCase(field.getName()));
-                    EntityFieldDTO entityFieldDTO = new EntityFieldDTO();
-                    entityFieldDTO.setFieldName(field.getName());
-                    entityFieldDTO.setColumnName(columnName);
-                    entityFieldDTO.setSame(columnName.equals(StringUtils.toUnderlineCase(field.getName())));
-                    fieldNames.add(entityFieldDTO);
+                    fieldNames.put(field.getName(), columnName);
                     field.setAccessible(false);
                 }
                 TableDTO tableDTO = new TableDTO();
                 tableDTO.setTableName(tableName);
-                tableDTO.setFieldNames(fieldNames);
+                tableDTO.setFields(fieldNames);
                 log.info("load key=[{}] from dataSource success!", key);
                 return tableDTO;
             }

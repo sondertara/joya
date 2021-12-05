@@ -12,7 +12,6 @@ import com.sondertara.joya.core.query.pagination.SearchParam;
 
 import java.util.Collections;
 import java.util.List;
-import java.util.StringJoiner;
 import java.util.function.UnaryOperator;
 
 
@@ -31,7 +30,6 @@ public class JoyaPageUtil {
      * @return
      */
     public static NativeSqlQuery buildNativeQuery(PageQueryParam queryParam, UnaryOperator<JoinCriterion> joinPart) {
-
 
 
         return buildNativeQuery(queryParam, joinPart, new Class<?>[0]);
@@ -116,11 +114,10 @@ public class JoyaPageUtil {
 
         builder.where(func, PageQueryParam.LinkType.OR.equals(queryParam.getLinkType()));
         List<OrderParam> list = queryParam.getOrderList();
-        StringJoiner sj = new StringJoiner(", ");
         for (OrderParam param : list) {
-            sj.add(StringFormatter.format("{} {}", param.getFieldName(), param.getOrderType().toString()));
+            String orderBy = StringFormatter.format("{} {}", param.getFieldName(), param.getOrderType().toString());
+            builder.orderBy(orderBy);
         }
-        builder.orderBy(sj.toString());
         return builder.build();
     }
 }

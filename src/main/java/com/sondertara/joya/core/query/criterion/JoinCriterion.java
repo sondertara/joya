@@ -1,9 +1,9 @@
 package com.sondertara.joya.core.query.criterion;
 
 
-import com.sondertara.common.structure.NodeList;
 import com.sondertara.common.exception.TaraException;
 import com.sondertara.common.function.TaraFunction;
+import com.sondertara.common.structure.NodeList;
 import com.sondertara.joya.cache.AliasThreadLocalCache;
 import com.sondertara.joya.core.constant.JoyaConst;
 import com.sondertara.joya.core.model.ColumnAliasDTO;
@@ -112,9 +112,9 @@ public class JoinCriterion {
      * @return node list for join field
      */
     public NodeList<ColumnAliasDTO> getSegments() {
-        if (tableNames.size() >= JoyaConst.MAX_JOIN_TABLE) {
+        if (tableNames.size() > JoyaConst.MAX_JOIN_TABLE) {
 
-            throw new TaraException("Only support link three tables associated");
+            throw new TaraException("Only support  three tables associated");
 
         }
         return segments;

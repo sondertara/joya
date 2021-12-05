@@ -184,10 +184,10 @@ public class JoyaRepository {
     /**
      * 根据ql和按照索引顺序的params执行ql，pageable存储分页信息 null表示不分页
      *
-     * @param ql
+     * @param ql  hql
      * @param pageable null表示不分页
-     * @param params
-     * @return
+     * @param params query
+     * @return list
      */
     public <T> List<T> findAllByHql(final String ql, final Pageable pageable, final Object... params) {
         Query query = em.createQuery(ql + prepareOrder(pageable != null ? pageable.getSort() : null));

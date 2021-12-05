@@ -21,7 +21,11 @@ import java.lang.annotation.Annotation;
 import java.lang.reflect.Field;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
-import java.sql.*;
+import java.sql.Clob;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Types;
 import java.util.Objects;
 import java.util.Properties;
 
@@ -191,7 +195,7 @@ public class JSONType implements UserType, DynamicParameterizedType, Serializabl
             LOG.error(e.getMessage());
         }
         //final ParameterType reader = (ParameterType) parameters.get(
-        final DynamicParameterizedType.ParameterType reader = (DynamicParameterizedType.ParameterType) parameters.get(
+        final ParameterType reader = (ParameterType) parameters.get(
                 DynamicParameterizedType.PARAMETER_TYPE);
         if (reader != null) {
             type = reader.getReturnedClass();

@@ -83,7 +83,7 @@ public class WhereCriterion {
      */
     public WhereCriterion eq(String columnName, Object value) {
         if (Objects.nonNull(value)) {
-            segments.add(StringUtils.format("{} = ?{}", warpColumn(columnName), counts++));
+            segments.add(StringUtils.format("{} = ?{}", AliasThreadLocalCache.getColumnName(columnName), counts++));
             params.add(value);
         }
         return this;
@@ -157,7 +157,7 @@ public class WhereCriterion {
      */
     public WhereCriterion ne(String columnName, Object value) {
         if (Objects.nonNull(value)) {
-            segments.add(StringUtils.format("{} != ?{}", warpColumn(columnName), counts++));
+            segments.add(StringUtils.format("{} != ?{}", AliasThreadLocalCache.getColumnName(columnName), counts++));
             params.add(value);
         }
         return this;
@@ -188,7 +188,7 @@ public class WhereCriterion {
      */
     public WhereCriterion lt(String columnName, Object value) {
         if (Objects.nonNull(value)) {
-            segments.add(StringUtils.format("{} < ?{}", warpColumn(columnName), counts++));
+            segments.add(StringUtils.format("{} < ?{}", AliasThreadLocalCache.getColumnName(columnName), counts++));
             params.add(value);
         }
         return this;
@@ -219,7 +219,7 @@ public class WhereCriterion {
      */
     public WhereCriterion lte(String columnName, Object value) {
         if (Objects.nonNull(value)) {
-            segments.add(StringUtils.format("{} <= ?{}", warpColumn(columnName), counts++));
+            segments.add(StringUtils.format("{} <= ?{}", AliasThreadLocalCache.getColumnName(columnName), counts++));
             params.add(value);
         }
         return this;
@@ -250,7 +250,7 @@ public class WhereCriterion {
      */
     public WhereCriterion gt(String columnName, Object value) {
         if (Objects.nonNull(value)) {
-            segments.add(StringUtils.format("{} > ?{}", warpColumn(columnName), counts++));
+            segments.add(StringUtils.format("{} > ?{}", AliasThreadLocalCache.getColumnName(columnName), counts++));
             params.add(value);
         }
         return this;
@@ -281,7 +281,7 @@ public class WhereCriterion {
      */
     public WhereCriterion gte(String columnName, Object value) {
         if (Objects.nonNull(value)) {
-            segments.add(StringUtils.format("{} >= ?{}", warpColumn(columnName), counts++));
+            segments.add(StringUtils.format("{} >= ?{}", AliasThreadLocalCache.getColumnName(columnName), counts++));
             params.add(value);
         }
         return this;
@@ -307,7 +307,7 @@ public class WhereCriterion {
      * @return where criterion
      */
     public WhereCriterion isNull(String columnName) {
-        segments.add(warpColumn(columnName) + " IS NULL");
+        segments.add(AliasThreadLocalCache.getColumnName(columnName) + " IS NULL");
         return this;
     }
 
@@ -331,7 +331,7 @@ public class WhereCriterion {
      * @return where criterion
      */
     public WhereCriterion isNotNull(String columnName) {
-        segments.add(warpColumn(columnName) + " IS NOT NULL");
+        segments.add(AliasThreadLocalCache.getColumnName(columnName) + " IS NOT NULL");
         return this;
     }
 
@@ -361,7 +361,8 @@ public class WhereCriterion {
      */
     public WhereCriterion startsWith(String columnName, Object value) {
         if (Objects.nonNull(value)) {
-            segments.add(StringUtils.format("{} LIKE ?{}", warpColumn(columnName), counts++));
+            AliasThreadLocalCache.getColumnName(columnName);
+            segments.add(StringUtils.format("{} LIKE ?{}", AliasThreadLocalCache.getColumnName(columnName), counts++));
             params.add(value + "%");
         }
         return this;
@@ -392,7 +393,7 @@ public class WhereCriterion {
      */
     public WhereCriterion contains(String columnName, Object value) {
         if (Objects.nonNull(value)) {
-            segments.add(StringUtils.format("{} LIKE ?{}", warpColumn(columnName), counts++));
+            segments.add(StringUtils.format("{} LIKE ?{}", AliasThreadLocalCache.getColumnName(columnName), counts++));
             params.add("%" + value + "%");
         }
         return this;
@@ -424,7 +425,7 @@ public class WhereCriterion {
      */
     public WhereCriterion endsWith(String columnName, Object value) {
         if (Objects.nonNull(value)) {
-            segments.add(StringUtils.format("{} LIKE ?{}", warpColumn(columnName), counts++));
+            segments.add(StringUtils.format("{} LIKE ?{}", AliasThreadLocalCache.getColumnName(columnName), counts++));
             params.add("%" + value);
         }
         return this;
@@ -455,7 +456,7 @@ public class WhereCriterion {
      */
     public WhereCriterion notStartsWith(String columnName, Object value) {
         if (Objects.nonNull(value)) {
-            segments.add(StringUtils.format("{} NOT LIKE ?{}", warpColumn(columnName), counts++));
+            segments.add(StringUtils.format("{} NOT LIKE ?{}", AliasThreadLocalCache.getColumnName(columnName), counts++));
             params.add(value + "%");
         }
         return this;
@@ -487,7 +488,7 @@ public class WhereCriterion {
      */
     public WhereCriterion notContains(String columnName, Object value) {
         if (Objects.nonNull(value)) {
-            segments.add(StringUtils.format("{} NOT LIKE ?{}", warpColumn(columnName), counts++));
+            segments.add(StringUtils.format("{} NOT LIKE ?{}", AliasThreadLocalCache.getColumnName(columnName), counts++));
             params.add("%" + value + "%");
         }
         return this;
@@ -503,7 +504,7 @@ public class WhereCriterion {
 
     public WhereCriterion notEndsWith(String columnName, Object value) {
         if (Objects.nonNull(value)) {
-            segments.add(StringUtils.format("{} NOT LIKE ?{}", warpColumn(columnName), counts++));
+            segments.add(StringUtils.format("{} NOT LIKE ?{}", AliasThreadLocalCache.getColumnName(columnName), counts++));
             params.add("%" + value);
         }
         return this;
@@ -535,7 +536,7 @@ public class WhereCriterion {
      */
     public WhereCriterion in(String columnName, Collection<Object> value) {
         if (Objects.nonNull(value)) {
-            segments.add(StringUtils.format("{} IN ?{}", warpColumn(columnName), counts++));
+            segments.add(StringUtils.format("{} IN ?{}", AliasThreadLocalCache.getColumnName(columnName), counts++));
             params.add(value);
         }
         return this;
@@ -566,7 +567,7 @@ public class WhereCriterion {
      */
     public WhereCriterion notIn(String columnName, Collection<Object> value) {
         if (Objects.nonNull(value)) {
-            segments.add(StringUtils.format("{} NOT IN ?{}", warpColumn(columnName), counts++));
+            segments.add(StringUtils.format("{} NOT IN ?{}", AliasThreadLocalCache.getColumnName(columnName), counts++));
             params.add(value);
         }
         return this;
@@ -597,7 +598,7 @@ public class WhereCriterion {
      */
     public WhereCriterion between(String columnName, List<Object> values) {
         if (CollectionUtils.isNotEmpty(values) && values.size() == JoyaConst.TWO_QUERY_COUNT) {
-            segments.add(StringUtils.format("{} BETWEEN ?{} AND ?{}", warpColumn(columnName), counts++, counts++));
+            segments.add(StringUtils.format("{} BETWEEN ?{} AND ?{}", AliasThreadLocalCache.getColumnName(columnName), counts++, counts++));
             params.addAll(values);
         }
         return this;
@@ -629,7 +630,7 @@ public class WhereCriterion {
      */
     public WhereCriterion notBetween(String columnName, List<Object> values) {
         if (CollectionUtils.isNotEmpty(values) && values.size() == JoyaConst.TWO_QUERY_COUNT) {
-            segments.add(StringUtils.format("{} NOT BETWEEN ?{} AND ?{}", warpColumn(columnName), counts++, counts++));
+            segments.add(StringUtils.format("{} NOT BETWEEN ?{} AND ?{}", AliasThreadLocalCache.getColumnName(columnName), counts++, counts++));
             params.addAll(values);
         }
         return this;

@@ -16,8 +16,8 @@ import java.util.concurrent.TimeUnit;
  *
  * @param <K> key 类型
  * @param <V> value 类型
- * @author XuJijun
- * @Date 2015-05-18
+ * @author huangxiaohu
+ * @date  2021-07-09
  */
 @Slf4j
 public abstract class GuavaAbstractLoadingCache<K, V> {

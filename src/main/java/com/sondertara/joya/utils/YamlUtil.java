@@ -33,15 +33,15 @@ public class YamlUtil {
     private YamlPropertiesFactoryBean yamlFactory = new YamlPropertiesFactoryBean();
     private String template = "application-{}.yml";
     private List<Properties> propertiesList = new ArrayList();
-    private List<String> inNamesList = new ArrayList(); //初始化传参名称
-    private List<String> loadedNameList = new ArrayList(); //已经加载的配置名称
+    private List<String> inNamesList = new ArrayList();
+    private List<String> loadedNameList = new ArrayList();
 
     private YamlUtil() {}
 
     /**
      * 根据key获取值
      * @param key 例如: spring.data.database
-     * @return
+     * @return config str
      */
     public static String get(String key) {
         if(yamlProperties.size()==0) {

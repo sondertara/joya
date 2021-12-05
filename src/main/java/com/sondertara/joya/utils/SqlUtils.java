@@ -74,7 +74,7 @@ public class SqlUtils {
      * 判断SQL语句中是否包含distinct关键字
      *
      * @param sql
-     * @return
+     * @return is contains distinct
      */
     public static boolean containsDistinctKeywords(String sql) {
 
@@ -121,7 +121,8 @@ public class SqlUtils {
         String patternString = "\\s*[Oo][Rr][Dd][Ee][Rr]\\s+[Bb][Yy]\\s*";
         Pattern pattern = Pattern.compile(patternString);
         Matcher matcher = pattern.matcher(sql);
-        return matcher.replaceAll(" ORDER BY "); // 后面的字符
+        // 后面的字符
+        return matcher.replaceAll(" ORDER BY ");
     }
 
     /**

@@ -1,10 +1,11 @@
 package com.sondertara.joya.cache;
 
+
+import com.sondertara.common.exception.TaraException;
 import com.sondertara.common.function.TaraFunction;
 import com.sondertara.common.util.StringFormatter;
 import com.sondertara.common.util.StringUtils;
 import com.sondertara.joya.core.model.ColumnAliasDTO;
-import com.sondertara.joya.core.model.EntityFieldDTO;
 import com.sondertara.joya.core.model.TableAliasDTO;
 import com.sondertara.joya.core.model.TableDTO;
 import com.sondertara.joya.utils.ThreadLocalUtil;
@@ -17,16 +18,14 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 
 import static com.sondertara.joya.core.constant.JoyaConst.JOYA_SQL;
 
 /**
  * (non-Javadoc)
- *
+ * <p>
  * Alias cache based on ThreadLocal
  * Save the relationship of query table name and table alias
  *
@@ -95,16 +94,14 @@ public final class AliasThreadLocalCache {
             String finalGetter = getter;
             AtomicReference<String> tableName = new AtomicReference<>();
             String columnName = optional.map(tableDTO -> {
-                Set<EntityFieldDTO> fieldNames = tableDTO.getFieldNames();
+                Map<String, String> map = tableDTO.getFields();
                 tableName.set(tableDTO.getTableName());
 
-                Map<String, String> map = fieldNames.stream().collect(Collectors.toMap(EntityFieldDTO::getFieldName, EntityFieldDTO::getColumnName));
-                String fieldName = StringUtils.toCamelCase(finalGetter);
+                String fieldName = StringUtils.lowerFirst(finalGetter);
                 if (map.containsKey(fieldName)) {
                     return map.get(fieldName);
-                } else {
-                    return StringUtils.toUnderlineCase(finalGetter);
                 }
+                throw new EntityNotFoundException("No column found by " + finalGetter);
             }).orElseThrow(() -> new EntityNotFoundException("no entity found for " + implClass));
             LinkedHashMap<String, TableAliasDTO> aliasMap = (LinkedHashMap<String, TableAliasDTO>) ThreadLocalUtil.get(JOYA_SQL);
             TableAliasDTO tableAlias = aliasMap.computeIfAbsent(className, k -> {
@@ -120,8 +117,7 @@ public final class AliasThreadLocalCache {
             columnAliasDTO.setTableAlias(tableAlias.getAliasName());
             columnAliasDTO.setColumnAlias(StringFormatter.format("{}.{}", tableAlias.getAliasName(), columnName));
             return columnAliasDTO;
-        } catch (
-                ReflectiveOperationException e) {
+        } catch (ReflectiveOperationException e) {
             throw new RuntimeException(e);
         }
 
@@ -138,6 +134,49 @@ public final class AliasThreadLocalCache {
         LinkedHashMap<String, TableAliasDTO> aliasMap = (LinkedHashMap<String, TableAliasDTO>) ThreadLocalUtil.get(JOYA_SQL);
         return new ArrayList<>(aliasMap.values());
 
+    }
+
+    /**
+     * 获取数据库中的列明名
+     *
+     * @param column 表别名
+     * @return 列名
+     */
+    public static String getColumnName(String column) {
+
+        if (null == column) {
+            return null;
+        }
+        int index = column.indexOf(".");
+        if (index < 0) {
+            throw new TaraException("The column is incorrect,it should like 't0.userName.'");
+        }
+        String tableAlias = column.substring(0, index);
+        String fieldName = column.substring(index + 1);
+        String s = null;
+        List<TableAliasDTO> tables = getTables();
+        for (TableAliasDTO table : tables) {
+            if (tableAlias.equals(table.getAliasName())) {
+                String className = table.getClassName();
+                s = LocalEntityCache.getInstance().get(className).map(t -> {
+
+                    Map<String, String> fields = t.getFields();
+                    // if the column  is entity field
+                    if (fields.containsKey(StringUtils.toCamelCase(fieldName))) {
+                        return fields.get(StringUtils.toCamelCase(fieldName));
+                    } else {
+                        // if the column is table column
+                        for (String value : fields.values()) {
+                            if (value.equalsIgnoreCase(StringUtils.toUnderlineCase(fieldName))) {
+                                return value;
+                            }
+                        }
+                    }
+                    throw new TaraException(StringFormatter.format("No column found for table [{}] by name [{}]", table.getTableName(), fieldName));
+                }).orElseThrow(() -> new TaraException(StringFormatter.format("No table found by className [{}]", className)));
+            }
+        }
+        return StringFormatter.format("{}.{}", tableAlias, s);
     }
 
 }

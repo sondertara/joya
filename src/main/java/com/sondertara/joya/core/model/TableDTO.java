@@ -3,7 +3,7 @@ package com.sondertara.joya.core.model;
 import lombok.Data;
 
 import java.io.Serializable;
-import java.util.Set;
+import java.util.Map;
 
 /**
  * the data of one table
@@ -17,7 +17,9 @@ import java.util.Set;
 public final class TableDTO implements Serializable {
     private String tableName;
     /**
-     * the  field  name of entity
+     * the  columns map
+     * key : the fieldName
+     * value: the table columnName
      */
-    private Set<EntityFieldDTO> fieldNames;
+    private Map<String, String> fields;
 }
