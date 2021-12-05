@@ -25,7 +25,7 @@ jobs:
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
     - name: Build with Gradle
-      run: ./gradlew build
+      run: ./gradlew publish -PsigningKeyId=${{secrets.signingKeyId}} -PsigningKey=${{secrets.signingKey}} -PsigningPassword=${{secrets.signingPassword}}
       env:
           OSSRH_USERNAME: ${{secrets.OSSRH_USERNAME}}
           OSSRH_PASSWORD: ${{secrets.OSSRH_PASSWORD}}
