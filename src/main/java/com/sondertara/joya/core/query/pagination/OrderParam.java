@@ -38,7 +38,7 @@ public class OrderParam implements Serializable {
     public OrderParam(String fieldName) {
 
         this.fieldName = fieldName;
-        this.orderType = OrderBy.AES;
+        this.orderType = OrderBy.ASC;
     }
 
     /**
@@ -49,9 +49,9 @@ public class OrderParam implements Serializable {
      */
     public enum OrderBy {
         /**
-         * aes
+         * asc
          */
-        AES,
+        ASC,
         /**
          * desc
          */
