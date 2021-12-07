@@ -237,8 +237,9 @@ public class JoyaJdbc {
     /**
      * 开启事务
      */
-    public void startTransaction() {
+    public Connection startTransaction() {
         connManager.startTransaction();
+        return connManager.getConnection();
     }
 
     /**
@@ -253,5 +254,54 @@ public class JoyaJdbc {
      */
     public void rollback() {
         connManager.rollback();
+    }
+
+    /**
+     * run transaction with connection
+     *
+     * @param action callback
+     * @param <T>    callback type
+     * @return result
+     */
+    public <T> T doInTransaction(ConnectionCallback<T> action) {
+
+        Connection conn = null;
+        try {
+            conn = this.startTransaction();
+            T t = action.doInTransaction(conn);
+            this.commit();
+            return t;
+        } catch (Exception e) {
+            LOG.error("TransactionCallback", e);
+            this.rollback();
+            throw new DbException("TransactionCallback", e);
+        } finally {
+            connManager.close(conn, null);
+        }
+    }
+
+    /**
+     * run transaction with statement.
+     *
+     * @param action statement callback
+     * @param <T>    type of result
+     * @return result
+     */
+    public <T> T doInStatement(StatementCallback<T> action) {
+        Connection conn = null;
+        Statement stmt = null;
+        try {
+            conn = this.startTransaction();
+            stmt = conn.createStatement();
+            T t = action.doInStatement(stmt);
+            this.commit();
+            return t;
+        } catch (Exception e) {
+            LOG.error("TransactionCallback", e);
+            connManager.close(conn, stmt);
+            throw new DbException("TransactionCallback", e);
+        } finally {
+            connManager.close(conn, stmt);
+        }
     }
 }

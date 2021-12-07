@@ -1,4 +1,4 @@
-package com.sondertara.joya.utils;
+package com.sondertara.joya.core.query.pagination;
 
 import com.sondertara.common.util.StringFormatter;
 import com.sondertara.common.util.StringUtils;
@@ -9,6 +9,7 @@ import com.sondertara.joya.core.query.pagination.FieldParam;
 import com.sondertara.joya.core.query.pagination.OrderParam;
 import com.sondertara.joya.core.query.pagination.PageQueryParam;
 import com.sondertara.joya.core.query.pagination.SearchParam;
+import com.sondertara.joya.utils.SqlUtils;
 
 import java.util.Collections;
 import java.util.List;
@@ -20,7 +21,7 @@ import java.util.function.UnaryOperator;
  *
  * @author huangxiaohu
  */
-public class JoyaPageUtil {
+public class JoyaPageConvert {
 
     /**
      * 带join查询

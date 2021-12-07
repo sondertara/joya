@@ -60,7 +60,10 @@ public class NativeSqlQuery {
     private List<Object> params;
 
 
-    public NativeSqlQuery(String sqlStr, List<Object> params) {
+    private NativeSqlQuery() {
+    }
+
+    private NativeSqlQuery(String sqlStr, List<Object> params) {
         this.sqlStr = sqlStr;
         this.params = params;
     }
@@ -69,7 +72,6 @@ public class NativeSqlQuery {
         ThreadLocalUtil.put(JoyaConst.JOYA_SQL, Maps.newLinkedHashMap());
         return new NativeSqlQueryBuilder();
     }
-
 
     public static class NativeSqlQueryBuilder {
         private String select = SELECT_ALL;

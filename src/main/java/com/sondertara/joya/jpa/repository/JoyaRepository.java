@@ -7,7 +7,7 @@ import com.sondertara.joya.core.query.pagination.PageQueryParam;
 import com.sondertara.joya.core.query.pagination.PageResult;
 import com.sondertara.joya.ext.JoyaSpringContext;
 import com.sondertara.joya.hibernate.transformer.AliasToBeanTransformer;
-import com.sondertara.joya.utils.JoyaPageUtil;
+import com.sondertara.joya.core.query.pagination.JoyaPageConvert;
 import com.sondertara.joya.utils.SqlUtils;
 import org.hibernate.query.internal.NativeQueryImpl;
 import org.slf4j.Logger;
@@ -90,7 +90,7 @@ public class JoyaRepository {
      * @return 分页数据
      */
     public <T> PageResult<T> queryPage(PageQueryParam queryParam, Class<T> resultClass, Class<?>... targetClass) {
-        NativeSqlQuery nativeSqlQuery = JoyaPageUtil.buildNativeQuery(queryParam, targetClass);
+        NativeSqlQuery nativeSqlQuery = JoyaPageConvert.buildNativeQuery(queryParam, targetClass);
         return queryPage(nativeSqlQuery, resultClass, queryParam.getPage(), queryParam.getPageSize());
 
     }
@@ -106,7 +106,7 @@ public class JoyaRepository {
      */
     public <T> PageResult<T> queryPage(PageQueryParam queryParam, Class<T> resultClass, UnaryOperator<JoinCriterion> joinPart) {
 
-        NativeSqlQuery nativeSqlQuery = JoyaPageUtil.buildNativeQuery(queryParam, joinPart);
+        NativeSqlQuery nativeSqlQuery = JoyaPageConvert.buildNativeQuery(queryParam, joinPart);
         return queryPage(nativeSqlQuery, resultClass, queryParam.getPage(), queryParam.getPageSize());
 
     }
