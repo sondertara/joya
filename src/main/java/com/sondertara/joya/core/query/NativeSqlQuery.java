@@ -3,7 +3,6 @@ package com.sondertara.joya.core.query;
 
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
-import com.sondertara.common.exception.TaraException;
 import com.sondertara.common.function.TaraFunction;
 import com.sondertara.common.structure.NodeList;
 import com.sondertara.common.util.CollectionUtils;
@@ -13,6 +12,7 @@ import com.sondertara.common.util.StringUtils;
 import com.sondertara.joya.cache.AliasThreadLocalCache;
 import com.sondertara.joya.cache.LocalEntityCache;
 import com.sondertara.joya.core.constant.JoyaConst;
+import com.sondertara.joya.core.exceptions.JoyaSQLException;
 import com.sondertara.joya.core.model.ColumnAliasDTO;
 import com.sondertara.joya.core.model.TableAliasDTO;
 import com.sondertara.joya.core.model.TableDTO;
@@ -374,7 +374,7 @@ public class NativeSqlQuery {
                 NodeList<ColumnAliasDTO> nodeList = joinCriterion.getSegments();
                 List<String> join = joinCriterion.getJoin();
                 if ((nodeList.getSize() / join.size()) != JoyaConst.TWO_QUERY_COUNT) {
-                    throw new TaraException("The join part is incorrect!");
+                    throw new JoyaSQLException("The join part is incorrect!");
                 }
                 StringJoiner sb = new StringJoiner(" ");
                 if (!nodeList.isEmpty()) {

@@ -173,12 +173,6 @@ public class SqlUtils {
     }
 
 
-    public static void main(String[] args) {
-        String column = underlineColumn("t0.userName=t1.idFk");
-        System.out.println(column);
-    }
-
-
     /**
      * 过滤 sql语句中的order by 子句
      *

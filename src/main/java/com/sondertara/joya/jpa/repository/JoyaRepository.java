@@ -54,7 +54,7 @@ public class JoyaRepository {
     @SuppressWarnings("unchecked")
     public <T> List<T> findListBySql(String sql, Class<T> clazz, Object... params) {
         if (JoyaSpringContext.getConfig(SQL_VIEW_SWITCH, true)) {
-            log.info("[findListBySql] SQL:\n{}", sql);
+            log.info("[findListBySql] SQL:\nJoya-SQL: {}", sql);
         }
         Query query = em.createNativeQuery(sql);
         setParameters(query, params);
@@ -73,7 +73,7 @@ public class JoyaRepository {
     public <T> List<T> findListBySql(NativeSqlQuery nativeSql, Class<T> resultClass) {
 
         if (JoyaSpringContext.getConfig(SQL_VIEW_SWITCH, true)) {
-            log.info("[findListBySql] SQL:\n{}", nativeSql.toSql());
+            log.info("[findListBySql] SQL:\nJoya-SQL: {}", nativeSql.toSql());
         }
         Query query = em.createNativeQuery(nativeSql.toSql());
         setParameters(query, nativeSql.getParams());
@@ -128,19 +128,16 @@ public class JoyaRepository {
         String sqlStr = nativeSql.toSql();
 
         if (opened) {
-            log.info("query Page sql is \n{}", sqlStr);
+            log.info("[queryPage] SQL:\nJoya-SQL: {}", sqlStr);
         }
 
-        //获取总记录数
+        // get the count sql
         String countSql = SqlUtils.buildCountSql(sqlStr);
         Query countQuery = em.createNativeQuery(countSql);
-        if (opened) {
-            log.info("count sql is \n{}", countSql);
-        }
         setParameters(countQuery, nativeSql.getParams());
         long totalRecord = ((Number) countQuery.getSingleResult()).longValue();
 
-        //获取分页结果
+        // the query
         Query pageQuery = em.createNativeQuery(sqlStr);
 
         setParameters(pageQuery, nativeSql.getParams());

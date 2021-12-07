@@ -1,11 +1,11 @@
 package com.sondertara.joya.cache;
 
 
-import com.sondertara.common.exception.TaraException;
 import com.sondertara.common.function.TaraFunction;
 import com.sondertara.common.lang.Assert;
 import com.sondertara.common.util.StringFormatter;
 import com.sondertara.common.util.StringUtils;
+import com.sondertara.joya.core.exceptions.JoyaSQLException;
 import com.sondertara.joya.core.model.ColumnAliasDTO;
 import com.sondertara.joya.core.model.TableAliasDTO;
 import com.sondertara.joya.core.model.TableDTO;
@@ -136,7 +136,7 @@ public final class AliasThreadLocalCache {
             columnAliasDTO.setColumnAlias(StringFormatter.format("{}.{}", tableAlias.getAliasName(), columnName));
             return columnAliasDTO;
         } catch (ReflectiveOperationException e) {
-            throw new RuntimeException(e);
+            throw new JoyaSQLException(e);
         }
 
     }
@@ -167,7 +167,7 @@ public final class AliasThreadLocalCache {
         }
         int index = column.indexOf(".");
         if (index < 0) {
-            throw new TaraException("The column is incorrect,it should like 't0.userName.'");
+            throw new JoyaSQLException("The column is incorrect,it should like 't0.userName.'");
         }
         String tableAlias = column.substring(0, index);
         String fieldName = column.substring(index + 1);
@@ -190,8 +190,8 @@ public final class AliasThreadLocalCache {
                             }
                         }
                     }
-                    throw new TaraException(StringFormatter.format("No column found for table [{}] by name [{}]", table.getTableName(), fieldName));
-                }).orElseThrow(() -> new TaraException(StringFormatter.format("No table found by className [{}]", className)));
+                    throw new JoyaSQLException("No column found for table [{}] by name [{}]", table.getTableName(), fieldName);
+                }).orElseThrow(() -> new JoyaSQLException("No table found by className [{}]", className));
             }
         }
         return StringFormatter.format("{}.{}", tableAlias, s);

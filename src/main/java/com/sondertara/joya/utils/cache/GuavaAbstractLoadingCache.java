@@ -17,7 +17,7 @@ import java.util.concurrent.TimeUnit;
  * @param <K> key 类型
  * @param <V> value 类型
  * @author huangxiaohu
- * @date  2021-07-09
+ * @date 2021-07-09
  */
 @Slf4j
 public abstract class GuavaAbstractLoadingCache<K, V> {
@@ -32,9 +32,9 @@ public abstract class GuavaAbstractLoadingCache<K, V> {
      */
     private int expireAfterWriteDuration = 60;
     /**
-     *
+     * time  unit of second
      */
-    private TimeUnit timeUnit = TimeUnit.SECONDS;
+    private final TimeUnit timeUnit = TimeUnit.SECONDS;
     /**
      * Cache初始化或被重置的时间
      */
@@ -60,15 +60,12 @@ public abstract class GuavaAbstractLoadingCache<K, V> {
         if (cache == null) {
             synchronized (this) {
                 if (cache == null) {
-                    cache = CacheBuilder.newBuilder().maximumSize(maximumSize)
-                            .expireAfterWrite(expireAfterWriteDuration, timeUnit)
-                            .recordStats()
-                            .build(new CacheLoader<K, V>() {
-                                @Override
-                                public V load(K key) throws Exception {
-                                    return fetchData(key);
-                                }
-                            });
+                    cache = CacheBuilder.newBuilder().maximumSize(maximumSize).expireAfterWrite(expireAfterWriteDuration, timeUnit).recordStats().build(new CacheLoader<K, V>() {
+                        @Override
+                        public V load(K key) {
+                            return fetchData(key);
+                        }
+                    });
                     this.resetTime = new Date();
                     this.highestTime = new Date();
                     log.debug("本地缓存{}初始化成功", this.getClass().getSimpleName());
@@ -86,7 +83,7 @@ public abstract class GuavaAbstractLoadingCache<K, V> {
     /**
      * 根据key从数据库或其他数据源中获取一个value，并被自动保存到缓存中。
      *
-     * @param key
+     * @param key key
      * @return value, 连同key一起被加载到缓存中的。
      */
     protected abstract V fetchData(K key);
@@ -95,9 +92,9 @@ public abstract class GuavaAbstractLoadingCache<K, V> {
     /**
      * 从缓存中获取数据（第一次自动调用fetchData从外部获取数据），并处理异常
      *
-     * @param key
+     * @param key key
      * @return Value
-     * @throws ExecutionException
+     * @throws ExecutionException e
      */
     protected V getValue(K key) throws ExecutionException {
         V result = getCache().get(key);
@@ -109,7 +106,7 @@ public abstract class GuavaAbstractLoadingCache<K, V> {
 
     }
 
-    public  void invalidateAll() {
+    public void invalidateAll() {
         getCache().invalidateAll();
     }
 
@@ -141,16 +138,16 @@ public abstract class GuavaAbstractLoadingCache<K, V> {
     /**
      * 设置最大缓存条数
      *
-     * @param maximumSize
+     * @param maximumSize max cache size
      */
     public void setMaximumSize(int maximumSize) {
         this.maximumSize = maximumSize;
     }
 
     /**
-     * 设置数据存在时长（分钟）
+     * 设置数据存在时长（second）
      *
-     * @param expireAfterWriteDuration
+     * @param expireAfterWriteDuration e
      */
     public void setExpireAfterWriteDuration(int expireAfterWriteDuration) {
         this.expireAfterWriteDuration = expireAfterWriteDuration;

@@ -23,7 +23,7 @@ import java.util.Optional;
 
 
 /**
- * 本地缓存：过期时间5min
+ * local cache for five min
  *
  * @author huangxiaohu
  */
@@ -75,7 +75,7 @@ public class LocalEntityCache extends GuavaAbstractLoadingCache<String, TableDTO
                 tableDTO.setClassName(aClass.getName());
                 tableDTO.setTableName(tableName);
                 tableDTO.setFields(fieldNames);
-                log.info("load key=[{}] from dataSource success!", key);
+                log.debug("load key=[{}] from dataSource success!", key);
                 if (key.equals(aClass.getName())) {
                     put(tableName, tableDTO);
                 } else {

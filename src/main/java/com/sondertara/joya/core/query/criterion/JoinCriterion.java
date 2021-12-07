@@ -1,11 +1,11 @@
 package com.sondertara.joya.core.query.criterion;
 
 
-import com.sondertara.common.exception.TaraException;
 import com.sondertara.common.function.TaraFunction;
 import com.sondertara.common.structure.NodeList;
 import com.sondertara.joya.cache.AliasThreadLocalCache;
 import com.sondertara.joya.core.constant.JoyaConst;
+import com.sondertara.joya.core.exceptions.JoyaSQLException;
 import com.sondertara.joya.core.model.ColumnAliasDTO;
 
 import java.util.ArrayList;
@@ -114,7 +114,7 @@ public class JoinCriterion {
     public NodeList<ColumnAliasDTO> getSegments() {
         if (tableNames.size() > JoyaConst.MAX_JOIN_TABLE) {
 
-            throw new TaraException("Only support  three tables associated");
+            throw new JoyaSQLException("Only support  three tables associated");
 
         }
         return segments;
@@ -131,8 +131,7 @@ public class JoinCriterion {
 
     private <T, R> void setSegments(JoinType joinType, TaraFunction<T, ?> left, TaraFunction<R, ?> right) {
         if (this.segments.getSize() > MAX_JOIN_COUNT) {
-            throw new TaraException("Only support  two join association ," +
-                    "if you use too complicated query why no try to optimize the code.");
+            throw new JoyaSQLException("Only support  two join association ," + "if you use too complicated query why no try to optimize the code.");
         }
         final ColumnAliasDTO columnLeft = AliasThreadLocalCache.getColumn(left);
         ColumnAliasDTO columnRight = AliasThreadLocalCache.getColumn(right);
