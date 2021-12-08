@@ -1,67 +1,6 @@
-# 🥬 Joya
-
-![GitHub Workflow Status](https://img.shields.io/github/workflow/status/sondertara/joya/Java%20CI%20with%20Gradle) ![Maven Central](https://img.shields.io/maven-central/v/com.sondertara/joya) ![GitHub](https://img.shields.io/github/license/sondertara/joya)
-
-> Joya 是对`Spring Data JPA` 扩展，JPA本身功能已经很强大了，但是复杂查询语句`HQL`通常都是大量字符串拼接，不利于维护和阅读，提供优雅、易读和强大的链式查询语句的`Joya`应运而生
-
-## 🍹 项目特性
-
-- 基于`Hibernate NativeQuery` 进行扩展,支持全字段查询和指定字段查询,支持多种风格灵活易用
-- 兼容JPA，可插拔式集成，无需修改任何代码，不影响`JPA和Hibernate` 原有功能和特性
-- 作为 JPA 的扩展和增强，兼容 Spring Data JPA 原有功能和各种特性
-- 拥有使用原生SQL语句的极致体验
-- SQL结果可返回指定对象实体,同样支持单个字段返回包装类和`String`类
-- 可扩展性强,兼容其他ORM框架底层工作量小
-
-## 🎯 使用前提
-
-适用于 使用Java `Spring Data JPA` 和`JDK 1.8` 及以上的项目
-
-## 🧩 项目集成
-
-### 1.引入依赖
-
-Maven Project
-
-```xml
-<dependency>
-    <groupId>com.sondertara</groupId>
-    <artifactId>joya</artifactId>
-    <version>0.0.7.104</version>
-</dependency>
-```
-
-Gradle Project
-
-```groovy
-implementation 'com.sondertara:joya:0.0.7.104'
-```
-
-### 2.添加配置
-
-以`Spring boot` 项目为例,注入Bean.
-
-```java
-@Bean
-public JoyaRepositoryFactoryBean joyaRepositoryFactoryBean(){
-        return new JoyaRepositoryFactoryBean();
-        }
-```
-
-通过 JoyaRepositoryFactoryBean 会注入 `JoyaRepository` 和`JoyaSpringContext`(一个Spring全局类)
-
-### 3.application.yml 配置（可选的）
-
-```yaml
-joya:
-  # 是否打印sql日志
-  sql-view: true
-```
-
-## 🍱 使用示例
+# 特殊说明
 
 Joya 主要提供NativeSqlQuery 来处理查询语句,关于使用有如下特殊说明：
-
 
 > select,from和where语句中都可以使用原生sql字符串方式来拼接查询
 >
@@ -148,7 +87,7 @@ public<T> PageResult<T> queryPage(NativeSqlQuery nativeSql,Class<T> resultClass,
 
 ```
 
-### 1.单表查询
+## 🌑单表查询
 
 - 查询全部字段
 
@@ -234,7 +173,7 @@ public class Test {
 }
 ```
 
-### 2.联表查询
+## 🌒联表查询
 
 ```java
 
@@ -275,7 +214,8 @@ public class Test {
 }
 ```
 
-### 3.分页查询
+
+## 🌓分页查询
 
 在Joya中为分页查询封装了`PageQueryParam` 提供给restFul接口使用
 
@@ -305,7 +245,12 @@ public class PageQueryParam extends JoyaQuery implements Serializable {
      * 搜索参数
      */
     private List<SearchParam> params = Lists.newArrayList();
-    
+
+    /**
+     * group by
+     */
+    private String groupBy;
+
     public enum LinkType {
         /**
          *
@@ -368,7 +313,7 @@ pageQueryParam1.setSpecificW("t0.id=t1.userId");
 PageResult<UserDTO> pageResult=joyaRepository.queryPage(pageQueryParam,UserDTO.class,UserPo.class,UserExtendPo.class);
 ```
 
-### 4.特殊定制化查询
+## 🌔特殊定制化查询
 
 在Joya中,where 查询语句支持常用查询,也可以通过`specificW`方法来添加特殊查询语句
 
@@ -403,12 +348,3 @@ where 查询语句默认是`AND`条件联接,可以选择`OR`条件联接
         .subQuery(q->q.gte(UserPo::getAge,18).startsWith(UserPo::getUserPhone,"1385")),true)
         .build();
 ```
-
-## 🔌 参与贡献
-
-fork本项目,添加features或bugfix,提交Pull Requests
-
-## 📗 开源许可证
-
-Joya 遵守 [Apache License 2.0](http://www.apache.org/licenses/LICENSE-2.0) 许可证。
-
