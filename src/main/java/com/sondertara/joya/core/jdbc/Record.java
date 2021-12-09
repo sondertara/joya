@@ -9,7 +9,6 @@ package com.sondertara.joya.core.jdbc;
  * 结果集的当前行只能向前移动，不能向后移动。
  *
  * @author huangxiaohu
- *
  * @see Row
  */
 public interface Record {

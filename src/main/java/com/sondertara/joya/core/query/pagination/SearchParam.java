@@ -1,4 +1,3 @@
-
 package com.sondertara.joya.core.query.pagination;
 
 import java.io.Serializable;
@@ -25,7 +24,6 @@ public class SearchParam implements Serializable {
     public void setFieldName(String fieldName) {
         this.fieldName = fieldName;
     }
-
 
 
     public FieldParam.Operator getOperator() {

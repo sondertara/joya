@@ -26,15 +26,14 @@ public abstract class Model<T, ID extends Serializable> implements Serializable,
      * 用于获取容器中bean对象的上下文，由外部用Model.setApplicationContext方法传入
      */
     private static ApplicationContext applicationContext;
-
-    public static void setApplicationContext(ApplicationContext applicationContext) {
-        Model.applicationContext = applicationContext;
-    }
-
     /**
      * 维护各个实体类对应的CrudRepository对象，避免重复调用applicationContext.getBean方法影响性能
      */
     private Map<String, BaseRepository<T, ID>> repositories = new HashMap<>();
+
+    public static void setApplicationContext(ApplicationContext applicationContext) {
+        Model.applicationContext = applicationContext;
+    }
 
     @PersistenceContext
     @SuppressWarnings("unchecked")
@@ -58,7 +57,7 @@ public abstract class Model<T, ID extends Serializable> implements Serializable,
      * @return 保存后的当前对象
      */
     @SuppressWarnings("unchecked")
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public T save() {
         return getRepository().save((T) this);
     }
@@ -68,20 +67,16 @@ public abstract class Model<T, ID extends Serializable> implements Serializable,
      *
      * @return 查询到的对象
      */
-    @SuppressWarnings("unchecked")
     public T findById() {
-        return getRepository().findById(getId()).orElse(null);
+        return getRepository().findById(Objects.requireNonNull(getId())).orElseThrow(()->new NullPointerException("ID is null"));
     }
 
     /**
      * 删除当前对象
      */
     @SuppressWarnings("unchecked")
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public void delete() {
         getRepository().delete((T) this);
     }
-
-    @Override
-    public abstract ID getId();
 }

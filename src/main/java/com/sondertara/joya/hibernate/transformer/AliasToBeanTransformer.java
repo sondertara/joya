@@ -34,6 +34,21 @@ public class AliasToBeanTransformer<T> implements ResultTransformer {
         this.valueSetter = new ValueSetter();
     }
 
+    private static boolean isPrimitive(Class<?> propertyType) {
+
+        if (propertyType.isPrimitive()) {
+            return true;
+        }
+        if (Number.class.isAssignableFrom(propertyType)) {
+            return true;
+        }
+        try {
+            return ((Class<?>) propertyType.getField("TYPE").get(null)).isPrimitive();
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     @Override
     public Object transformTuple(Object[] tuple, String[] aliases) {
         if (CollectionUtils.isEmpty(mappedFields)) {
@@ -53,28 +68,15 @@ public class AliasToBeanTransformer<T> implements ResultTransformer {
         return mappedObject;
     }
 
+    @SuppressWarnings("rawtypes")
     @Override
     public List transformList(List list) {
         return list;
     }
 
+    @SuppressWarnings("rawtypes")
     public final Class getMappedClass() {
         return this.mappedClass;
-    }
-
-    private static boolean isPrimitive(Class<?> propertyType) {
-
-        if (propertyType.isPrimitive()) {
-            return true;
-        }
-        if (Number.class.isAssignableFrom(propertyType)) {
-            return true;
-        }
-        try {
-            return ((Class<?>) propertyType.getField("TYPE").get(null)).isPrimitive();
-        } catch (Exception e) {
-            return false;
-        }
     }
 
     /**

@@ -21,14 +21,20 @@ public class ValueSetter {
 
     protected static DefaultConversionService conversionService;
 
-    private final Map<String, Object> genericMap = new HashMap<>();
-
     static {
         ValueSetter.conversionService = new DefaultConversionService();
         Collection<Converter<?, ?>> convertersToRegister = Jsr310Converters.getConvertersToRegister();
         for (Converter<?, ?> converter : convertersToRegister) {
             ValueSetter.conversionService.addConverter(converter);
         }
+    }
+
+    private final Map<String, Object> genericMap = new HashMap<>();
+
+    public static BeanWrapper getBeanWrapper(Object instantiate) {
+        BeanWrapper bw = PropertyAccessorFactory.forBeanPropertyAccess(instantiate);
+        bw.setConversionService(conversionService);
+        return bw;
     }
 
     public void set(Object instantiate, String alias, Object value, Map<String, Fields> mappedFields) {
@@ -68,7 +74,7 @@ public class ValueSetter {
         set(propertyValue, remainAlias, value, field.getChildrenFields());
     }
 
-    @SuppressWarnings("unchecked")
+    @SuppressWarnings({"unchecked", "rawtypes"})
     private Object getGenericObject(Object propertyValue, CollectionFields collectionFields) {
         String name = collectionFields.getName();
         Object o = this.genericMap.get(name);
@@ -80,12 +86,6 @@ public class ValueSetter {
         collection.add(instantiate);
         this.genericMap.put(name, instantiate);
         return instantiate;
-    }
-
-    public static BeanWrapper getBeanWrapper(Object instantiate) {
-        BeanWrapper bw = PropertyAccessorFactory.forBeanPropertyAccess(instantiate);
-        bw.setConversionService(conversionService);
-        return bw;
     }
 
     public void clearGenericMap() {

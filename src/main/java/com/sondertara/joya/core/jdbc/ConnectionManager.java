@@ -23,7 +23,7 @@ public final class ConnectionManager {
     public Connection getConnection() {
         try {
             Connection conn = connHolder.get();
-            if (conn == null||conn.isClosed()) {
+            if (conn == null || conn.isClosed()) {
                 conn = dataSource.getConnection();
                 connHolder.set(conn);
             }
@@ -35,7 +35,10 @@ public final class ConnectionManager {
 
     public void close(Connection conn, Statement stmt) {
         if (stmt != null) {
-            try { stmt.close(); } catch (SQLException ignored) {}
+            try {
+                stmt.close();
+            } catch (SQLException ignored) {
+            }
         }
         if (conn != null) {
             try {
@@ -43,16 +46,23 @@ public final class ConnectionManager {
                     conn.close();
                     connHolder.remove();
                 }
-            } catch (SQLException ignored) {}
+            } catch (SQLException ignored) {
+            }
         }
     }
 
     public void close(Connection conn, Statement stmt, ResultSet rs) {
         if (rs != null) {
-            try { rs.close(); } catch (SQLException ignored) {}
+            try {
+                rs.close();
+            } catch (SQLException ignored) {
+            }
         }
         if (stmt != null) {
-            try { stmt.close(); } catch (SQLException ignored) {}
+            try {
+                stmt.close();
+            } catch (SQLException ignored) {
+            }
         }
         if (conn != null) {
             try {
@@ -60,7 +70,8 @@ public final class ConnectionManager {
                     conn.close();
                     connHolder.remove();
                 }
-            } catch (SQLException ignored) {}
+            } catch (SQLException ignored) {
+            }
         }
     }
 

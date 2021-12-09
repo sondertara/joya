@@ -1,4 +1,3 @@
-
 package com.sondertara.joya.hibernate.type;
 
 
@@ -16,6 +15,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Types;
 import java.util.Collection;
+import java.util.Objects;
 import java.util.Properties;
 
 /**
@@ -32,10 +32,12 @@ public class CollectionToStringUserType implements UserType, ParameterizedType, 
     /**
      * 默认 java.lang.Long
      */
+    @SuppressWarnings("rawtypes")
     private Class elementType;
     /**
      * 默认 ArrayList
      */
+    @SuppressWarnings("rawtypes")
     private Class collectionType;
 
 
@@ -77,13 +79,14 @@ public class CollectionToStringUserType implements UserType, ParameterizedType, 
     }
 
     @Override
+    @SuppressWarnings("rawtypes")
     public Class returnedClass() {
         return collectionType;
     }
 
     @Override
     public boolean equals(Object o, Object o1) throws HibernateException {
-        return o == o1 || !(o == null) && o.equals(o1);
+        return Objects.equals(o, o1);
 
     }
 
@@ -98,13 +101,13 @@ public class CollectionToStringUserType implements UserType, ParameterizedType, 
      * (此方法要求对克能出现null值进行处理)
      * names中包含了当前自定义类型的映射字段名称
      *
-     * @param names
-     * @param owner
-     * @throws HibernateException
-     * @throws SQLException
+     * @param names names
+     * @param owner owner
+     * @throws HibernateException e
+     * @throws SQLException e
      */
     @Override
-    @SuppressWarnings("unchecked")
+    @SuppressWarnings({"rawtypes", "unchecked"})
     public Object nullSafeGet(ResultSet resultSet, String[] names, SharedSessionContractImplementor session, Object owner) throws HibernateException, SQLException {
         String valueStr = resultSet.getString(names[0]);
         if (StringUtils.isEmpty(valueStr)) {
@@ -126,9 +129,7 @@ public class CollectionToStringUserType implements UserType, ParameterizedType, 
         return result;
     }
 
-
-
-
+    @SuppressWarnings("rawtypes")
     private Collection newCollection() {
         try {
             return (Collection) collectionType.newInstance();
@@ -139,8 +140,9 @@ public class CollectionToStringUserType implements UserType, ParameterizedType, 
 
     /**
      * 本方法将在Hibernate进行数据保存时被调用
-     * 我们可以通过PreparedStateme将自定义数据写入到对应的数据库表字段
+     * 我们可以通过PreparedStatement将自定义数据写入到对应的数据库表字段
      */
+    @SuppressWarnings("rawtypes")
     @Override
     public void nullSafeSet(PreparedStatement preparedStatement, Object value, int index, SharedSessionContractImplementor sharedSessionContractImplementor) throws HibernateException, SQLException {
         String valueStr;
@@ -152,13 +154,14 @@ public class CollectionToStringUserType implements UserType, ParameterizedType, 
         preparedStatement.setString(index, valueStr);
     }
 
+    @SuppressWarnings("rawtypes")
     private String join(Collection value, String separator) {
         StringBuilder sb = new StringBuilder();
         for (Object o : value) {
             if (o instanceof Persistable) {
                 sb.append(((Persistable) o).getId());
             } else {
-                sb.append(String.valueOf(o));
+                sb.append(o);
             }
             sb.append(separator);
         }
@@ -178,11 +181,11 @@ public class CollectionToStringUserType implements UserType, ParameterizedType, 
      * 稍后的脏数据检查依据；Hibernate将在脏数据检查过程中将两个版本的数据进行对比（通过调用
      * equals方法），如果数据发生了变化（equals方法返回false），则执行对应的持久化操作
      *
-     * @param o
-     * @throws HibernateException
+     * @param o object
+     * @throws HibernateException e
      */
     @Override
-    @SuppressWarnings("unchecked")
+    @SuppressWarnings({"unchecked", "rawtypes"})
     public Object deepCopy(Object o) throws HibernateException {
         if (o == null) {
             return null;
@@ -200,13 +203,11 @@ public class CollectionToStringUserType implements UserType, ParameterizedType, 
         return true;
     }
 
-    /* 序列化 */
     @Override
     public Serializable disassemble(Object value) throws HibernateException {
         return ((Serializable) value);
     }
 
-    /* 反序列化 */
     @Override
     public Object assemble(Serializable cached, Object owner) throws HibernateException {
         return cached;

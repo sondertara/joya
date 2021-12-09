@@ -5,10 +5,6 @@ import com.sondertara.common.util.StringUtils;
 import com.sondertara.joya.core.query.NativeSqlQuery;
 import com.sondertara.joya.core.query.criterion.JoinCriterion;
 import com.sondertara.joya.core.query.criterion.WhereCriterion;
-import com.sondertara.joya.core.query.pagination.FieldParam;
-import com.sondertara.joya.core.query.pagination.OrderParam;
-import com.sondertara.joya.core.query.pagination.PageQueryParam;
-import com.sondertara.joya.core.query.pagination.SearchParam;
 import com.sondertara.joya.utils.SqlUtils;
 
 import java.util.Collections;
@@ -27,7 +23,7 @@ public class JoyaPageConvert {
      * 带join查询
      *
      * @param queryParam page query
-     * @param joinPart join part
+     * @param joinPart   join part
      * @return native sql
      */
     public static NativeSqlQuery buildNativeQuery(PageQueryParam queryParam, UnaryOperator<JoinCriterion> joinPart) {
@@ -39,7 +35,7 @@ public class JoyaPageConvert {
     /**
      * 联表查询 关联条件在 sqlStr中
      *
-     * @param queryParam page query
+     * @param queryParam  page query
      * @param targetClass the query table entity class
      * @return native sql
      */

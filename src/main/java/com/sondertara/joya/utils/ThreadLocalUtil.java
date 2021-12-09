@@ -6,16 +6,15 @@ import java.util.Map;
 /**
  * threadLocal
  *
- * @author huangxiaohu
+ * @author sondertara
  * @date 2021/11/19 15:23
- * @since
+ * @since 0.0.7
  */
 public class ThreadLocalUtil {
-    private ThreadLocalUtil() {
-    }
-
     private static final ThreadLocal<Map<String, Object>> THREAD_CONTEXT = new MapThreadLocal();
 
+    private ThreadLocalUtil() {
+    }
 
     private static Map<String, Object> getContextMap() {
         return THREAD_CONTEXT.get();

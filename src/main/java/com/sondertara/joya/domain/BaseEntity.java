@@ -22,7 +22,7 @@ import java.util.Map;
  */
 @MappedSuperclass
 @EntityListeners({BaseEntityListener.class})
-public abstract class BaseEntity<T extends Model, ID extends Serializable> extends Model<T, ID> {
+public abstract class BaseEntity<T extends Model<T, ID>, ID extends Serializable> extends Model<T, ID> {
 
     /**
      * 请求参数(只是查询需要用到,实体类属性不需要有)
@@ -34,7 +34,7 @@ public abstract class BaseEntity<T extends Model, ID extends Serializable> exten
     private Map<String, Object> params;
 
 
-    public BaseEntity setParams(Map<String, Object> params) {
+    public BaseEntity<T, ID> setParams(Map<String, Object> params) {
         this.params = params;
         return this;
     }

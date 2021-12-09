@@ -3,11 +3,11 @@ package com.sondertara.joya.jpa.repository;
 
 import com.sondertara.joya.core.query.NativeSqlQuery;
 import com.sondertara.joya.core.query.criterion.JoinCriterion;
+import com.sondertara.joya.core.query.pagination.JoyaPageConvert;
 import com.sondertara.joya.core.query.pagination.PageQueryParam;
 import com.sondertara.joya.core.query.pagination.PageResult;
 import com.sondertara.joya.ext.JoyaSpringContext;
 import com.sondertara.joya.hibernate.transformer.AliasToBeanTransformer;
-import com.sondertara.joya.core.query.pagination.JoyaPageConvert;
 import com.sondertara.joya.utils.SqlUtils;
 import org.hibernate.query.internal.NativeQueryImpl;
 import org.slf4j.Logger;
@@ -32,10 +32,8 @@ import java.util.function.UnaryOperator;
 public class JoyaRepository {
 
     private static final Logger log = LoggerFactory.getLogger(JoyaRepository.class);
-
-    private final EntityManager em;
-
     private static final String SQL_VIEW_SWITCH = "joya.sql-view";
+    private final EntityManager em;
 
     public JoyaRepository(EntityManager em) {
         this.em = em;
@@ -143,7 +141,7 @@ public class JoyaRepository {
         setParameters(pageQuery, nativeSql.getParams());
 
 
-        List<T> result = totalRecord == 0 ? new ArrayList<T>(0) : pageQuery.setFirstResult(pageNo).setMaxResults(pageSize).unwrap(NativeQueryImpl.class).setResultTransformer(new AliasToBeanTransformer<T>(resultClass)).list();
+        List<T> result = totalRecord == 0 ? new ArrayList<>(0) : pageQuery.setFirstResult(pageNo).setMaxResults(pageSize).unwrap(NativeQueryImpl.class).setResultTransformer(new AliasToBeanTransformer<>(resultClass)).list();
 
         return new PageResult<>(pageNo, pageSize, totalRecord, result);
     }
@@ -167,7 +165,7 @@ public class JoyaRepository {
     /**
      * 根据ql和按照索引顺序的params执行ql，sort存储排序信息 null表示不排序
      *
-     * @param ql
+     * @param ql hql sql
      * @param sort   null表示不排序
      * @param params List<Order> orders = this.find("SELECT o FROM Order o WHERE o.storeId = ? and o.code = ? order by o.createTime desc", storeId, code);
      * @return list
@@ -201,7 +199,7 @@ public class JoyaRepository {
     /**
      * 根据ql和按照索引顺序的params执行ql统计
      */
-    public long countByQL(final String ql, final Object... params) {
+    public long countByHql(final String ql, final Object... params) {
         Query query = em.createQuery(ql);
         setParameters(query, params);
         return (Long) query.getSingleResult();
@@ -229,7 +227,7 @@ public class JoyaRepository {
     /**
      * 按顺序设置Query参数
      */
-    private void setParameters(Query query, List params) {
+    private void setParameters(Query query, List<Object> params) {
         if (params != null) {
             for (int i = 0; i < params.size(); i++) {
                 query.setParameter(i + 1, params.get(i));

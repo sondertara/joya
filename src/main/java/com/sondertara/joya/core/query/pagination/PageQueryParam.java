@@ -1,4 +1,3 @@
-
 package com.sondertara.joya.core.query.pagination;
 
 import com.google.common.collect.Lists;
@@ -40,17 +39,12 @@ public class PageQueryParam extends JoyaQuery implements Serializable {
      */
     private List<SearchParam> params = Lists.newArrayList();
 
-    /**
-     * group by
-     */
-    private String groupBy;
-
     public enum LinkType {
         /**
          *
          */
         AND,
-        OR;
+        OR
 
     }
 

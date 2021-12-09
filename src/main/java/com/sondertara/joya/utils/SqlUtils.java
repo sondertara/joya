@@ -12,10 +12,6 @@ import java.util.regex.Pattern;
  * @author huangxiaohu
  */
 public class SqlUtils {
-    private SqlUtils() {
-        throw new IllegalStateException("工具类,不需要实例化");
-    }
-
     /**
      * 左边字段提取
      */
@@ -24,6 +20,10 @@ public class SqlUtils {
      * 带表别名的列
      */
     public static final Pattern COLUMN_WITH_TABLE_ALIAS = Pattern.compile("(?![\"'])[t|T][0-9]+(.)[A-Za-z0-9]+[\\s]*(?![\"'])");
+
+    private SqlUtils() {
+        throw new IllegalStateException("工具类,不需要实例化");
+    }
 
     /**
      * 根据查询列表SQL语句自动构造查询记录总数的SQL语句

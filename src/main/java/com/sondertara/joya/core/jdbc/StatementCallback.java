@@ -1,5 +1,3 @@
-
-
 package com.sondertara.joya.core.jdbc;
 
 import org.springframework.lang.Nullable;
@@ -14,7 +12,12 @@ import java.sql.Statement;
 @FunctionalInterface
 public interface StatementCallback<T> {
 
-
+    /**
+     *  in  Statement
+     * @param stmt sql Statement
+     * @return result
+     * @throws SQLException e
+     */
     @Nullable
     T doInStatement(Statement stmt) throws SQLException;
 

@@ -53,7 +53,7 @@ public class Fields {
     }
 
     public Object instantiateObjectValue() {
-        return BeanUtils.instantiate(getPropertyType());
+        return BeanUtils.instantiateClass(getPropertyType());
     }
 
     public boolean isMap() {

@@ -31,35 +31,23 @@ public class WhereCriterion {
      */
     private final StringJoiner segments;
     /**
+     * params
+     */
+    private final List<Object> params;
+    /**
      * 占位符计数器 ?1 ?2 ?3
      */
     private int counts = 1;
     /**
-     * params
-     */
-    private final List<Object> params;
-
-    /**
      * the link type for where segments
      */
     private Operator currentOpt;
-
-    public enum Operator {
-        /**
-         *
-         */
-        EQ, NE, LT, LTE, GT, GTE, ISNULL, IS_NOT_NULL, ISEMPTY, IS_NOT_EMPTY, LIKE, NOT_LIKE, IN, NOTIN, BETWEEN, NOT_BETWEEN, AND, OR
-    }
 
     /**
      * 默认用 and 连接 查询条件
      */
     public WhereCriterion() {
         this(Operator.AND);
-    }
-
-    public static WhereCriterion get() {
-        return new WhereCriterion();
     }
 
     /**
@@ -73,6 +61,9 @@ public class WhereCriterion {
         this.params = new ArrayList<>();
     }
 
+    public static WhereCriterion get() {
+        return new WhereCriterion();
+    }
 
     /**
      * where 条件 begin
@@ -297,7 +288,6 @@ public class WhereCriterion {
         return this;
     }
 
-
     /**
      * is null
      *
@@ -349,7 +339,6 @@ public class WhereCriterion {
         return this;
     }
 
-
     /**
      * right like
      *
@@ -396,7 +385,6 @@ public class WhereCriterion {
         }
         return this;
     }
-
 
     /**
      * left like
@@ -475,7 +463,6 @@ public class WhereCriterion {
         }
         return this;
     }
-
 
     /**
      * not like
@@ -618,7 +605,6 @@ public class WhereCriterion {
         return this;
     }
 
-
     /**
      * not between
      *
@@ -657,7 +643,6 @@ public class WhereCriterion {
         this.segments.add(SqlUtils.underlineColumn(part));
     }
 
-
     public StringJoiner getSegments() {
         return this.segments;
     }
@@ -668,6 +653,13 @@ public class WhereCriterion {
 
     public List<Object> getParams() {
         return params;
+    }
+
+    public enum Operator {
+        /**
+         *
+         */
+        EQ, NE, LT, LTE, GT, GTE, ISNULL, IS_NOT_NULL, ISEMPTY, IS_NOT_EMPTY, LIKE, NOT_LIKE, IN, NOTIN, BETWEEN, NOT_BETWEEN, AND, OR
     }
 
 

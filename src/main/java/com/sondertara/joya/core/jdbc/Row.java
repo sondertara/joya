@@ -7,24 +7,63 @@ package com.sondertara.joya.core.jdbc;
  * Row中包含了一系列getXXX方法用于获取列中的值。
  *
  * @author huangxiaohu
- *
  * @see Record
  */
 public interface Row {
+    /**
+     *  get obj
+     * @param columnLabel column
+     * @return  column of one row
+     */
     Object getObject(String columnLabel);
 
+    /**
+     *  get obj
+     * @param columnIndex column index
+     * @return  column of one row
+     */
     Object getObject(int columnIndex);
 
+    /**
+     *  get int
+     * @param columnLabel name
+     * @return int
+     */
     int getInt(String columnLabel);
 
+    /**
+     *  int
+     * @param columnIndex index
+     * @return i
+     */
     int getInt(int columnIndex);
 
+    /**
+     * get str
+     * @param columnLabel name
+     * @return s
+     */
     String getString(String columnLabel);
 
+    /**
+     * get str
+     * @param columnIndex index
+     * @return s
+     */
     String getString(int columnIndex);
 
+    /**
+     * get double
+     * @param columnLabel name
+     * @return d
+     */
     double getDouble(String columnLabel);
 
+    /**
+     * get double
+     * @param columnIndex i
+     * @return d
+     */
     double getDouble(int columnIndex);
 
     /**

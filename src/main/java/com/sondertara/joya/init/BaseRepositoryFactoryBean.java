@@ -1,4 +1,3 @@
-
 package com.sondertara.joya.init;
 
 import org.springframework.data.jpa.repository.JpaRepository;

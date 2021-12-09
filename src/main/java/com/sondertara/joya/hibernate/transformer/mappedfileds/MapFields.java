@@ -6,6 +6,9 @@ import java.beans.PropertyDescriptor;
 import java.util.HashMap;
 import java.util.Map;
 
+/**
+ * @author SonderTara
+ */
 public class MapFields extends Fields {
     public MapFields(PropertyDescriptor propertyDescriptor) {
         super(propertyDescriptor);
@@ -18,7 +21,7 @@ public class MapFields extends Fields {
     }
 
     @Override
-    @SuppressWarnings("unchecked")
+    @SuppressWarnings({"unchecked", "rawtypes"})
     public void setResultPropertyValue(BeanWrapper bw, Object instantiate, String name, Object value) {
         Map map = (Map) instantiate;
         map.put(name, value);

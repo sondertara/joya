@@ -26,11 +26,6 @@ public class JoyaSpringContext implements ApplicationContextAware {
 
     private static ApplicationContext applicationContext;
 
-    @Override
-    public void setApplicationContext(@NonNull ApplicationContext context) throws BeansException {
-        applicationContext = context;
-    }
-
     /**
      * register a bean
      *
@@ -69,6 +64,11 @@ public class JoyaSpringContext implements ApplicationContextAware {
 
     public static ApplicationContext getApplicationContext() {
         return applicationContext;
+    }
+
+    @Override
+    public void setApplicationContext(@NonNull ApplicationContext context) throws BeansException {
+        applicationContext = context;
     }
 
     /**
@@ -183,7 +183,7 @@ public class JoyaSpringContext implements ApplicationContextAware {
      * @see EnvEnum
      */
     public static EnvEnum getEnv() {
-        EnvEnum envEnum = null;
+        EnvEnum envEnum;
         String env = System.getProperty("env");
         if (StringUtils.isBlank(env)) {
             env = System.getProperty("ENV");

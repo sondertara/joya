@@ -48,20 +48,6 @@ public class JoinCriterion {
         tableNames = new HashSet<>();
     }
 
-
-    public enum JoinType {
-        /**
-         *
-         */
-        JOIN("JOIN"), LEFT_JOIN("LEFT JOIN"), RIGHT_JOIN("RIGHT JOIN");
-        private final String code;
-
-        JoinType(String code) {
-            this.code = code;
-        }
-    }
-
-
     /**
      * join
      *
@@ -104,7 +90,6 @@ public class JoinCriterion {
 
         return this;
     }
-
 
     /**
      * get the join fields with NodeList which is a list with head node
@@ -151,5 +136,17 @@ public class JoinCriterion {
         tableNames.add(left.getTableName());
         tableNames.add(right.getTableName());
         this.join.add(joinType.code);
+    }
+
+    public enum JoinType {
+        /**
+         *
+         */
+        JOIN("JOIN"), LEFT_JOIN("LEFT JOIN"), RIGHT_JOIN("RIGHT JOIN");
+        private final String code;
+
+        JoinType(String code) {
+            this.code = code;
+        }
     }
 }

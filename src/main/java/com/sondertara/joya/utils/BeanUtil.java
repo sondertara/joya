@@ -11,7 +11,6 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 
@@ -60,18 +59,14 @@ public abstract class BeanUtil extends org.springframework.beans.BeanUtils {
 
 
     /**
-     * 简单封装org.springframework.cglib.beans.BeanMap, 实现Bean<-->Map深度转换
-     */
-    /**
-     * Bean --> Map
+     * Bean to Map
      */
     public static <T> Map<String, Object> beanToMap(T bean) {
         Map<String, Object> map = new HashMap<>(16);
         if (bean != null) {
             BeanMap beanMap = BeanMap.create(bean);
 
-            for (Iterator iterator = beanMap.keySet().iterator(); iterator.hasNext(); ) {
-                Object key = iterator.next();
+            for (Object key : beanMap.keySet()) {
                 if (beanMap.get(key) != null) {
                     map.put(key.toString(), beanMap.get(key));
                 }
@@ -83,13 +78,12 @@ public abstract class BeanUtil extends org.springframework.beans.BeanUtils {
     /**
      * Map --> Bean
      */
-    @SuppressWarnings({"unchecked"})
+    @SuppressWarnings({"unchecked", "rawtypes"})
     public static <T> T mapToBean(Map map, T t) {
         BeanMap beanMap = BeanMap.create(t);
         beanMap.putAll(map);
         return (T) beanMap.getBean();
     }
-
 
     public static <T> List<Map<String, Object>> beansToMaps(List<T> beanList) {
         List<Map<String, Object>> maps = new ArrayList<>();
@@ -105,7 +99,6 @@ public abstract class BeanUtil extends org.springframework.beans.BeanUtils {
         return maps;
     }
 
-
     public static <T> List<T> mapsToBeans(List<Map<String, Object>> mapList, Class<T> t) {
         List<T> beans = new ArrayList<>();
         if (CollectionUtils.isEmpty(mapList)) {
@@ -114,8 +107,8 @@ public abstract class BeanUtil extends org.springframework.beans.BeanUtils {
         for (Map<String, Object> map : mapList) {
             T t1 = null;
             try {
-                t1 = t.newInstance();
-            } catch (InstantiationException | IllegalAccessException e) {
+                t1 = t.getDeclaredConstructor().newInstance();
+            } catch (Exception e) {
                 e.printStackTrace();
             }
             T t2 = mapToBean(map, t1);

@@ -1,4 +1,3 @@
-
 package com.sondertara.joya.core.query.pagination;
 
 

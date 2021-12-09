@@ -9,8 +9,6 @@ import org.apache.commons.beanutils.BeanUtils;
 import org.hibernate.Session;
 import org.hibernate.query.internal.NativeQueryImpl;
 import org.hibernate.transform.Transformers;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
@@ -26,7 +24,6 @@ import javax.persistence.EntityManager;
 import javax.persistence.Query;
 import java.io.Serializable;
 import java.util.ArrayList;
-import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -43,11 +40,8 @@ public class BaseRepositoryImpl<T, ID extends Serializable> extends SimpleJpaRep
     private final JpaEntityInformation<T, ?> eif;
     private final EntityManager em;
     private final Class<T> entityClass;
-    private String entityName;
-    private String idName;
-
-    private static final Logger log = LoggerFactory.getLogger(BaseRepositoryImpl.class);
-
+    private final String entityName;
+    private final String idName;
 
     public BaseRepositoryImpl(JpaEntityInformation<T, ID> eif, EntityManager em) {
         super(eif, em);
@@ -99,11 +93,11 @@ public class BaseRepositoryImpl<T, ID extends Serializable> extends SimpleJpaRep
         if (ObjectUtils.isEmpty(ids)) {
             return;
         }
-        List<T> models = new ArrayList<T>();
+        List<T> models = new ArrayList<>();
         for (ID id : ids) {
             T model;
             try {
-                model = entityClass.newInstance();
+                model = entityClass.getDeclaredConstructor().newInstance();
             } catch (Exception e) {
                 throw new RuntimeException("batch delete " + entityClass + " error", e);
             }
@@ -114,7 +108,8 @@ public class BaseRepositoryImpl<T, ID extends Serializable> extends SimpleJpaRep
             }
             models.add(model);
         }
-        deleteInBatch(models);
+        deleteAllInBatch(models);
+
     }
 
 
@@ -131,6 +126,7 @@ public class BaseRepositoryImpl<T, ID extends Serializable> extends SimpleJpaRep
         return toMap(findAllById(ids));
     }
 
+    @SuppressWarnings("unchecked")
     private Map<ID, T> toMap(List<T> list) {
         Map<ID, T> result = new LinkedHashMap<>();
         for (T t : list) {
@@ -141,8 +137,6 @@ public class BaseRepositoryImpl<T, ID extends Serializable> extends SimpleJpaRep
         return result;
     }
 
-    /***********************************sql*************************************************/
-    // select * where id = ?1 name = ?2 ...
     @Override
     @SuppressWarnings("unchecked")
     public <X> List<X> findListBySql(String sql, Class<X> clazz, Object... params) {
@@ -176,36 +170,37 @@ public class BaseRepositoryImpl<T, ID extends Serializable> extends SimpleJpaRep
         Query pageQuery = session.createNativeQuery(sqlStr);
         setParameters(pageQuery, nativeSql.getParams());
 
-        List<X> result = totalRecord == 0 ? new ArrayList<X>(0) : pageQuery.setFirstResult(pageNo).setMaxResults(pageSize).unwrap(NativeQueryImpl.class).setResultTransformer(new AliasToBeanTransformer<X>(resultClass)).list();
+        List<X> result = totalRecord == 0 ? new ArrayList<>(0) : pageQuery.setFirstResult(pageNo).setMaxResults(pageSize).unwrap(NativeQueryImpl.class).setResultTransformer(new AliasToBeanTransformer<>(resultClass)).list();
 
-        return new PageImpl<X>(result, PageRequest.of(pageNo, pageSize), totalRecord);
+        return new PageImpl<>(result, PageRequest.of(pageNo, pageSize), totalRecord);
     }
 
 
     /**
      * 根据ql和按照索引顺序的params查询一个实体
      */
-    public T findOneByQL(final String ql, final Object... params) {
-        List<T> list = findAllByQL(ql, PageRequest.of(0, 1), params);
+    public T findOneByHql(final String ql, final Object... params) {
+        List<T> list = findAllByHql(ql, PageRequest.of(0, 1), params);
         if (list.size() > 0) {
             return list.get(0);
         }
         return null;
     }
 
-    public List<T> findAllByQL(final String ql, final Object... params) {
-        return findAllByQL(ql, (Pageable) null, params);
+    public List<T> findAllByHql(final String ql, final Object... params) {
+        return findAllByHql(ql, (Pageable) null, params);
     }
 
     /**
      * 根据ql和按照索引顺序的params执行ql，sort存储排序信息 null表示不排序
      *
-     * @param ql
+     * @param ql hql sql
      * @param sort   null表示不排序
      * @param params List<Order> orders = this.find("SELECT o FROM Order o WHERE o.storeId = ? and o.code = ? order by o.createTime desc", storeId, code);
      * @return list
      */
-    public List<T> findAllByQL(final String ql, final Sort sort, final Object... params) {
+    @SuppressWarnings("unchecked")
+    public List<T> findAllByHqL(final String ql, final Sort sort, final Object... params) {
         Query query = em.createQuery(ql + prepareOrder(sort));
         setParameters(query, params);
         return query.getResultList();
@@ -214,13 +209,13 @@ public class BaseRepositoryImpl<T, ID extends Serializable> extends SimpleJpaRep
     /**
      * 根据ql和按照索引顺序的params执行ql，pageable存储分页信息 null表示不分页
      *
-     * @param ql hql
+     * @param ql       hql
      * @param pageable null表示不分页
-     * @param params param
+     * @param params   param
      * @return list
      */
     @SuppressWarnings("unchecked")
-    public List<T> findAllByQL(final String ql, final Pageable pageable, final Object... params) {
+    public List<T> findAllByHql(final String ql, final Pageable pageable, final Object... params) {
         Query query = em.createQuery(ql + prepareOrder(pageable != null ? pageable.getSort() : null));
         setParameters(query, params);
         if (pageable != null) {
@@ -262,7 +257,7 @@ public class BaseRepositoryImpl<T, ID extends Serializable> extends SimpleJpaRep
     /**
      * 按顺序设置Query参数
      */
-    private void setParameters(Query query, List params) {
+    private void setParameters(Query query, List<Object> params) {
         if (params != null) {
             for (int i = 0; i < params.size(); i++) {
                 query.setParameter(i + 1, params.get(i));
@@ -318,11 +313,9 @@ public class BaseRepositoryImpl<T, ID extends Serializable> extends SimpleJpaRep
 
         if (values != null) {
 
-            Iterator it = values.entrySet().iterator();
+            for (Map.Entry<String, ?> stringEntry : values.entrySet()) {
 
-            while (it.hasNext()) {
-
-                Map.Entry<String, Object> entry = (Map.Entry<String, Object>) it.next();
+                Map.Entry<String, Object> entry = (Map.Entry<String, Object>) stringEntry;
                 query.setParameter(entry.getKey(), entry.getValue());
             }
 

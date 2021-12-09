@@ -13,6 +13,7 @@ import java.util.Set;
 
 /**
  * 还未完成
+ *
  * @author huangxiaohu
  */
 public class CollectionFields extends Fields {
@@ -29,7 +30,6 @@ public class CollectionFields extends Fields {
     }
 
     @Override
-    @SuppressWarnings("unchecked")
     public void setResultPropertyValue(BeanWrapper bw, Object instantiate, String name, Object value) {
 
     }

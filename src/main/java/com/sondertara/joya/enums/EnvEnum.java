@@ -1,8 +1,6 @@
 package com.sondertara.joya.enums;
 
 /**
- *
- *
  * @author huangxiaohu
  * @date 2021/7/9 15:20
  */
@@ -21,14 +19,6 @@ public enum EnvEnum {
         this.name = name;
     }
 
-    public int getCode() {
-        return code;
-    }
-
-    public String getName() {
-        return name;
-    }
-
     public static EnvEnum getEnum(String name) {
         if (null == name) {
             return null;
@@ -40,5 +30,13 @@ public enum EnvEnum {
             }
         }
         return null;
+    }
+
+    public int getCode() {
+        return code;
+    }
+
+    public String getName() {
+        return name;
     }
 }

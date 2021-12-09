@@ -27,11 +27,8 @@ import javax.persistence.PersistenceContext;
  * @since 1.0.1
  */
 public class JoyaRepositoryFactoryBean extends AbstractFactoryBean<JoyaRepository> implements ApplicationContextAware {
-    private EntityManager entityManager;
-
-
     private static final String CONTEXT_HOLDER = "joyaSpringContext";
-
+    private EntityManager entityManager;
     private ConfigurableApplicationContext applicationContext;
 
     @PersistenceContext

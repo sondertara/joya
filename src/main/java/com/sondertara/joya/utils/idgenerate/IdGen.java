@@ -10,6 +10,7 @@ import java.util.UUID;
 
 /**
  * 生成ID算法工具类.
+ *
  * @author huangxiaohu
  */
 public class IdGen implements IdentifierGenerator {
@@ -18,17 +19,23 @@ public class IdGen implements IdentifierGenerator {
     private static final IdWorker idWorker = new IdWorker(-1, -1);
 
 
-    /** 生成UUID, 中间无-分割 */
+    /**
+     * 生成UUID, 中间无-分割
+     */
     public static String uuid() {
         return UUID.randomUUID().toString().replaceAll("-", "");
     }
 
-    /** 使用SecureRandom随机生成Long */
+    /**
+     * 使用SecureRandom随机生成Long
+     */
     public static long randomLong() {
         return Math.abs(random.nextLong());
     }
 
-    /** 使用snowflake生成18位唯一编号 */
+    /**
+     * 使用snowflake生成18位唯一编号
+     */
     public static long snowflake() {
         return idWorker.nextId();
     }

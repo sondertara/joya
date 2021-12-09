@@ -73,6 +73,42 @@ public class NativeSqlQuery {
         return new NativeSqlQueryBuilder();
     }
 
+    /**
+     * 占位符数字调整
+     */
+    private static String moveCount(String value, int counts) {
+        StringBuffer sb = new StringBuffer();
+        Matcher m = PARAM_PATTERN.matcher(value);
+        while (m.find()) {
+            m.appendReplacement(sb, "?" + (Integer.parseInt(m.group().substring(1)) + counts));
+        }
+        m.appendTail(sb);
+        return sb.toString();
+    }
+
+    /**
+     * 获取格式化sql
+     *
+     * @return sql
+     */
+    public String toFormattedSql() {
+        return SqlUtils.formatSql(this.sqlStr);
+
+    }
+
+    public String toSql() {
+        return this.sqlStr;
+    }
+
+    public List<Object> getParams() {
+        return params;
+    }
+
+    @Override
+    public String toString() {
+        return "NativeSqlQuery{" + this.toSql() + "}";
+    }
+
     public static class NativeSqlQueryBuilder {
         private String select = SELECT_ALL;
         private String from;
@@ -537,41 +573,5 @@ public class NativeSqlQuery {
             return new NativeSqlQuery(sqlStr, this.params);
         }
 
-    }
-
-    /**
-     * 获取格式化sql
-     *
-     * @return sql
-     */
-    public String toFormattedSql() {
-        return SqlUtils.formatSql(this.sqlStr);
-
-    }
-
-    public String toSql() {
-        return this.sqlStr;
-    }
-
-    public List getParams() {
-        return params;
-    }
-
-    /**
-     * 占位符数字调整
-     */
-    private static String moveCount(String value, int counts) {
-        StringBuffer sb = new StringBuffer();
-        Matcher m = PARAM_PATTERN.matcher(value);
-        while (m.find()) {
-            m.appendReplacement(sb, "?" + (Integer.parseInt(m.group().substring(1)) + counts));
-        }
-        m.appendTail(sb);
-        return sb.toString();
-    }
-
-    @Override
-    public String toString() {
-        return "NativeSqlQuery{" + this.toSql() + "}";
     }
 }

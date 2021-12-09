@@ -14,6 +14,17 @@ import java.util.Map;
  */
 public class MappedFieldsInitializer {
 
+    private static boolean isMap(Class<?> propertyType) {
+        return Map.class.isAssignableFrom(propertyType);
+    }
+
+    private static boolean isPrimitive(Class<?> propertyType) {
+        return Number.class.isAssignableFrom(propertyType) ||
+                propertyType.isPrimitive() ||
+                String.class.isAssignableFrom(propertyType) ||
+                Date.class.isAssignableFrom(propertyType);
+    }
+
     public Map<String, Fields> init(Class<?> mappedClass) {
         Map<String, Fields> fields = Maps.newHashMap();
         PropertyDescriptor[] pds = BeanUtils.getPropertyDescriptors(mappedClass);
@@ -41,17 +52,6 @@ public class MappedFieldsInitializer {
             fields.put(name, childField);
         }
         return fields;
-    }
-
-    private static boolean isMap(Class<?> propertyType) {
-        return Map.class.isAssignableFrom(propertyType);
-    }
-
-    private static boolean isPrimitive(Class<?> propertyType) {
-        return Number.class.isAssignableFrom(propertyType) ||
-                propertyType.isPrimitive() ||
-                String.class.isAssignableFrom(propertyType) ||
-                Date.class.isAssignableFrom(propertyType);
     }
 
 }

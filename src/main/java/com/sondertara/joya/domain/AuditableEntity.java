@@ -17,14 +17,15 @@ import java.util.Date;
 
 /**
  * 类将不是一个完整的实体类，他将不会映射到数据库表，但是他的属性都将映射到其子类的数据库字段中。 //http://blog.sina.com.cn/s/blog_7085382f0100uk4p.html
- *
+ * <p>
  * //@JsonIgnoreProperties(value = {"createdDate","createdBy", "lastModifiedDate", "lastModifiedBy"},allowGetters = true) //jackson只能获取createdDate,createdBy,lastModifiedDate,lastModifiedBy属性(其他创建和更新操作都由jpa完成)
  * 用于监听实体类操作的
+ *
  * @author huangxiaohu
  */
 @EntityListeners({AuditingEntityListener.class})
 @MappedSuperclass
-public abstract class AuditableEntity<T extends Model, ID extends Serializable> extends BaseEntity<T, ID> {
+public abstract class AuditableEntity<T extends Model<T, ID>, ID extends Serializable> extends BaseEntity<T, ID> {
 
     /**
      * 表示该字段为创建时间字段，在这个实体被insert的时候,会设置值. 类上加@EntityListeners(AuditingEntityListener.class),启动类加@EnableJpaAuditing. @LastModifiedDate同理.

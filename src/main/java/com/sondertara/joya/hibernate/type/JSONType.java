@@ -33,12 +33,28 @@ import java.util.Properties;
  * @author huangxiaohu
  */
 public class JSONType implements UserType, DynamicParameterizedType, Serializable {
-    private static final long serialVersionUID = 352044032843534075L;
-    private static final CoreMessageLogger LOG = Logger.getMessageLogger(CoreMessageLogger.class, JSONType.class.getName());
     public static final String TYPE = "JSONType";
     public static final String CLASS_NAME = "class";
+    private static final long serialVersionUID = 352044032843534075L;
+    private static final CoreMessageLogger LOG = Logger.getMessageLogger(CoreMessageLogger.class, JSONType.class.getName());
     private int sqlType = Types.VARCHAR;
     private Type type = Object.class;
+
+    private static String extractString(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof String) {
+            return (String) value;
+        }
+        if (value instanceof Reader) {
+            return DataHelper.extractString((Reader) value);
+        }
+        if (value instanceof Clob) {
+            return DataHelper.extractString((Clob) value);
+        }
+        return null;
+    }
 
     @Override
     public int[] sqlTypes() {
@@ -46,6 +62,7 @@ public class JSONType implements UserType, DynamicParameterizedType, Serializabl
     }
 
     @Override
+    @SuppressWarnings("rawtypes")
     public Class returnedClass() {
         if (type instanceof ParameterizedType) {
             return (Class) ((ParameterizedType) type).getRawType();
@@ -69,12 +86,12 @@ public class JSONType implements UserType, DynamicParameterizedType, Serializabl
      * (此方法要求对可能出现null值进行处理)
      * names中包含了当前自定义类型的映射字段名称
      *
-     * @param rs result
-     * @param  names list
+     * @param rs    result
+     * @param names list
      * @param owner owner
      * @return obj
      * @throws HibernateException e
-     * @throws SQLException e
+     * @throws SQLException       e
      */
     @Override
     public Object nullSafeGet(ResultSet rs, String[] names, SharedSessionContractImplementor sharedSessionContractImplementor, Object owner) throws HibernateException, SQLException {
@@ -95,11 +112,11 @@ public class JSONType implements UserType, DynamicParameterizedType, Serializabl
      * 本方法将在Hibernate进行数据保存时被调用
      * 我们可以通过PreparedStatement将自定义数据写入到对应的数据库表字段
      *
-     * @param st statement
+     * @param st    statement
      * @param value v
      * @param index index
      * @throws HibernateException e
-     * @throws SQLException e
+     * @throws SQLException       e
      */
     @Override
     public void nullSafeSet(PreparedStatement st, Object value, int index, SharedSessionContractImplementor sharedSessionContractImplementor) throws HibernateException, SQLException {
@@ -178,11 +195,12 @@ public class JSONType implements UserType, DynamicParameterizedType, Serializabl
     }
 
     @Override
-    @SuppressWarnings("unchecked")
+    @SuppressWarnings("rawtypes")
     public void setParameterValues(Properties parameters) {
         try {
             Class eClass = ReflectHelper.classForName(parameters.getProperty(DynamicParameterizedType.ENTITY), this.getClass());
             Field field = ReflectionUtils.findField(eClass, parameters.getProperty(DynamicParameterizedType.PROPERTY));
+            assert field != null;
             Type fieldType = field.getGenericType();
             if (fieldType instanceof Class || fieldType instanceof ParameterizedType) {
                 type = fieldType;
@@ -217,21 +235,5 @@ public class JSONType implements UserType, DynamicParameterizedType, Serializabl
                 break;
             }
         }
-    }
-
-    private static String extractString(Object value) {
-        if (value == null) {
-            return null;
-        }
-        if (value instanceof String) {
-            return (String) value;
-        }
-        if (value instanceof Reader) {
-            return DataHelper.extractString((Reader) value);
-        }
-        if (value instanceof Clob) {
-            return DataHelper.extractString((Clob) value);
-        }
-        return null;
     }
 }

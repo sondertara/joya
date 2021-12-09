@@ -5,6 +5,7 @@ import com.google.common.cache.CacheLoader;
 import com.google.common.cache.LoadingCache;
 import lombok.extern.slf4j.Slf4j;
 
+import javax.annotation.Nonnull;
 import java.util.Date;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -24,6 +25,10 @@ public abstract class GuavaAbstractLoadingCache<K, V> {
 
 
     /**
+     * time  unit of second
+     */
+    private final TimeUnit timeUnit = TimeUnit.SECONDS;
+    /**
      * 最大缓存条数，子类在构造方法中调用setMaximumSize(int size)来更改
      */
     private int maximumSize = 1000;
@@ -31,10 +36,6 @@ public abstract class GuavaAbstractLoadingCache<K, V> {
      * 数据存在时长，子类在构造方法中调用setExpireAfterWriteDuration(int duration)来更改
      */
     private int expireAfterWriteDuration = 60;
-    /**
-     * time  unit of second
-     */
-    private final TimeUnit timeUnit = TimeUnit.SECONDS;
     /**
      * Cache初始化或被重置的时间
      */
@@ -62,7 +63,7 @@ public abstract class GuavaAbstractLoadingCache<K, V> {
                 if (cache == null) {
                     cache = CacheBuilder.newBuilder().maximumSize(maximumSize).expireAfterWrite(expireAfterWriteDuration, timeUnit).recordStats().build(new CacheLoader<K, V>() {
                         @Override
-                        public V load(K key) {
+                        public V load(@Nonnull K key) {
                             return fetchData(key);
                         }
                     });
@@ -131,10 +132,6 @@ public abstract class GuavaAbstractLoadingCache<K, V> {
         return maximumSize;
     }
 
-    public int getExpireAfterWriteDuration() {
-        return expireAfterWriteDuration;
-    }
-
     /**
      * 设置最大缓存条数
      *
@@ -142,6 +139,10 @@ public abstract class GuavaAbstractLoadingCache<K, V> {
      */
     public void setMaximumSize(int maximumSize) {
         this.maximumSize = maximumSize;
+    }
+
+    public int getExpireAfterWriteDuration() {
+        return expireAfterWriteDuration;
     }
 
     /**
