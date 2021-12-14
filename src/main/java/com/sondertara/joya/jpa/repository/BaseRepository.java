@@ -26,6 +26,45 @@ public interface BaseRepository<T, ID extends Serializable> extends PagingAndSor
 
 
     /**
+     * find map from table rows
+     *
+     * @param nativeSql sql
+     * @param camelCase parse key to camelCase
+     * @return list
+     */
+    Map<String, Object> findMapBySql(NativeSqlQuery nativeSql, boolean camelCase);
+
+    /**
+     * find map list from table rows
+     *
+     * @param nativeSql sql
+     * @param camelCase parse key to camelCase
+     * @return list
+     */
+    List<Map<String, Object>> findMapListBySql(NativeSqlQuery nativeSql, boolean camelCase);
+
+    /**
+     * find map list from table rows
+     *
+     * @param sql       sql
+     * @param params    query params
+     * @param camelCase parse key to camelCase
+     * @return list
+     */
+    List<Map<String, Object>> findMapListBySql(String sql, List<Object> params, boolean camelCase);
+
+    /**
+     * find single row to map
+     *
+     * @param sql       sql
+     * @param params    params
+     * @param camelCase parse key to camelCase
+     * @return map
+     */
+    Map<String, Object> findMapBySql(String sql, List<Object> params, boolean camelCase);
+
+
+    /**
      * 使用SQL查询列表，数据已map形式封装
      *
      * @param querySql hql

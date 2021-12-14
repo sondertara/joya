@@ -3,6 +3,7 @@ package com.sondertara.joya.jpa.repository;
 
 import com.sondertara.joya.core.query.NativeSqlQuery;
 import com.sondertara.joya.hibernate.transformer.AliasToBeanTransformer;
+import com.sondertara.joya.hibernate.transformer.AliasToMapResultTransformer;
 import com.sondertara.joya.utils.BeanUtil;
 import com.sondertara.joya.utils.SqlUtils;
 import org.apache.commons.beanutils.BeanUtils;
@@ -137,6 +138,7 @@ public class BaseRepositoryImpl<T, ID extends Serializable> extends SimpleJpaRep
         return result;
     }
 
+
     @Override
     @SuppressWarnings("unchecked")
     public <X> List<X> findListBySql(String sql, Class<X> clazz, Object... params) {
@@ -194,7 +196,7 @@ public class BaseRepositoryImpl<T, ID extends Serializable> extends SimpleJpaRep
     /**
      * 根据ql和按照索引顺序的params执行ql，sort存储排序信息 null表示不排序
      *
-     * @param ql hql sql
+     * @param ql     hql sql
      * @param sort   null表示不排序
      * @param params List<Order> orders = this.find("SELECT o FROM Order o WHERE o.storeId = ? and o.code = ? order by o.createTime desc", storeId, code);
      * @return list
@@ -285,6 +287,39 @@ public class BaseRepositoryImpl<T, ID extends Serializable> extends SimpleJpaRep
         return (X) query.getResultList();
     }
 
+
+    @Override
+    public List<Map<String, Object>> findMapListBySql(NativeSqlQuery nativeSql, boolean camelCase) {
+
+        return findMapListBySql(nativeSql, camelCase);
+    }
+
+    @Override
+    public Map<String, Object> findMapBySql(NativeSqlQuery nativeSql, boolean camelCase) {
+
+        return findMapBySql(nativeSql, camelCase);
+    }
+
+    /**
+     * (non-Javadoc)
+     */
+    @Override
+    @SuppressWarnings({"unchecked"})
+    public List<Map<String, Object>> findMapListBySql(String querySql, List<Object> params, boolean camelCase) {
+        Query query = em.createNativeQuery(querySql);
+        setParameters(query, params);
+        query.unwrap(NativeQueryImpl.class).setResultTransformer(AliasToMapResultTransformer.getInstance(camelCase));
+        return query.getResultList();
+    }
+
+    @Override
+    @SuppressWarnings({"unchecked"})
+    public Map<String, Object> findMapBySql(String querySql, List<Object> params, boolean camelCase) {
+        Query query = em.createNativeQuery(querySql);
+        setParameters(query, params);
+        query.unwrap(NativeQueryImpl.class).setResultTransformer(AliasToMapResultTransformer.getInstance(camelCase));
+        return (Map<String, Object>) query.getSingleResult();
+    }
 
     @SuppressWarnings({"unchecked"})
     @Override

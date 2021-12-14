@@ -8,6 +8,7 @@ import com.sondertara.joya.core.query.pagination.PageQueryParam;
 import com.sondertara.joya.core.query.pagination.PageResult;
 import com.sondertara.joya.ext.JoyaSpringContext;
 import com.sondertara.joya.hibernate.transformer.AliasToBeanTransformer;
+import com.sondertara.joya.hibernate.transformer.AliasToMapResultTransformer;
 import com.sondertara.joya.utils.SqlUtils;
 import org.hibernate.query.internal.NativeQueryImpl;
 import org.slf4j.Logger;
@@ -21,6 +22,7 @@ import javax.persistence.EntityManager;
 import javax.persistence.Query;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.function.UnaryOperator;
 
 /**
@@ -79,13 +81,58 @@ public class JoyaRepository {
     }
 
     /**
-     * 分页查询
+     * find map list from table rows
      *
-     * @param resultClass 查询结果接收class
-     * @param queryParam  查询数据
-     * @param targetClass 查询数据库表
-     * @param <T>         泛型
-     * @return 分页数据
+     * @param nativeSql sql
+     * @param params    params
+     * @param camelCase parse key to camelCase
+     * @return list
+     */
+    public List<Map<String, Object>> findMapListBySql(NativeSqlQuery nativeSql, List<Object> params, boolean camelCase) {
+
+        return findMapListBySql(nativeSql.toSql(), params, camelCase);
+    }
+
+    /**
+     * find map from table rows
+     *
+     * @param nativeSql sql
+     * @param params    params
+     * @param camelCase parse key to camelCase
+     * @return list
+     */
+    public Map<String, Object> findMapBySql(NativeSqlQuery nativeSql, List<Object> params, boolean camelCase) {
+
+        return findMapBySql(nativeSql.toSql(), params, camelCase);
+    }
+
+    /**
+     * (non-Javadoc)
+     */
+    @SuppressWarnings({"unchecked"})
+    public List<Map<String, Object>> findMapListBySql(String querySql, List<Object> params, boolean camelCase) {
+        Query query = em.createNativeQuery(querySql);
+        setParameters(query, params);
+        query.unwrap(NativeQueryImpl.class).setResultTransformer(AliasToMapResultTransformer.getInstance(camelCase));
+        return query.getResultList();
+    }
+
+    @SuppressWarnings({"unchecked"})
+    public Map<String, Object> findMapBySql(String querySql, List<Object> params, boolean camelCase) {
+        Query query = em.createNativeQuery(querySql);
+        setParameters(query, params);
+        query.unwrap(NativeQueryImpl.class).setResultTransformer(AliasToMapResultTransformer.getInstance(camelCase));
+        return (Map<String, Object>) query.getSingleResult();
+    }
+
+    /**
+     * query page
+     *
+     * @param resultClass the result class
+     * @param queryParam  query params
+     * @param targetClass the target query table
+     * @param <T>         the type of result
+     * @return pagination result
      */
     public <T> PageResult<T> queryPage(PageQueryParam queryParam, Class<T> resultClass, Class<?>... targetClass) {
         NativeSqlQuery nativeSqlQuery = JoyaPageConvert.buildNativeQuery(queryParam, targetClass);
@@ -94,13 +141,13 @@ public class JoyaRepository {
     }
 
     /**
-     * 分页查询
+     * query page
      *
-     * @param resultClass 查询结果接收class
-     * @param queryParam  查询数据
-     * @param <T>         泛型
-     * @param joinPart    join语句
-     * @return 分页数据
+     * @param resultClass the result class
+     * @param queryParam  query params
+     * @param joinPart    the join  table
+     * @param <T>         the type of result
+     * @return pagination result
      */
     public <T> PageResult<T> queryPage(PageQueryParam queryParam, Class<T> resultClass, UnaryOperator<JoinCriterion> joinPart) {
 
@@ -110,14 +157,14 @@ public class JoyaRepository {
     }
 
     /**
-     * 通过sql 分页查询
+     * query page
      *
-     * @param nativeSql   查询语句
-     * @param resultClass 结果映射class
-     * @param pageNo      page
-     * @param pageSize    pageSize
-     * @param <T>         result
-     * @return result
+     * @param nativeSql   sql query
+     * @param resultClass result class
+     * @param pageNo      page start
+     * @param pageSize    page size
+     * @param <T>         the type of result
+     * @return pagination result
      */
     @SuppressWarnings("unchecked")
     public <T> PageResult<T> queryPage(NativeSqlQuery nativeSql, Class<T> resultClass, Integer pageNo, Integer pageSize) {
@@ -165,7 +212,7 @@ public class JoyaRepository {
     /**
      * 根据ql和按照索引顺序的params执行ql，sort存储排序信息 null表示不排序
      *
-     * @param ql hql sql
+     * @param ql     hql sql
      * @param sort   null表示不排序
      * @param params List<Order> orders = this.find("SELECT o FROM Order o WHERE o.storeId = ? and o.code = ? order by o.createTime desc", storeId, code);
      * @return list
