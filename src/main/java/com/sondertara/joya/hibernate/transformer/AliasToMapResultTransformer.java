@@ -39,6 +39,10 @@ public class AliasToMapResultTransformer extends AliasedTupleSubsetResultTransfo
             String alias = aliases[i];
             if (alias != null) {
                 if (camelCase) {
+		   int index = alias.indexOf(".");
+		   if(index > -1){
+		   alias= alias.substring(index+1);
+		   }
                     alias = StringUtils.toCamelCase(alias);
                 }
                 result.put(alias, tuple[i]);
