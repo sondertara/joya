@@ -1,5 +1,8 @@
 package com.sondertara.joya.core.jdbc;
 
+import java.math.BigDecimal;
+import java.util.Date;
+
 /**
  * 数据行：封装了结果集的一行数据。
  * 数据行由若干列组成，每列都是一个值。
@@ -25,6 +28,20 @@ public interface Row {
     Object getObject(int columnIndex);
 
     /**
+     *  get long
+     * @param columnLabel name
+     * @return long
+     */
+    long getLong(String columnLabel);
+
+    /**
+     *  long
+     * @param columnIndex index
+     * @return long
+     */
+    long getLong(int columnIndex);
+
+     /**
      *  get int
      * @param columnLabel name
      * @return int
@@ -37,6 +54,34 @@ public interface Row {
      * @return i
      */
     int getInt(int columnIndex);
+
+     /**
+     *  get int
+     * @param columnLabel name
+     * @return int
+     */
+    BigDecimal getBigDecimal(String columnLabel);
+
+    /**
+     *  int
+     * @param columnIndex index
+     * @return i
+     */
+    BigDecimal getBigDecimal(int columnIndex);
+
+     /**
+     *  get int
+     * @param columnLabel name
+     * @return int
+     */
+    Date getDate(String columnLabel);
+
+    /**
+     *  int
+     * @param columnIndex index
+     * @return i
+     */
+    Date getDate(int columnIndex);
 
     /**
      * get str

@@ -1,8 +1,10 @@
 package com.sondertara.joya.core.jdbc;
 
+import java.math.BigDecimal;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
+import java.util.Date;
 
 /**
  * 将java.sql.ResultSet转换成自定义的Record，封装底层实现细节
@@ -117,6 +119,59 @@ public class RecordAdapterForResultSet implements Record, Row {
     public boolean next() {
         try {
             return rs.next();
+        } catch (SQLException e) {
+            throw new RuntimeException(e.getMessage(), e);
+        }
+    }
+
+    @Override
+    public long getLong(String columnLabel) {
+        try {
+            return rs.getLong(columnLabel);
+        } catch (SQLException e) {
+            throw new RuntimeException(e.getMessage(), e);
+        }
+    }
+
+    @Override
+    public long getLong(int columnIndex) {
+        try {
+            return rs.getLong(columnIndex);
+        } catch (SQLException e) {
+            throw new RuntimeException(e.getMessage(), e);
+        }
+    }
+
+    @Override
+    public BigDecimal getBigDecimal(String columnLabel) {
+        try {
+            return rs.getBigDecimal(columnLabel);
+        } catch (SQLException e) {
+            throw new RuntimeException(e.getMessage(), e);
+        }
+    }
+
+    @Override
+    public BigDecimal getBigDecimal(int columnIndex) {
+        try {
+            return rs.getBigDecimal(columnIndex);
+        } catch (SQLException e) {
+            throw new RuntimeException(e.getMessage(), e);
+        }
+    }
+
+    @Override
+    public Date getDate(String columnLabel) {
+        try {
+            return rs.getDate(columnLabel);
+        } catch (SQLException e) {
+            throw new RuntimeException(e.getMessage(), e);
+        }
+    }
+    @Override
+    public Date getDate(int columnIndex) {
+        try {
+            return rs.getDate(columnIndex);
         } catch (SQLException e) {
             throw new RuntimeException(e.getMessage(), e);
         }
