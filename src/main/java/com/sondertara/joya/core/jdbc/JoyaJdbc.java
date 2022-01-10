@@ -49,7 +49,7 @@ public class JoyaJdbc {
      */
     private PreparedStatement createPreparedStatement(Connection conn, String sql, Object... params) throws SQLException {
         PreparedStatement stmt = conn.prepareStatement(sql);
-        if (null != params) {
+        if (null != params && params.length > 0) {
             for (int i = 0; i < params.length; ++i) {
                 stmt.setObject(i + 1, params[i]);
             }
@@ -304,4 +304,5 @@ public class JoyaJdbc {
             connManager.close(conn, stmt);
         }
     }
+
 }
