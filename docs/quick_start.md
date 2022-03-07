@@ -9,14 +9,14 @@ Maven Project
 <dependency>
     <groupId>com.sondertara</groupId>
     <artifactId>joya</artifactId>
-    <version>0.0.7.201</version>
+    <version>0.0.7.202</version>
 </dependency>
 ```
 
 Gradle Project
 
 ```groovy
-implementation 'com.sondertara:joya:0.0.7.201'
+implementation 'com.sondertara:joya:0.0.7.202'
 ```
 
 ## 新项目集成 :id=new_project

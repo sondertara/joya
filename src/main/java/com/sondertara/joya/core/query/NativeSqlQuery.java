@@ -397,7 +397,7 @@ public class NativeSqlQuery {
          * 排序参数如果是前端传进来,用QueryRequest接收的 ===> nativeSql.orderBy( queryRequest.getOrderBy(表别名) )
          * 手写逻辑指定排序字段 ==> nativeSql.orderBy("su.age asc")
          */
-        public void orderBy(String... orderBySegment) {
+        public NativeSqlQueryBuilder orderBy(String... orderBySegment) {
             if (null != orderBySegment && orderBySegment.length > 0) {
                 if (orderBy == null) {
                     //  多次调用此方法,用逗号拼接 ==> su.age asc,so.create_time desc
@@ -405,6 +405,7 @@ public class NativeSqlQuery {
                 }
                 this.orderBy.addAll(Arrays.asList(orderBySegment));
             }
+            return this;
         }
 
         private void buildJoin() {
