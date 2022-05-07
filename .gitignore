@@ -12,6 +12,7 @@ build/
 .project
 .settings
 .springBeans
+.DS_Store
 .sts4-cache
 bin/
 !**/src/main/**/bin/
