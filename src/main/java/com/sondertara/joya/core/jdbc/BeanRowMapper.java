@@ -23,7 +23,8 @@ public class BeanRowMapper<T> implements RowMapper<T> {
             int count = row.getColumnCount();
             T bean = type.getDeclaredConstructor().newInstance();
             for (int i = 1; i <= count; i++) {
-                PropertyDescriptor pd = new PropertyDescriptor(StringUtils.toCamelCase(row.getColumnLabel(i)), type);
+                //the jdk bug,don`t remove the String convert.
+                PropertyDescriptor pd = new PropertyDescriptor((String) StringUtils.toCamelCase(row.getColumnLabel(i)), type);
                 Method setter = pd.getWriteMethod();
                 setter.invoke(bean, row.getObject(i));
             }
