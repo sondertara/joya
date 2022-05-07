@@ -11,6 +11,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.List;
+import java.util.function.Consumer;
 
 /**
  * JDBC工具类
@@ -29,6 +30,15 @@ public class JoyaJdbc {
      */
     public JoyaJdbc(DataSource dataSource) {
         connManager = new ConnectionManager(dataSource);
+    }
+
+    /**
+     * 自定义DataSource 销毁
+     *
+     * @param consumer func
+     */
+    public void destroy(Consumer<DataSource> consumer) {
+        this.connManager.destroy(consumer);
     }
 
     /**

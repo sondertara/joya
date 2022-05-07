@@ -5,6 +5,7 @@ import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.function.Consumer;
 
 /**
  * 连接管理器
@@ -18,6 +19,10 @@ public final class ConnectionManager {
 
     public ConnectionManager(DataSource dataSource) {
         this.dataSource = dataSource;
+    }
+
+    public void destroy(Consumer<DataSource> consumer) {
+        consumer.accept(this.dataSource);
     }
 
     public Connection getConnection() {
