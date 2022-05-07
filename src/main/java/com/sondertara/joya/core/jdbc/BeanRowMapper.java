@@ -1,5 +1,7 @@
 package com.sondertara.joya.core.jdbc;
 
+import com.sondertara.common.util.StringUtils;
+
 import java.beans.PropertyDescriptor;
 import java.lang.reflect.Method;
 
@@ -21,7 +23,7 @@ public class BeanRowMapper<T> implements RowMapper<T> {
             int count = row.getColumnCount();
             T bean = type.getDeclaredConstructor().newInstance();
             for (int i = 1; i <= count; i++) {
-                PropertyDescriptor pd = new PropertyDescriptor((String) row.getColumnLabel(i), type);
+                PropertyDescriptor pd = new PropertyDescriptor(StringUtils.toCamelCase(row.getColumnLabel(i)), type);
                 Method setter = pd.getWriteMethod();
                 setter.invoke(bean, row.getObject(i));
             }

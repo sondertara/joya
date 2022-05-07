@@ -39,25 +39,6 @@ public class JoyaJdbc {
     }
 
     /**
-     * 创建语句
-     *
-     * @param conn   连接
-     * @param sql    sql语句
-     * @param params sql参数
-     * @return 创建的PreparedStatement对象
-     * @throws SQLException 来自JDBC的异常
-     */
-    private PreparedStatement createPreparedStatement(Connection conn, String sql, Object... params) throws SQLException {
-        PreparedStatement stmt = conn.prepareStatement(sql);
-        if (null != params && params.length > 0) {
-            for (int i = 0; i < params.length; ++i) {
-                stmt.setObject(i + 1, params[i]);
-            }
-        }
-        return stmt;
-    }
-
-    /**
      * 查询数据库并转换结果集。
      * 用户可自定义结果集转换器。
      * 用户也可使用预定义的结果集转换器。
@@ -303,6 +284,26 @@ public class JoyaJdbc {
         } finally {
             connManager.close(conn, stmt);
         }
+    }
+
+
+    /**
+     * 创建语句
+     *
+     * @param conn   连接
+     * @param sql    sql语句
+     * @param params sql参数
+     * @return 创建的PreparedStatement对象
+     * @throws SQLException 来自JDBC的异常
+     */
+    private PreparedStatement createPreparedStatement(Connection conn, String sql, Object... params) throws SQLException {
+        PreparedStatement stmt = conn.prepareStatement(sql);
+        if (null != params && params.length > 0) {
+            for (int i = 0; i < params.length; ++i) {
+                stmt.setObject(i + 1, params[i]);
+            }
+        }
+        return stmt;
     }
 
 }
