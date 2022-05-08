@@ -55,6 +55,24 @@ public class RecordAdapterForResultSet implements Record, Row {
     }
 
     @Override
+    public boolean getBoolean(int columnIndex) {
+        try {
+            return rs.getBoolean(columnIndex);
+        } catch (SQLException e) {
+            throw new RuntimeException(e.getMessage(), e);
+        }
+    }
+
+    @Override
+    public boolean getBoolean(String columnLabel) {
+        try {
+            return rs.getBoolean(columnLabel);
+        } catch (SQLException e) {
+            throw new RuntimeException(e.getMessage(), e);
+        }
+    }
+
+    @Override
     public String getString(String columnLabel) {
         try {
             return rs.getString(columnLabel);

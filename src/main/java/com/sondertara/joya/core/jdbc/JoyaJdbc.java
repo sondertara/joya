@@ -1,6 +1,9 @@
 package com.sondertara.joya.core.jdbc;
 
 
+import com.sondertara.common.util.StringFormatter;
+import com.sondertara.joya.core.model.TableEntity;
+import com.sondertara.joya.utils.ClassUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -10,8 +13,13 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.StringJoiner;
 import java.util.function.Consumer;
+import java.util.stream.Collectors;
 
 /**
  * JDBC工具类
@@ -202,6 +210,49 @@ public class JoyaJdbc {
     }
 
     /**
+     * 插入数据库,返回主键值
+     *
+     * @param sql    sql语句
+     * @param params sql参数
+     * @return 成功则返回主键值，失败则抛出DbException
+     */
+    public Object insert(String sql, Object... params) {
+        Connection conn = null;
+        PreparedStatement stmt = null;
+
+        try {
+            conn = connManager.getConnection();
+            stmt = createPreparedStatement(conn, sql, params);
+            stmt.executeUpdate();
+            return stmt.getGeneratedKeys().getObject(1);
+        } catch (Exception e) {
+            throw new DbException(e.getMessage(), e);
+        } finally {
+            connManager.close(conn, stmt);
+        }
+    }
+
+    public <T> Object saveEntityIgnoreNull(T entity) {
+        TableEntity table = ClassUtils.getTable(entity.getClass(),true);
+        Map<String, Object> data = table.getData();
+        Map<String, Object> newData = new LinkedHashMap<>();
+        for (Map.Entry<String, Object> entry : data.entrySet()) {
+            if (entry.getValue() != null) {
+                newData.put(entry.getKey(), entry.getValue());
+            }
+        }
+        table.setData(newData);
+        return save(table);
+    }
+
+
+    public <T> Object saveEntity(T entity) {
+        TableEntity table = ClassUtils.getTable(entity,true);
+        return save(table);
+
+    }
+
+    /**
      * 执行sql命令, 失败则抛出DbException
      *
      * @param sql sql语句
@@ -316,4 +367,30 @@ public class JoyaJdbc {
         return stmt;
     }
 
+    private Object save(TableEntity table) {
+        Map<String, Object> data = table.getData();
+        if (null == data.get(table.getPrimaryKey())) {
+            data.remove(table.getPrimaryKey());
+            List<String> set = data.keySet().stream().map(s -> "?").collect(Collectors.toList());
+            return insert(StringFormatter.format("insert into {}({}) values({})", table.getTableName(), String.join(",", data.keySet()), String.join(",", set)), data.values().toArray());
+        }
+        Object value = querySingleValue(StringFormatter.format("select {} from {} where {} = ?", table.getPrimaryKey(), table.getTableName(), table.getPrimaryKey()), data.get(table.getPrimaryKey()));
+        List<String> set = data.keySet().stream().map(s -> "?").collect(Collectors.toList());
+        if (null == value) {
+            return insert(StringFormatter.format("insert into {}({}) values({})", table.getTableName(), String.join(",", data.keySet()), String.join(",", set)), data.values().toArray());
+        } else {
+            StringJoiner sj = new StringJoiner(", ");
+            List<Object> values = new ArrayList<>();
+            for (Map.Entry<String, Object> entry : data.entrySet()) {
+                if (entry.getKey().equals(table.getPrimaryKey())) {
+                    continue;
+                }
+                sj.add("set " + entry.getKey() + " = ?");
+                values.add(entry.getValue());
+            }
+            values.add(data.get(table.getPrimaryKey()));
+            update(StringFormatter.format("update {} {} where {} = ?", table.getTableName(), sj.toString(), table.getPrimaryKey()), values.toArray());
+            return data.get(table.getPrimaryKey());
+        }
+    }
 }

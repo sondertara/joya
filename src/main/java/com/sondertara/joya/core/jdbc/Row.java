@@ -54,6 +54,8 @@ public interface Row {
      * @return i
      */
     int getInt(int columnIndex);
+    boolean getBoolean(int columnIndex);
+    boolean getBoolean(String columnLabel);
 
      /**
      *  get int
