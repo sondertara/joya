@@ -50,7 +50,9 @@ public class BeanRowMapper<T> implements RowMapper<T> {
                     value = row.getObject(i);
                 }
                 Method setter = pd.getWriteMethod();
-                setter.invoke(bean, value);
+                if (null!=setter) {
+                    setter.invoke(bean, value);
+                }
             }
             return bean;
         } catch (Exception e) {
