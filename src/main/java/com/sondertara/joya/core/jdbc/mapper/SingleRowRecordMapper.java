@@ -1,4 +1,6 @@
-package com.sondertara.joya.core.jdbc;
+package com.sondertara.joya.core.jdbc.mapper;
+
+import com.sondertara.joya.core.jdbc.Record;
 
 /**
  * 转换只有一行的结果集

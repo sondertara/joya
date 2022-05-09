@@ -1,5 +1,8 @@
 package com.sondertara.joya.core.jdbc;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import javax.sql.DataSource;
 import java.sql.Connection;
 import java.sql.ResultSet;
@@ -14,22 +17,34 @@ import java.util.function.Consumer;
  * @author huangxiaohu
  */
 public final class ConnectionManager {
+
+    private static final Logger LOG = LoggerFactory.getLogger(JoyaJdbc.class);
     private final DataSource dataSource;
     private final ThreadLocal<Connection> connHolder = new ThreadLocal<>();
 
+    private volatile String defaultCatalog;
+
     public ConnectionManager(DataSource dataSource) {
         this.dataSource = dataSource;
+        try (Connection connection = dataSource.getConnection()) {
+            this.defaultCatalog = connection.getCatalog();
+        } catch (SQLException e) {
+            LOG.error("Get catalog failed.", e);
+        }
     }
 
     public void destroy(Consumer<DataSource> consumer) {
         consumer.accept(this.dataSource);
     }
 
-    public Connection getConnection() {
+    public synchronized Connection getConnection() {
         try {
             Connection conn = connHolder.get();
             if (conn == null || conn.isClosed()) {
                 conn = dataSource.getConnection();
+                if (null != defaultCatalog) {
+                    conn.setCatalog(defaultCatalog);
+                }
                 connHolder.set(conn);
             }
             return conn;
@@ -38,13 +53,7 @@ public final class ConnectionManager {
         }
     }
 
-    public void close(Connection conn, Statement stmt) {
-        if (stmt != null) {
-            try {
-                stmt.close();
-            } catch (SQLException ignored) {
-            }
-        }
+    public void close(Connection conn) {
         if (conn != null) {
             try {
                 if (conn.getAutoCommit()) {

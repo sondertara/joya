@@ -136,7 +136,7 @@ public class ClassUtils {
 
     /**
      * @param clazz
-     * @return
+     * @return the super class
      */
     public static Class<?> getSuperClassGenricType(Class<?> clazz) {
         Type genType = clazz.getGenericSuperclass();
@@ -155,9 +155,9 @@ public class ClassUtils {
 
 
     /**
-     * @param clazz
-     * @param fieldName
-     * @return
+     * @param clazz the class
+     * @param fieldName field name
+     * @return the current Field
      */
     public static Field getField(Class<?> clazz, String fieldName) {
         List<Field> fields = getFieldList(clazz);

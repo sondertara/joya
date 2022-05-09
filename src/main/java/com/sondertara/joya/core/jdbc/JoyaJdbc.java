@@ -2,6 +2,13 @@ package com.sondertara.joya.core.jdbc;
 
 
 import com.sondertara.common.util.StringFormatter;
+import com.sondertara.joya.core.jdbc.mapper.BeanRowMapper;
+import com.sondertara.joya.core.jdbc.mapper.ListRecordMapper;
+import com.sondertara.joya.core.jdbc.mapper.MapRowMapper;
+import com.sondertara.joya.core.jdbc.mapper.RecordMapper;
+import com.sondertara.joya.core.jdbc.mapper.RowMapper;
+import com.sondertara.joya.core.jdbc.mapper.SingleColumnRowMapper;
+import com.sondertara.joya.core.jdbc.mapper.SingleRowRecordMapper;
 import com.sondertara.joya.core.model.TableEntity;
 import com.sondertara.joya.utils.ClassUtils;
 import org.slf4j.Logger;
@@ -71,19 +78,17 @@ public class JoyaJdbc {
      * @see SingleRowRecordMapper
      */
     public <T> T query(String sql, RecordMapper<T> recordMapper, Object... params) {
-        ResultSet rs = null;
-        PreparedStatement stmt = null;
         Connection conn = null;
         try {
             conn = connManager.getConnection();
-            stmt = createPreparedStatement(conn, sql, params);
-            rs = stmt.executeQuery();
-            return recordMapper.map(new RecordAdapterForResultSet(rs));
+            try (PreparedStatement stmt = createPreparedStatement(conn, sql, params); ResultSet rs = stmt.executeQuery()) {
+                return recordMapper.map(new RecordAdapterForResultSet(rs));
+            }
         } catch (Exception e) {
             LOG.error("query sql error,sql:{}", sql, e);
             throw new DbException(e.getMessage(), e);
         } finally {
-            connManager.close(conn, stmt, rs);
+            connManager.close(conn);
         }
     }
 
@@ -173,17 +178,16 @@ public class JoyaJdbc {
      */
     public int update(String sql) {
         Connection conn = null;
-        Statement stmt = null;
-
         try {
             conn = connManager.getConnection();
-            stmt = conn.createStatement();
-            return stmt.executeUpdate(sql);
+            try (Statement stmt = conn.createStatement()) {
+                return stmt.executeUpdate(sql);
+            }
         } catch (Exception e) {
             LOG.error("update sql error,sql:{}", sql, e);
             throw new DbException(e.getMessage(), e);
         } finally {
-            connManager.close(conn, stmt);
+            connManager.close(conn);
         }
     }
 
@@ -196,16 +200,15 @@ public class JoyaJdbc {
      */
     public int update(String sql, Object[] params) {
         Connection conn = null;
-        PreparedStatement stmt = null;
-
         try {
             conn = connManager.getConnection();
-            stmt = createPreparedStatement(conn, sql, params);
-            return stmt.executeUpdate();
+            try (PreparedStatement stmt = createPreparedStatement(conn, sql, params);) {
+                return stmt.executeUpdate();
+            }
         } catch (Exception e) {
             throw new DbException(e.getMessage(), e);
         } finally {
-            connManager.close(conn, stmt);
+            connManager.close(conn);
         }
     }
 
@@ -218,22 +221,22 @@ public class JoyaJdbc {
      */
     public Object insert(String sql, Object... params) {
         Connection conn = null;
-        PreparedStatement stmt = null;
-
         try {
             conn = connManager.getConnection();
-            stmt = createPreparedStatement(conn, sql, params);
-            stmt.executeUpdate();
-            return stmt.getGeneratedKeys().getObject(1);
+            try (PreparedStatement stmt = createPreparedStatement(conn, sql, params)) {
+                stmt.executeUpdate();
+                return stmt.getGeneratedKeys().getObject(1);
+            }
+
         } catch (Exception e) {
             throw new DbException(e.getMessage(), e);
         } finally {
-            connManager.close(conn, stmt);
+            connManager.close(conn);
         }
     }
 
     public <T> Object saveEntityIgnoreNull(T entity) {
-        TableEntity table = ClassUtils.getTable(entity.getClass(),true);
+        TableEntity table = ClassUtils.getTable(entity.getClass(), true);
         Map<String, Object> data = table.getData();
         Map<String, Object> newData = new LinkedHashMap<>();
         for (Map.Entry<String, Object> entry : data.entrySet()) {
@@ -247,7 +250,7 @@ public class JoyaJdbc {
 
 
     public <T> Object saveEntity(T entity) {
-        TableEntity table = ClassUtils.getTable(entity,true);
+        TableEntity table = ClassUtils.getTable(entity, true);
         return save(table);
 
     }
@@ -259,16 +262,16 @@ public class JoyaJdbc {
      */
     public void execute(String sql) {
         Connection conn = null;
-        Statement stmt = null;
         try {
             conn = connManager.getConnection();
-            stmt = conn.createStatement();
-            stmt.execute(sql);
+            try (Statement stmt = conn.createStatement()) {
+                stmt.execute(sql);
+            }
         } catch (Exception e) {
             LOG.error("execute sql error,sql:{}", sql, e);
             throw new DbException(e.getMessage(), e);
         } finally {
-            connManager.close(conn, stmt);
+            connManager.close(conn);
         }
     }
 
@@ -317,8 +320,6 @@ public class JoyaJdbc {
             LOG.error("TransactionCallback", e);
             this.rollback();
             throw new DbException("TransactionCallback", e);
-        } finally {
-            connManager.close(conn, null);
         }
     }
 
@@ -331,19 +332,18 @@ public class JoyaJdbc {
      */
     public <T> T doInStatement(StatementCallback<T> action) {
         Connection conn = null;
-        Statement stmt = null;
         try {
             conn = this.startTransaction();
-            stmt = conn.createStatement();
-            T t = action.doInStatement(stmt);
-            this.commit();
-            return t;
+            try (Statement stmt = conn.createStatement()) {
+                T t = action.doInStatement(stmt);
+                this.commit();
+                return t;
+            }
         } catch (Exception e) {
             LOG.error("TransactionCallback", e);
-            connManager.close(conn, stmt);
             throw new DbException("TransactionCallback", e);
         } finally {
-            connManager.close(conn, stmt);
+            connManager.close(conn);
         }
     }
 

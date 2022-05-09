@@ -1,4 +1,6 @@
-package com.sondertara.joya.core.jdbc;
+package com.sondertara.joya.core.jdbc.mapper;
+
+import com.sondertara.joya.core.jdbc.Record;
 
 import java.util.ArrayList;
 import java.util.List;

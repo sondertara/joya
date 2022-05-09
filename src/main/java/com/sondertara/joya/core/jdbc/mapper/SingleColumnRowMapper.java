@@ -1,4 +1,6 @@
-package com.sondertara.joya.core.jdbc;
+package com.sondertara.joya.core.jdbc.mapper;
+
+import com.sondertara.joya.core.jdbc.Row;
 
 /**
  * 转换只有一个列的数据行

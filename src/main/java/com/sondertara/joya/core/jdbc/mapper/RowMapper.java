@@ -1,4 +1,6 @@
-package com.sondertara.joya.core.jdbc;
+package com.sondertara.joya.core.jdbc.mapper;
+
+import com.sondertara.joya.core.jdbc.Row;
 
 /**
  * 行转换器接口

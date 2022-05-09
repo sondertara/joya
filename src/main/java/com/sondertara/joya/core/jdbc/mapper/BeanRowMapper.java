@@ -1,26 +1,14 @@
-package com.sondertara.joya.core.jdbc;
+package com.sondertara.joya.core.jdbc.mapper;
 
 import com.sondertara.common.util.StringUtils;
-import com.sondertara.joya.core.model.TableDTO;
+import com.sondertara.joya.core.jdbc.Row;
 import com.sondertara.joya.core.model.TableEntity;
 import com.sondertara.joya.utils.ClassUtils;
 
 import javax.persistence.Entity;
 import javax.persistence.Table;
-import java.beans.IntrospectionException;
 import java.beans.PropertyDescriptor;
-import java.io.ByteArrayOutputStream;
 import java.lang.reflect.Method;
-import java.lang.reflect.ParameterizedType;
-import java.lang.reflect.Type;
-import java.math.BigDecimal;
-import java.sql.Array;
-import java.sql.Blob;
-import java.sql.Timestamp;
-import java.util.Date;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
 
 /**
  * 将一行数据转换成JavaBean
