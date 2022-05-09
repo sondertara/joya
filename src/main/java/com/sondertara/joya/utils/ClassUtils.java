@@ -2,20 +2,23 @@ package com.sondertara.joya.utils;
 
 import com.sondertara.common.util.StringUtils;
 import com.sondertara.joya.core.exceptions.JoyaSQLException;
-import com.sondertara.joya.core.model.TableDTO;
 import com.sondertara.joya.core.model.TableEntity;
 
 import javax.persistence.Column;
 import javax.persistence.Entity;
 import javax.persistence.Id;
 import javax.persistence.Table;
-
-import java.lang.module.ModuleDescriptor.Modifier;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 /**
  * @author skydu
