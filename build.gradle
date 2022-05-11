@@ -72,7 +72,6 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot:${versions.springBoot}'
     implementation 'org.springframework:spring-web:${versions.springframework}'
     implementation group: 'org.hibernate', name: 'hibernate-core', version: '5.6.8.Final'
-
     implementation group: 'com.github.vertical-blank', name: 'sql-formatter', version: '2.0.3'
     implementation group: 'com.sondertara', name: 'common-tara', version: '0.0.4.0'
     compileOnly group: 'org.projectlombok', name: 'lombok', version: '1.18.24'
