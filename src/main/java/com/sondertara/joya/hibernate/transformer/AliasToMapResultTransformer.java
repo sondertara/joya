@@ -7,8 +7,12 @@
 package com.sondertara.joya.hibernate.transformer;
 
 import com.sondertara.common.util.StringUtils;
+import com.sondertara.joya.core.jdbc.SqlDataHelper;
+import oracle.sql.TIMESTAMP;
 import org.hibernate.transform.AliasedTupleSubsetResultTransformer;
 
+import java.io.Reader;
+import java.sql.Clob;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -32,12 +36,12 @@ public class AliasToMapResultTransformer extends AliasedTupleSubsetResultTransfo
     }
 
     @Override
-    @SuppressWarnings({"rawtypes", "unchecked"})
     public Object transformTuple(Object[] tuple, String[] aliases) {
-        Map result = new HashMap(tuple.length);
+        Map<String, Object> result = new HashMap<>(tuple.length);
         for (int i = 0; i < tuple.length; i++) {
             String alias = aliases[i];
             if (alias != null) {
+                Object value = tuple[i];
                 if (camelCase) {
                     int index = alias.indexOf(".");
                     if (index > -1) {
@@ -45,7 +49,16 @@ public class AliasToMapResultTransformer extends AliasedTupleSubsetResultTransfo
                     }
                     alias = StringUtils.toCamelCase(alias);
                 }
-                result.put(alias, tuple[i]);
+                if (null != value) {
+                    if (SqlDataHelper.isClob(value.getClass())) {
+                        value = SqlDataHelper.extractString((Clob) value);
+                    } else if (Reader.class.isAssignableFrom(value.getClass())) {
+                        value = SqlDataHelper.extractString((Reader) value);
+                    } else if (value instanceof TIMESTAMP) {
+                        value = SqlDataHelper.extractDate(value);
+                    }
+                }
+                result.put(alias, value);
             }
         }
         return result;

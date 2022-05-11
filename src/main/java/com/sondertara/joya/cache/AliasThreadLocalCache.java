@@ -154,6 +154,12 @@ public final class AliasThreadLocalCache {
 
     }
 
+    public static TableDTO getTable(String className) {
+        Optional<TableDTO> optional = LocalEntityCache.getInstance().get(className);
+        return optional.orElseThrow(() -> new JoyaSQLException("No Table found by className:" + className));
+    }
+
+
     /**
      * 获取数据库中的列明名
      *

@@ -1,9 +1,11 @@
 package com.sondertara.joya.utils;
 
+
 import com.alibaba.fastjson.JSON;
 import com.alibaba.fastjson.JSONObject;
 import com.sondertara.common.model.ResultDTO;
 import com.sondertara.common.util.CollectionUtils;
+import com.sondertara.joya.enums.ReqResultCodeEnum;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.web.client.RestTemplateBuilder;
 import org.springframework.core.ParameterizedTypeReference;
@@ -15,13 +17,20 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageConverter;
 import org.springframework.http.converter.StringHttpMessageConverter;
 import org.springframework.web.client.HttpStatusCodeException;
+import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestTemplate;
+import org.springframework.web.client.UnknownContentTypeException;
 import org.springframework.web.util.UriComponentsBuilder;
 
+import java.net.ConnectException;
+import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+
 
 /**
  * 自定义RestTemplate工具
@@ -37,44 +46,50 @@ public class RestTemplateUtils {
      */
     private static volatile RestTemplate restTemplate;
 
-    private RestTemplateUtils() {
+    /**
+     * 连接超时,单位秒
+     */
+    private static final int CONNECT_TIMEOUT = 10;
+    /**
+     * 获取响应超时,单位秒
+     */
+    private static final int READ_TIMEOUT = 60;
 
-    }
+    private static final String DISABLE_PRINT_CACHE_KEY = "RESTFUL_PRINT_RSP_CACHE";
 
     public static RestTemplate getInstance() {
         if (null == restTemplate) {
             synchronized (RestTemplate.class) {
                 if (null == restTemplate) {
-                    // FastJsonHttpMessageConverter fastJsonHttpMessageConverter = new
-                    // FastJsonHttpMessageConverter();
-                    // List<MediaType> supportedMediaTypes = new ArrayList<>();
-                    // supportedMediaTypes.add(MediaType.APPLICATION_JSON);
-                    // supportedMediaTypes.add(MediaType.APPLICATION_ATOM_XML);
-                    // supportedMediaTypes.add(MediaType.APPLICATION_FORM_URLENCODED);
-                    // supportedMediaTypes.add(MediaType.APPLICATION_OCTET_STREAM);
-                    // supportedMediaTypes.add(MediaType.APPLICATION_PDF);
-                    // supportedMediaTypes.add(MediaType.APPLICATION_RSS_XML);
-                    // supportedMediaTypes.add(MediaType.APPLICATION_XHTML_XML);
-                    // supportedMediaTypes.add(MediaType.APPLICATION_XML);
-                    // supportedMediaTypes.add(MediaType.IMAGE_GIF);
-                    // supportedMediaTypes.add(MediaType.IMAGE_JPEG);
-                    // supportedMediaTypes.add(MediaType.IMAGE_PNG);
-                    // supportedMediaTypes.add(MediaType.TEXT_EVENT_STREAM);
-                    // supportedMediaTypes.add(MediaType.TEXT_HTML);
-                    // supportedMediaTypes.add(MediaType.TEXT_MARKDOWN);
-                    // supportedMediaTypes.add(MediaType.TEXT_PLAIN);
-                    // supportedMediaTypes.add(MediaType.TEXT_XML);
-                    //
-                    // fastJsonHttpMessageConverter.setSupportedMediaTypes(supportedMediaTypes);
-                    // fastJsonHttpMessageConverter.setDefaultCharset(StandardCharsets.UTF_8);
-                    // FastJsonConfig fastJsonConfig = new FastJsonConfig();
-                    // fastJsonConfig.setSerializerFeatures(
-                    // SerializerFeature.WriteMapNullValue,
-                    // SerializerFeature.WriteNullStringAsEmpty,
-                    // SerializerFeature.WriteNullListAsEmpty,
-                    // SerializerFeature.DisableCircularReferenceDetect);
-                    // fastJsonHttpMessageConverter.setFastJsonConfig(fastJsonConfig);
-                    restTemplate = new RestTemplateBuilder().setConnectTimeout(Duration.ofSeconds(10 * 3)).build();
+//                    FastJsonHttpMessageConverter fastJsonHttpMessageConverter = new FastJsonHttpMessageConverter();
+//                    List<MediaType> supportedMediaTypes = new ArrayList<>();
+//                    supportedMediaTypes.add(MediaType.APPLICATION_JSON);
+//                    supportedMediaTypes.add(MediaType.APPLICATION_ATOM_XML);
+//                    supportedMediaTypes.add(MediaType.APPLICATION_FORM_URLENCODED);
+//                    supportedMediaTypes.add(MediaType.APPLICATION_OCTET_STREAM);
+//                    supportedMediaTypes.add(MediaType.APPLICATION_PDF);
+//                    supportedMediaTypes.add(MediaType.APPLICATION_RSS_XML);
+//                    supportedMediaTypes.add(MediaType.APPLICATION_XHTML_XML);
+//                    supportedMediaTypes.add(MediaType.APPLICATION_XML);
+//                    supportedMediaTypes.add(MediaType.IMAGE_GIF);
+//                    supportedMediaTypes.add(MediaType.IMAGE_JPEG);
+//                    supportedMediaTypes.add(MediaType.IMAGE_PNG);
+//                    supportedMediaTypes.add(MediaType.TEXT_EVENT_STREAM);
+//                    supportedMediaTypes.add(MediaType.TEXT_HTML);
+//                    supportedMediaTypes.add(MediaType.TEXT_MARKDOWN);
+//                    supportedMediaTypes.add(MediaType.TEXT_PLAIN);
+//                    supportedMediaTypes.add(MediaType.TEXT_XML);
+//
+//                    fastJsonHttpMessageConverter.setSupportedMediaTypes(supportedMediaTypes);
+//                    fastJsonHttpMessageConverter.setDefaultCharset(StandardCharsets.UTF_8);
+//                    FastJsonConfig fastJsonConfig = new FastJsonConfig();
+//                    fastJsonConfig.setSerializerFeatures(
+//                            SerializerFeature.WriteMapNullValue,
+//                            SerializerFeature.WriteNullStringAsEmpty,
+//                            SerializerFeature.WriteNullListAsEmpty,
+//                            SerializerFeature.DisableCircularReferenceDetect);
+//                    fastJsonHttpMessageConverter.setFastJsonConfig(fastJsonConfig);
+                    restTemplate = new RestTemplateBuilder().setConnectTimeout(Duration.ofSeconds(CONNECT_TIMEOUT)).setReadTimeout(Duration.ofSeconds(READ_TIMEOUT)).build();
 
                     List<HttpMessageConverter<?>> messageConverters = restTemplate.getMessageConverters();
 
@@ -85,18 +100,32 @@ public class RestTemplateUtils {
                             messageConverters.set(i, converter);
                             break;
                         }
+                        //} else if (converter instanceof MappingJackson2HttpMessageConverter) {
+                        //    List<MediaType> mediaTypes = new ArrayList<>(converter.getSupportedMediaTypes());
+                        //    mediaTypes.add(MediaType.APPLICATION_OCTET_STREAM);
+                        //    MappingJackson2HttpMessageConverter mappingJackson2HttpMessageConverter = (MappingJackson2HttpMessageConverter) converter;
+                        //
+                        //    mappingJackson2HttpMessageConverter.setSupportedMediaTypes(mediaTypes);
+                        //    messageConverters.set(i, mappingJackson2HttpMessageConverter);
+                        //}
 
-                        // } else if (converter instanceof GsonHttpMessageConverter || converter
-                        // instanceof MappingJackson2HttpMessageConverter) {
-                        // converter = fastJsonHttpMessageConverter;
-                        // messageConverters.set(i, converter);
-                        // }
+//                        } else if (converter instanceof GsonHttpMessageConverter || converter instanceof MappingJackson2HttpMessageConverter) {
+//                            converter = fastJsonHttpMessageConverter;
+//                            messageConverters.set(i, converter);
+//                        }
+
                     }
+
                 }
             }
         }
         return restTemplate;
     }
+
+    private RestTemplateUtils() {
+
+    }
+
 
     /**
      * Get 请求，参数放在url中
@@ -115,7 +144,7 @@ public class RestTemplateUtils {
     }
 
     /**
-     * Get 请求，参数放在url中
+     * post
      *
      * @param url          url
      * @param params       参数
@@ -139,41 +168,50 @@ public class RestTemplateUtils {
      * @param responseType 接收响应的类
      * @return 响应结果
      */
+    @SuppressWarnings("unchecked")
     public static <T> ResultDTO<T> get(String url, Map<String, Object> params, Class<T> responseType, Map<String, String> headers) {
-        log.info("restFul get请求开始 url={},params={},responseType={}", url, params, responseType);
+        log.info("RESTful get请求开始 url=[{}],params=[{}],responseType=[{}]", url, params, responseType);
+        long start = System.currentTimeMillis();
         try {
             url = buildUrl(url, params);
             HttpEntity<Map<String, Object>> httpEntity = buildHttpEntity(params, buildHeaders(headers));
             ResponseEntity<T> responseEntity = RestTemplateUtils.getInstance().exchange(url, HttpMethod.GET, httpEntity, responseType);
-
             T result = responseEntity.getBody();
-            log.info("restFul get请求结束 url={},params={},responseType={},result={}", url, params, responseType, result);
+            if (Boolean.TRUE.equals(ThreadLocalUtil.get(DISABLE_PRINT_CACHE_KEY))) {
+                log.info("RESTful get请求结束 url=[{}],cost time=[{}],params=[{}]", url, System.currentTimeMillis() - start, params);
+            } else {
+                log.info("RESTful get请求结束 url=[{}],cost time=[{}],params=[{}],responseType=[{}],result=[{}]", url, System.currentTimeMillis() - start, params, responseType, result);
+            }
             return ResultDTO.success(result);
-        } catch (HttpStatusCodeException e) {
-            log.error("restFul get请求失败 url={},params={},responseType={},errMsg:{}", url, params, responseType, e.getMessage());
-            return handleFailResult(e);
         } catch (Exception e) {
-            log.error("restFul get请求出现异常 url={},params={},responseType={}", url, params, responseType, e);
-            return ResultDTO.fail(e.getMessage());
+            log.error("RESTful get请求失败 url=[{}],params=[{}],responseType=[{}],errMsg:{}", url, params, responseType, e.getMessage());
+            return handleFailResult(e);
+        } finally {
+            ThreadLocalUtil.clear();
         }
     }
 
+
     public static <T> ResultDTO<T> get(String url, Map<String, Object> params, ParameterizedTypeReference<T> responseType, Map<String, String> headers) {
-        log.info("restFul get请求开始 url={},params={},responseType={}", url, params, responseType);
+        log.info("RESTful get请求开始 url=[{}],params=[{}],responseType=[{}]", url, params, responseType);
+        long start = System.currentTimeMillis();
         try {
             url = buildUrl(url, params);
             HttpEntity<Map<String, Object>> httpEntity = buildHttpEntity(params, buildHeaders(headers));
             ResponseEntity<T> responseEntity = RestTemplateUtils.getInstance().exchange(url, HttpMethod.GET, httpEntity, responseType);
 
             T result = responseEntity.getBody();
-            log.info("restFul get请求结束 url={},params={},responseType={},result={}", url, params, responseType, result);
+            if (Boolean.TRUE.equals(ThreadLocalUtil.get(DISABLE_PRINT_CACHE_KEY))) {
+                log.info("RESTful get请求结束 url=[{}],cost time=[{}],params=[{}]", url, System.currentTimeMillis() - start, params);
+            } else {
+                log.info("RESTful get请求结束 url=[{}],cost time=[{}],params=[{}],responseType=[{}],result=[{}]", url, System.currentTimeMillis() - start, params, responseType, result);
+            }
             return ResultDTO.success(result);
-        } catch (HttpStatusCodeException e) {
-            log.error("restFul get请求失败 url={},params={},responseType={},errMsg:{}", url, params, responseType, e.getMessage());
-            return handleFailResult(e);
         } catch (Exception e) {
-            log.error("restFul get请求出现异常 url={},params={},responseType={}", url, params, responseType, e);
-            return ResultDTO.fail(e.getMessage());
+            log.error("RESTful get请求失败 url=[{}],params=[{}],responseType=[{}],errMsg:{}", url, params, responseType, e.getMessage());
+            return handleFailResult(e);
+        } finally {
+            ThreadLocalUtil.clear();
         }
     }
 
@@ -187,36 +225,144 @@ public class RestTemplateUtils {
      * @return 请求结果
      */
     public static <T> ResultDTO<T> post(String url, Map<String, Object> params, Class<T> responseType, Map<String, String> headers) {
-        log.info("restFul post请求开始 url={},params={},responseType={}", url, JSON.toJSONString(params), responseType);
+        log.info("RESTful post请求开始 url=[{}],params=[{}],responseType=[{}]", url, JSON.toJSONString(params), responseType);
+        long start = System.currentTimeMillis();
         try {
             HttpEntity<Map<String, Object>> httpEntity = buildHttpEntity(params, buildHeaders(headers));
 
             T result = RestTemplateUtils.getInstance().postForObject(url, httpEntity, responseType);
-            log.info("restFul post请求结束 url={},params={},responseType={},result={}", url, JSON.toJSONString(params), responseType, result);
+            long end = System.currentTimeMillis();
+            if (Boolean.TRUE.equals(ThreadLocalUtil.get(DISABLE_PRINT_CACHE_KEY))) {
+                log.info("RESTful post请求结束 url=[{}],cost time=[{}],params=[{}]", url, end - start, JSON.toJSONString(params));
+            } else {
+                log.info("RESTful post请求结束 url=[{}],cost time=[{}],params=[{}],responseType=[{}],result=[{}]", url, end - start, JSON.toJSONString(params), responseType, result);
+            }
             return ResultDTO.success(result);
-        } catch (HttpStatusCodeException e) {
-            log.error("restFul post请求失败 url={},params={},responseType={},errMsg:{}", url, params, responseType, e.getMessage());
-            return handleFailResult(e);
         } catch (Exception e) {
-            log.error("restFul post请求出现异常 url={},params={},responseType={}", url, params, responseType, e);
-            return ResultDTO.fail(e.getMessage());
+            log.error("RESTful post请求失败 url=[{}],params=[{}],responseType=[{}],errMsg:{}", url, params, responseType, e.getMessage());
+            return handleFailResult(e);
+        } finally {
+            ThreadLocalUtil.clear();
         }
     }
 
+    /**
+     * POST 请求 json参数放在body中
+     *
+     * @param url          url
+     * @param json         请求json参数
+     * @param headers      请求头
+     * @param responseType 响应映射类
+     * @return 请求结果
+     */
+    public static <T> ResultDTO<T> post(String url, String json, Class<T> responseType, Map<String, String> headers) {
+        log.info("RESTful post请求开始 url=[{}],params=[{}],responseType=[{}]", url, json, responseType);
+        long start = System.currentTimeMillis();
+        try {
+            if (null == headers) {
+                headers = new HashMap<>(1);
+            }
+            headers.put(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE);
+            HttpEntity<String> httpEntity = buildHttpEntity(json, buildHeaders(headers));
+
+            T result = RestTemplateUtils.getInstance().postForObject(url, httpEntity, responseType);
+            long end = System.currentTimeMillis();
+            if (Boolean.TRUE.equals(ThreadLocalUtil.get(DISABLE_PRINT_CACHE_KEY))) {
+                log.info("RESTful post请求结束 url=[{}],cost time=[{}],params=[{}]", url, end - start, json);
+            } else {
+                log.info("RESTful post请求结束 url=[{}],cost time=[{}],params=[{}],responseType=[{}],result=[{}]", url, end - start, json, responseType, result);
+            }
+            return ResultDTO.success(result);
+        } catch (Exception e) {
+            log.error("RESTful post请求失败 url=[{}],params=[{}],responseType=[{}],errMsg:{}", url, json, responseType, e.getMessage());
+            return handleFailResult(e);
+        } finally {
+            ThreadLocalUtil.clear();
+        }
+    }
+
+    /**
+     * post json
+     *
+     * @param url          url
+     * @param json         json str
+     * @param responseType rsp
+     * @param <T>          the type of result
+     * @return result
+     */
+    public static <T> ResultDTO<T> post(String url, String json, ParameterizedTypeReference<T> responseType) {
+        return post(url, json, responseType, null);
+    }
+
+    /**
+     * POST 请求 json参数放在body中
+     *
+     * @param url          url
+     * @param json         请求json参数
+     * @param responseType 响应映射类
+     * @return 请求结果
+     */
+    public static <T> ResultDTO<T> post(String url, String json, Class<T> responseType) {
+        return post(url, json, responseType, null);
+    }
+
+    /**
+     * post json
+     *
+     * @param url          url
+     * @param json         json str
+     * @param responseType rsp
+     * @param headers      headers
+     * @param <T>          the type of result
+     * @return result
+     */
+    public static <T> ResultDTO<T> post(String url, String json, ParameterizedTypeReference<T> responseType, Map<String, String> headers) {
+        log.info("RESTful post请求开始 url=[{}],params=[{}],responseType=[{}]", url, json, responseType);
+        long start = System.currentTimeMillis();
+        try {
+            if (null == headers) {
+                headers = new HashMap<>(1);
+            }
+            headers.put(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE);
+            HttpEntity<String> httpEntity = buildHttpEntity(json, buildHeaders(headers));
+            ResponseEntity<T> response = RestTemplateUtils.getInstance().exchange(url, HttpMethod.POST, httpEntity, responseType);
+            T result = response.getBody();
+            long end = System.currentTimeMillis();
+            if (Boolean.TRUE.equals(ThreadLocalUtil.get(DISABLE_PRINT_CACHE_KEY))) {
+                log.info("RESTful post请求结束 url=[{}],cost time=[{}],params=[{}]", url, end - start, json);
+            } else {
+                log.info("RESTful post请求结束 url=[{}],cost time=[{}],params=[{}],responseType=[{}],result=[{}]", url, end - start, json, responseType, result);
+            }
+            return ResultDTO.success(result);
+        } catch (Exception e) {
+            log.error("RESTful post请求失败 url=[{}],params=[{}],responseType=[{}],errMsg:{}", url, json, responseType, e.getMessage());
+            return handleFailResult(e);
+        } finally {
+            ThreadLocalUtil.clear();
+        }
+    }
+
+
     public static <T> ResultDTO<T> post(String url, Map<String, Object> params, ParameterizedTypeReference<T> responseType, Map<String, String> headers) {
-        log.info("restFul post请求开始 url={},params={},responseType={}", url, JSON.toJSONString(params), responseType);
+        log.info("RESTful post请求开始 url=[{}],params=[{}],responseType=[{}]", url, JSON.toJSONString(params), responseType);
+        long start = System.currentTimeMillis();
         try {
             HttpEntity<Map<String, Object>> httpEntity = buildHttpEntity(params, buildHeaders(headers));
 
-            T result = RestTemplateUtils.getInstance().exchange(url, HttpMethod.POST, httpEntity, responseType).getBody();
-            log.info("restFul post请求结束 url={},params={},responseType={},result={}", url, JSON.toJSONString(params), responseType, result);
+            ResponseEntity<T> response = RestTemplateUtils.getInstance().exchange(url, HttpMethod.POST, httpEntity, responseType);
+            T result = response.getBody();
+            long end = System.currentTimeMillis();
+            if (Boolean.TRUE.equals(ThreadLocalUtil.get(DISABLE_PRINT_CACHE_KEY))) {
+                log.info("RESTful post请求结束 url=[{}],cost time=[{}],params=[{}]", url, end - start, JSON.toJSONString(params));
+            } else {
+                log.info("RESTful post请求结束 url=[{}],cost time=[{}],params=[{}],responseType=[{}],result=[{}]", url, end - start, JSON.toJSONString(params), responseType, result);
+            }
             return ResultDTO.success(result);
-        } catch (HttpStatusCodeException e) {
-            log.error("restFul post请求失败 url={},params={},responseType={},errMsg:{}", url, params, responseType, e.getMessage());
-            return handleFailResult(e);
         } catch (Exception e) {
-            log.error("restFul post请求出现异常 url={},params={},responseType={}", url, params, responseType, e);
-            return ResultDTO.fail(e.getMessage());
+            log.error("RESTful post请求失败 url=[{}],params=[{}],responseType=[{}],errMsg:{}", url, params, responseType, e.getMessage());
+            return handleFailResult(e);
+        } finally {
+            ThreadLocalUtil.clear();
         }
     }
 
@@ -229,39 +375,37 @@ public class RestTemplateUtils {
      * @param responseType 响应映射类
      * @return 请求结果
      */
-    public static <T> ResultDTO<T> put(String url, Map<String, Object> params, Class<T> responseType, Map<String, String> headers) throws Exception {
-        log.info("restFul put请求开始 url={},params={},responseType={}", url, params, responseType);
+    public static <T> ResultDTO<T> put(String url, Map<String, Object> params, Class<T> responseType, Map<String, String> headers) {
+        log.info("RESTful put请求开始 url=[{}],params=[{}],responseType=[{}]", url, params, responseType);
+        long start = System.currentTimeMillis();
         try {
             url = buildUrl(url, params);
             HttpEntity<Map<String, Object>> httpEntity = buildHttpEntity(params, buildHeaders(headers));
             ResponseEntity<T> exchange = RestTemplateUtils.getInstance().exchange(url, HttpMethod.PUT, httpEntity, responseType);
-            log.info("restFul put请求结束 url={},params={},responseType={},exchange={}", url, params, responseType, exchange);
             T result = exchange.getBody();
+            long end = System.currentTimeMillis();
+            log.info("RESTful put请求结束 url=[{}],cost time=[{}],params=[{}],responseType=[{}],exchange=[{}]", url, end - start, params, responseType, exchange);
             return ResultDTO.success(result);
-        } catch (HttpStatusCodeException e) {
-            log.error("restFul put请求失败 url={},params={},responseType={},errMsg:{}", url, params, responseType, e.getMessage());
-            return handleFailResult(e);
         } catch (Exception e) {
-            log.error("restFul put请求出现异常 url={},params={},responseType={}", url, params, responseType, e);
-            return ResultDTO.fail(e.getMessage());
+            log.error("RESTful put请求失败 url=[{}],params=[{}],responseType=[{}],errMsg:{}", url, params, responseType, e.getMessage());
+            return handleFailResult(e);
         }
     }
 
-    public static <T> ResultDTO<T> put(String url, Map<String, Object> params, ParameterizedTypeReference<T> responseType, Map<String, String> headers) throws Exception {
-        log.info("restFul put请求开始 url={},params={},responseType={}", url, params, responseType);
+    public static <T> ResultDTO<T> put(String url, Map<String, Object> params, ParameterizedTypeReference<T> responseType, Map<String, String> headers) {
+        log.info("RESTful put请求开始 url=[{}],params=[{}],responseType=[{}]", url, params, responseType);
+        long start = System.currentTimeMillis();
+
         try {
             url = buildUrl(url, params);
             HttpEntity<Map<String, Object>> httpEntity = buildHttpEntity(params, buildHeaders(headers));
             ResponseEntity<T> exchange = RestTemplateUtils.getInstance().exchange(url, HttpMethod.PUT, httpEntity, responseType);
-            log.info("restFul put请求结束 url={},params={},responseType={},exchange={}", url, params, responseType, exchange);
             T result = exchange.getBody();
+            log.info("RESTful put请求结束 url=[{}],cost time=[{}],params=[{}],responseType=[{}],exchange=[{}]", url, System.currentTimeMillis() - start, params, responseType, exchange);
             return ResultDTO.success(result);
-        } catch (HttpStatusCodeException e) {
-            log.error("restFul put请求失败 url={},params={},responseType={},errMsg:{}", url, params, responseType, e.getMessage());
-            return handleFailResult(e);
         } catch (Exception e) {
-            log.error("restFul put请求出现异常 url={},params={},responseType={}", url, params, responseType, e);
-            return ResultDTO.fail(e.getMessage());
+            log.error("RESTful put请求失败 url=[{}],params=[{}],responseType=[{}],errMsg:{}", url, params, responseType, e.getMessage());
+            return handleFailResult(e);
         }
     }
 
@@ -275,20 +419,34 @@ public class RestTemplateUtils {
      * @return 请求结果
      */
     public static <T> ResultDTO<T> delete(String url, Map<String, Object> params, Class<T> responseType, Map<String, String> headers) {
-        log.info("restFul delete请求开始 url={},params={},responseType={}", url, params, responseType);
+        log.info("RESTful delete请求开始 url=[{}],params=[{}],responseType=[{}]", url, params, responseType);
+        long start = System.currentTimeMillis();
         try {
             url = buildUrl(url, params);
             HttpEntity<Map<String, Object>> httpEntity = buildHttpEntity(params, buildHeaders(headers));
             ResponseEntity<T> exchange = RestTemplateUtils.getInstance().exchange(url, HttpMethod.DELETE, httpEntity, responseType, params);
-            log.info("restFul delete请求结束 url={},params={},responseType={},serial={}", url, params, responseType, exchange);
             T result = exchange.getBody();
+            log.debug("RESTful delete请求结束 url=[{}],cost time=[{}],params=[{}],responseType=[{}],exchange=[{}]", url, System.currentTimeMillis() - start, params, responseType, exchange);
             return ResultDTO.success(result);
-        } catch (HttpStatusCodeException e) {
-            log.error("restFul delete请求失败 url={},params={},responseType={},errMsg:{}", url, params, responseType, e.getMessage());
-            return handleFailResult(e);
         } catch (Exception e) {
-            log.error("restFul delete请求出现异常 url={},params={},responseType={}", url, params, responseType, e);
-            return ResultDTO.fail(e.getMessage());
+            log.error("RESTful delete请求失败 url=[{}],params=[{}],responseType=[{}],errMsg:{}", url, params, responseType, e.getMessage());
+            return handleFailResult(e);
+        }
+    }
+
+    public static <T> ResultDTO<T> delete(String url, Map<String, Object> params, ParameterizedTypeReference<T> responseType, Map<String, String> headers) {
+        log.info("RESTful delete请求开始 url=[{}],params=[{}],responseType=[{}]", url, params, responseType);
+        long start = System.currentTimeMillis();
+        try {
+            url = buildUrl(url, params);
+            HttpEntity<Map<String, Object>> httpEntity = buildHttpEntity(params, buildHeaders(headers));
+            ResponseEntity<T> exchange = RestTemplateUtils.getInstance().exchange(url, HttpMethod.DELETE, httpEntity, responseType, params);
+            T result = exchange.getBody();
+            log.info("RESTful delete请求结束 url=[{}],cost time=[{}],params=[{}],responseType=[{}],exchange=[{}]", url, System.currentTimeMillis() - start, params, responseType, exchange);
+            return ResultDTO.success(result);
+        } catch (Exception e) {
+            log.error("RESTful delete请求失败 url=[{}],params=[{}],responseType=[{}],errMsg:{}", url, params, responseType, e.getMessage());
+            return handleFailResult(e);
         }
     }
 
@@ -301,41 +459,34 @@ public class RestTemplateUtils {
      * @return 请求结果
      */
     public static <T> ResultDTO<T> postXml(String url, String data, Class<T> responseType) {
-        log.info("restFul post xml 请求开始 url={},data={},responseType={}", url, data, responseType);
-
+        log.info("RESTful post xml 请求开始 url=[{}],data=[{}],responseType=[{}]", url, data, responseType);
+        long start = System.currentTimeMillis();
         try {
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_XML);
-
-            HttpEntity<String> httpEntity = new HttpEntity<>(data,headers);
+            HttpEntity<String> httpEntity = new HttpEntity<>(data, headers);
             T result = RestTemplateUtils.getInstance().postForObject(url, httpEntity, responseType);
-            log.info("restFul post请求结束 result={}", result);
+            log.info("RESTful postXml请求结束 url=[{}],cost time=[{}],params=[{}],responseType=[{}],result=[{}]", url, System.currentTimeMillis() - start, data, responseType, result);
             return ResultDTO.success(result);
-        } catch (HttpStatusCodeException e) {
-            log.error("restFul post xml 请求失败 url={},data={},responseType={},errMsg:{}", url, data, responseType, e.getMessage());
-            return handleFailResult(e);
         } catch (Exception e) {
-            log.error("restFul post xml 请求出现异常 url={},data={},responseType={}", url, data, responseType, e);
-            return ResultDTO.fail(e.getMessage());
+            log.error("RESTful post xml 请求失败 url=[{}],data=[{}],responseType=[{}],errMsg:{}", url, data, responseType, e.getMessage());
+            return handleFailResult(e);
         }
     }
 
     public static <T> ResultDTO<T> postXml(String url, String data, ParameterizedTypeReference<T> responseType) {
-        log.info("restFul post xml 请求开始 url={},data={},responseType={}", url, data, responseType);
-
+        log.info("RESTful post xml 请求开始 url=[{}],data=[{}],responseType=[{}]", url, data, responseType);
+        long start = System.currentTimeMillis();
         try {
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_XML);
-            HttpEntity<String> httpEntity = new HttpEntity<>(data,headers);
+            HttpEntity<String> httpEntity = new HttpEntity<>(data, headers);
             T result = RestTemplateUtils.getInstance().exchange(url, HttpMethod.POST, httpEntity, responseType).getBody();
-            log.info("restFul post请求结束 result={}", result);
+            log.info("RESTful postXml请求结束 url=[{}],cost time=[{}],params=[{}],responseType=[{}],result=[{}]", url, System.currentTimeMillis() - start, data, responseType, result);
             return ResultDTO.success(result);
-        } catch (HttpStatusCodeException e) {
-            log.error("restFul post xml 请求失败 url={},data={},responseType={},errMsg:{}", url, data, responseType, e.getMessage());
-            return handleFailResult(e);
         } catch (Exception e) {
-            log.error("restFul post xml 请求出现异常 url={},data={},responseType={}", url, data, responseType, e);
-            return ResultDTO.fail(e.getMessage());
+            log.error("RESTful post xml 请求失败 url=[{}],data=[{}],responseType=[{}],errMsg:{}", url, data, responseType, e.getMessage());
+            return handleFailResult(e);
         }
     }
 
@@ -345,18 +496,17 @@ public class RestTemplateUtils {
         if (host.endsWith("/") && path.startsWith("/")) {
             urlBuilder.append(path.substring(1));
         }
-        urlBuilder.append(path);
+        if (null != path) {
+
+            urlBuilder.append(path);
+        }
         return urlBuilder.toString();
     }
 
-    private static HttpEntity<Map<String, Object>> buildHttpEntity(Map<String, Object> params, HttpHeaders headers) {
-        if (CollectionUtils.isNotEmpty(params)) {
-            return new HttpEntity<>(params, headers);
-        } else {
-
-            return new HttpEntity<>(null, headers);
-        }
+    private static <T> HttpEntity<T> buildHttpEntity(T params, HttpHeaders headers) {
+        return new HttpEntity<>(params, headers);
     }
+
 
     public static HttpHeaders buildHeaders(Map<String, String> headers) {
         if (CollectionUtils.isEmpty(headers)) {
@@ -369,18 +519,53 @@ public class RestTemplateUtils {
 
     public static String buildUrl(String url, Map<String, Object> params) {
         UriComponentsBuilder builder = UriComponentsBuilder.fromHttpUrl(url);
-        // 如果存在參數 放在url中
+        //如果存在參數 放在url中
         if (null != params && !params.isEmpty()) {
             params.forEach(builder::queryParam);
         }
         return builder.build().toString();
     }
 
-    private static <T> ResultDTO<T> handleFailResult(HttpStatusCodeException e) {
-        JSONObject object = new JSONObject();
-        object.put("rspBody", e.getResponseBodyAsString());
-        object.put("errMsg", e.getMessage());
-        return ResultDTO.fail(String.valueOf(e.getRawStatusCode()), object.toJSONString());
+    private static <T> ResultDTO<T> handleFailResult(Exception ex) {
+        ResultDTO<T> result;
+        if (ex instanceof ResourceAccessException) {
+            Throwable cause = ex.getCause();
+            if (cause instanceof ConnectException) {
+                result = ResultDTO.fail(ReqResultCodeEnum.CONNECT_REFUSED.getCode(), ex.getMessage());
+            } else if (cause instanceof SocketTimeoutException) {
+                if (cause.getMessage().toLowerCase().contains("connect")) {
+                    result = ResultDTO.fail(ReqResultCodeEnum.CONNECT_TIMEOUT.getCode(), ex.getMessage());
+                } else if (cause.getMessage().toLowerCase().contains("read")) {
+                    result = ResultDTO.fail(ReqResultCodeEnum.READ_TIMEOUT.getCode(), ex.getMessage());
+                } else {
+                    result = ResultDTO.fail(ReqResultCodeEnum.SOCKET_TIMEOUT.getCode(), ex.getMessage());
+                }
+            } else {
+                result = ResultDTO.fail(ReqResultCodeEnum.RESOURCE_REQUEST_ERROR.getCode(), ex.getMessage());
+            }
+        } else if (ex instanceof HttpStatusCodeException) {
+            HttpStatusCodeException e = (HttpStatusCodeException) ex;
+            JSONObject object = new JSONObject();
+            object.put("rspBody", e.getResponseBodyAsString());
+            object.put("errMsg", e.getMessage());
+            result = ResultDTO.fail(String.valueOf(e.getRawStatusCode()), object.toJSONString());
+        } else if (ex instanceof UnknownContentTypeException) {
+            UnknownContentTypeException e = (UnknownContentTypeException) ex;
+            JSONObject object = new JSONObject();
+            object.put("rspBody", e.getResponseBodyAsString());
+            object.put("errMsg", e.getMessage());
+            object.put("Content-type", e.getContentType().toString());
+            object.put("headers", Objects.requireNonNull(e.getResponseHeaders()).toSingleValueMap());
+            result = ResultDTO.fail(String.valueOf(e.getRawStatusCode()), object.toJSONString());
+        } else {
+            result = ResultDTO.fail(ReqResultCodeEnum.REQUEST_ERROR.getCode(), ex.getMessage());
+        }
+        log.error("请求接口失败,失败原因:\n{}", result);
+        return result;
     }
 
+    public static void withNoPrintRsp() {
+        ThreadLocalUtil.put(DISABLE_PRINT_CACHE_KEY, true);
+    }
 }
+

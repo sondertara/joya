@@ -17,7 +17,7 @@ import java.util.Set;
  * @author huangxiaohu
  */
 public class CollectionFields extends Fields {
-    private Class<?> genericClass;
+    private final Class<?> genericClass;
 
     public CollectionFields(PropertyDescriptor propertyDescriptor, Class<?> genericClass) {
         super(propertyDescriptor);

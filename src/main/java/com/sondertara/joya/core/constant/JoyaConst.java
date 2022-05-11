@@ -31,4 +31,10 @@ public class JoyaConst {
     public static final int TWO_QUERY_COUNT = 2;
 
 
+    public static class SQL {
+        public static final String ORACLE_GET_CURRENT_SCHEMA = "SELECT sys_context('userenv','current_schema') FROM DUAL";
+        public static final String ORACLE_SET_CURRENT_SCHEMA = "alter session set current_schema = ?";
+    }
+
+
 }

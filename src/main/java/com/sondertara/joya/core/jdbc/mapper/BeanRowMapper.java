@@ -9,6 +9,7 @@ import javax.persistence.Entity;
 import javax.persistence.Table;
 import java.beans.PropertyDescriptor;
 import java.lang.reflect.Method;
+import java.util.Date;
 
 /**
  * 将一行数据转换成JavaBean
@@ -46,11 +47,13 @@ public class BeanRowMapper<T> implements RowMapper<T> {
                     value = propertyType.getConstructor(String.class).newInstance(row.getObject(i).toString());
                 } else if (propertyType.equals(Boolean.class) || propertyType.equals(boolean.class)) {
                     value = row.getBoolean(i);
+                } else if (Date.class.equals(propertyType)) {
+                    value = row.getDate(i);
                 } else {
                     value = row.getObject(i);
                 }
                 Method setter = pd.getWriteMethod();
-                if (null!=setter) {
+                if (null != setter) {
                     setter.invoke(bean, value);
                 }
             }

@@ -1,5 +1,6 @@
 package com.sondertara.joya.core.jdbc;
 
+import com.sondertara.common.util.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -9,6 +10,9 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.function.Consumer;
+
+import static com.sondertara.joya.core.constant.JoyaConst.SQL.ORACLE_GET_CURRENT_SCHEMA;
+import static com.sondertara.joya.core.constant.JoyaConst.SQL.ORACLE_SET_CURRENT_SCHEMA;
 
 /**
  * 连接管理器
@@ -24,10 +28,21 @@ public final class ConnectionManager {
 
     private volatile String defaultCatalog;
 
+    private volatile DbType dbType;
+
     public ConnectionManager(DataSource dataSource) {
         this.dataSource = dataSource;
         try (Connection connection = dataSource.getConnection()) {
-            this.defaultCatalog = connection.getCatalog();
+            String productName = connection.getMetaData().getDatabaseProductName();
+            if (StringUtils.containsAnyIgnoreCase(productName, DbType.ORACLE.getType())) {
+                dbType = DbType.ORACLE;
+                ResultSet resultSet = connection.createStatement().executeQuery(ORACLE_GET_CURRENT_SCHEMA);
+                if (resultSet.next()) {
+                    this.defaultCatalog = resultSet.getString(1);
+                }
+            } else {
+                this.defaultCatalog = connection.getCatalog();
+            }
         } catch (SQLException e) {
             LOG.error("Get catalog failed.", e);
         }
@@ -43,7 +58,11 @@ public final class ConnectionManager {
             if (conn == null || conn.isClosed()) {
                 conn = dataSource.getConnection();
                 if (null != defaultCatalog) {
-                    conn.setCatalog(defaultCatalog);
+                    if (DbType.ORACLE.equals(dbType)) {
+                        conn.createStatement().execute(ORACLE_SET_CURRENT_SCHEMA.replace("?", defaultCatalog));
+                    } else {
+                        conn.setCatalog(defaultCatalog);
+                    }
                 }
                 connHolder.set(conn);
             }
@@ -97,6 +116,13 @@ public final class ConnectionManager {
                 connHolder.remove();
             }
             conn = dataSource.getConnection();
+            if (null != defaultCatalog) {
+                if (DbType.ORACLE.equals(dbType)) {
+                    conn.createStatement().execute(ORACLE_SET_CURRENT_SCHEMA.replace("?", defaultCatalog));
+                } else {
+                    conn.setCatalog(defaultCatalog);
+                }
+            }
             conn.setAutoCommit(false);
             connHolder.set(conn);
         } catch (SQLException e) {

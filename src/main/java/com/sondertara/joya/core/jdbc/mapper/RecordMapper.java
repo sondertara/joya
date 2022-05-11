@@ -7,6 +7,7 @@ import com.sondertara.joya.core.jdbc.Record;
  *
  * @author huangxiaohu
  */
+@FunctionalInterface
 public interface RecordMapper<T> {
 
     /**

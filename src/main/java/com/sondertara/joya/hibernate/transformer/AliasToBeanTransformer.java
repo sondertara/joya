@@ -2,12 +2,15 @@ package com.sondertara.joya.hibernate.transformer;
 
 import com.sondertara.common.util.CollectionUtils;
 import com.sondertara.common.util.StringUtils;
+import com.sondertara.joya.core.jdbc.SqlDataHelper;
 import com.sondertara.joya.hibernate.transformer.mappedfileds.Fields;
+import oracle.sql.TIMESTAMP;
 import org.hibernate.transform.ResultTransformer;
 import org.springframework.beans.BeanUtils;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
+import java.util.Date;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -34,25 +37,11 @@ public class AliasToBeanTransformer<T> implements ResultTransformer {
         this.valueSetter = new ValueSetter();
     }
 
-    private static boolean isPrimitive(Class<?> propertyType) {
-
-        if (propertyType.isPrimitive()) {
-            return true;
-        }
-        if (Number.class.isAssignableFrom(propertyType)) {
-            return true;
-        }
-        try {
-            return ((Class<?>) propertyType.getField("TYPE").get(null)).isPrimitive();
-        } catch (Exception e) {
-            return false;
-        }
-    }
 
     @Override
     public Object transformTuple(Object[] tuple, String[] aliases) {
         if (CollectionUtils.isEmpty(mappedFields)) {
-            if (isPrimitive(mappedClass) || String.class.isAssignableFrom(mappedClass)) {
+            if (isPrimitive(mappedClass) || String.class.isAssignableFrom(mappedClass) || Date.class.isAssignableFrom(mappedClass)) {
                 return setSingleField(tuple);
 
             }
@@ -74,8 +63,7 @@ public class AliasToBeanTransformer<T> implements ResultTransformer {
         return list;
     }
 
-    @SuppressWarnings("rawtypes")
-    public final Class getMappedClass() {
+    public final Class<?> getMappedClass() {
         return this.mappedClass;
     }
 
@@ -86,6 +74,10 @@ public class AliasToBeanTransformer<T> implements ResultTransformer {
      * @return value after transformed
      */
     private Object setSingleField(Object[] tuple) {
+        if (tuple.length < 1) {
+            return null;
+        }
+        Object value = tuple[0];
         if (isPrimitive(mappedClass)) {
             if (Character.class.isAssignableFrom(mappedClass)) {
                 throw new IllegalArgumentException("Not support Character!");
@@ -96,10 +88,10 @@ public class AliasToBeanTransformer<T> implements ResultTransformer {
                     if (count == 1) {
                         if (String.class.isAssignableFrom(constructor.getParameterTypes()[0])) {
 
-                            if (tuple.length == 0 || Objects.isNull(tuple[0])) {
+                            if (Objects.isNull(value)) {
                                 return null;
                             } else {
-                                return constructor.newInstance(tuple[0].toString());
+                                return constructor.newInstance(value.toString());
                             }
                         }
                     }
@@ -108,15 +100,38 @@ public class AliasToBeanTransformer<T> implements ResultTransformer {
                 }
             }
         }
-        if (String.class.isAssignableFrom(mappedClass)) {
-            if (tuple.length == 0 || Objects.isNull(tuple[0])) {
+        if (String.class.equals(mappedClass)) {
+            if (Objects.isNull(value)) {
                 return null;
             } else {
-                return tuple[0].toString();
+                return value.toString();
             }
+        }
+
+        if (Date.class.equals(mappedClass)) {
+            if (value instanceof TIMESTAMP) {
+                return SqlDataHelper.extractDate(value);
+            }
+            return value;
         }
 
         throw new RuntimeException(" Can not transfer for class " + mappedClass);
 
     }
+
+    private static boolean isPrimitive(Class<?> propertyType) {
+
+        if (propertyType.isPrimitive()) {
+            return true;
+        }
+        if (Number.class.isAssignableFrom(propertyType)) {
+            return true;
+        }
+        try {
+            return ((Class<?>) propertyType.getField("TYPE").get(null)).isPrimitive();
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
 }

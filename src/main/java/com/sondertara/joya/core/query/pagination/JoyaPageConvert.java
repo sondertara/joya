@@ -3,6 +3,7 @@ package com.sondertara.joya.core.query.pagination;
 import com.sondertara.common.util.StringFormatter;
 import com.sondertara.common.util.StringUtils;
 import com.sondertara.joya.core.query.NativeSqlQuery;
+import com.sondertara.joya.core.query.NativeSqlQueryBuilder;
 import com.sondertara.joya.core.query.criterion.JoinCriterion;
 import com.sondertara.joya.core.query.criterion.WhereCriterion;
 import com.sondertara.joya.utils.SqlUtils;
@@ -94,7 +95,7 @@ public class JoyaPageConvert {
             }
             return w;
         };
-        NativeSqlQuery.NativeSqlQueryBuilder builder = NativeSqlQuery.builder();
+        NativeSqlQueryBuilder builder = new NativeSqlQueryBuilder();
         if (null != queryParam.getSelect()) {
             builder.select(queryParam.getSelect());
         } else {
