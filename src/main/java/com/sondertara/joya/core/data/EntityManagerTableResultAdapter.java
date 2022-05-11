@@ -1,8 +1,9 @@
-package com.sondertara.joya.cache;
+package com.sondertara.joya.core.data;
 
 import com.sondertara.common.util.StringFormatter;
 import com.sondertara.common.util.StringUtils;
-import com.sondertara.joya.core.model.TableDTO;
+import com.sondertara.joya.cache.LocalEntityCache;
+import com.sondertara.joya.core.model.TableStruct;
 import com.sondertara.joya.ext.JoyaSpringContext;
 
 import javax.persistence.Column;
@@ -19,10 +20,16 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
-public class EntityManagerTableResultAdapter extends AnstractTableResult {
+/**
+ * Get the tables with EntityManager
+ * you can implement your own adapter,and customize it by use {@link LocalEntityCache#setTableResult(AbstractTableResult)}
+ *
+ * @author huangxiaohu
+ */
+public class EntityManagerTableResultAdapter extends AbstractTableResult {
     @Override
-    public List<TableDTO> load() {
-        List<TableDTO> reulst = new ArrayList<>();
+    public List<TableStruct> load() {
+        List<TableStruct> result = new ArrayList<>();
         EntityManager entityManager = JoyaSpringContext.getBean(EntityManager.class);
         Metamodel metamodel = entityManager.getEntityManagerFactory().getMetamodel();
         for (EntityType<?> entity : metamodel.getEntities()) {
@@ -41,13 +48,13 @@ public class EntityManagerTableResultAdapter extends AnstractTableResult {
                 fieldNames.put(field.getName(), columnName);
                 field.setAccessible(false);
             }
-            TableDTO tableDTO = new TableDTO();
-            tableDTO.setClassName(aClass.getName());
-            tableDTO.setTableName(tableName);
-            tableDTO.setFields(fieldNames);
-            reulst.add(tableDTO);
+            TableStruct tableStruct = new TableStruct();
+            tableStruct.setClassName(aClass.getName());
+            tableStruct.setTableName(tableName);
+            tableStruct.setFields(fieldNames);
+            result.add(tableStruct);
         }
-        return reulst;
+        return result;
     }
 
 }

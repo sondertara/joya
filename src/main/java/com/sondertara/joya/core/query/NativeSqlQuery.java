@@ -1,11 +1,8 @@
 package com.sondertara.joya.core.query;
 
 
-import com.google.common.collect.Maps;
 import com.sondertara.joya.core.builder.SelectBuilder;
-import com.sondertara.joya.core.constant.JoyaConst;
 import com.sondertara.joya.utils.SqlUtils;
-import com.sondertara.joya.utils.ThreadLocalUtil;
 
 import java.util.List;
 
@@ -38,7 +35,6 @@ public class NativeSqlQuery {
     }
 
     public static SelectBuilder builder() {
-        ThreadLocalUtil.put(JoyaConst.JOYA_SQL, Maps.newLinkedHashMap());
         return new NativeSqlQueryBuilder();
     }
 

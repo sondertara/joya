@@ -12,7 +12,7 @@ import java.io.Serializable;
  * @since 1.0.0
  */
 @Data
-public class ColumnAliasDTO implements Serializable {
+public class ColumnAlias implements Serializable {
 
     /**
      * table name of database

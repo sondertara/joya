@@ -1,6 +1,7 @@
 package com.sondertara.joya.core.query;
 
 import com.google.common.collect.Lists;
+import com.sondertara.common.exception.TaraException;
 import com.sondertara.common.function.TaraFunction;
 import com.sondertara.common.structure.NodeList;
 import com.sondertara.common.util.CollectionUtils;
@@ -13,10 +14,9 @@ import com.sondertara.joya.core.builder.FromBuilder;
 import com.sondertara.joya.core.builder.SelectBuilder;
 import com.sondertara.joya.core.builder.WhereBuilder;
 import com.sondertara.joya.core.constant.JoyaConst;
-import com.sondertara.joya.core.exceptions.JoyaSQLException;
-import com.sondertara.joya.core.model.ColumnAliasDTO;
-import com.sondertara.joya.core.model.TableAliasDTO;
-import com.sondertara.joya.core.model.TableDTO;
+import com.sondertara.joya.core.model.ColumnAlias;
+import com.sondertara.joya.core.model.TableAlias;
+import com.sondertara.joya.core.model.TableStruct;
 import com.sondertara.joya.core.query.criterion.JoinCriterion;
 import com.sondertara.joya.core.query.criterion.SelectCriterion;
 import com.sondertara.joya.core.query.criterion.WhereCriterion;
@@ -370,16 +370,16 @@ public class NativeSqlQueryBuilder implements SelectBuilder, FromBuilder, WhereB
 
     private void buildJoin() {
         if (StringUtils.isBlank(this.from) && null != joinCriterion) {
-            NodeList<ColumnAliasDTO> nodeList = joinCriterion.getSegments();
+            NodeList<ColumnAlias> nodeList = joinCriterion.getSegments();
             List<String> join = joinCriterion.getJoin();
             if ((nodeList.getSize() / join.size()) != JoyaConst.TWO_QUERY_COUNT) {
-                throw new JoyaSQLException("The join part is incorrect!");
+                throw new TaraException("The join part is incorrect!");
             }
             StringJoiner sb = new StringJoiner(" ");
             if (!nodeList.isEmpty()) {
 
-                ColumnAliasDTO first = nodeList.getFirst();
-                ColumnAliasDTO second = nodeList.get(1);
+                ColumnAlias first = nodeList.getFirst();
+                ColumnAlias second = nodeList.get(1);
 
                 sb.add(first.getTableName()).add("AS").add(first.getTableAlias());
                 sb.add(join.get(0));
@@ -387,11 +387,11 @@ public class NativeSqlQueryBuilder implements SelectBuilder, FromBuilder, WhereB
                 sb.add("ON");
                 sb.add(first.getColumnAlias()).add("=").add(second.getColumnAlias());
                 if (nodeList.getSize() > JoyaConst.TWO_QUERY_COUNT) {
-                    ColumnAliasDTO third = nodeList.get(2);
-                    ColumnAliasDTO forth = nodeList.get(3);
+                    ColumnAlias third = nodeList.get(2);
+                    ColumnAlias forth = nodeList.get(3);
 
                     if (forth.getTableName().equals(first.getTableName()) || forth.getTableName().equals(second.getTableName())) {
-                        ColumnAliasDTO temp = forth;
+                        ColumnAlias temp = forth;
                         forth = third;
                         third = temp;
                     }
@@ -425,7 +425,7 @@ public class NativeSqlQueryBuilder implements SelectBuilder, FromBuilder, WhereB
         sj.add(new StringBuilder("ORDER BY ").append(sjOrderBy));
     }
 
-    private void buildSelect(StringJoiner sj, List<TableAliasDTO> tables) {
+    private void buildSelect(StringJoiner sj, List<TableAlias> tables) {
         if (SELECT_ALL.equals(select)) {
             Map<String, String> map = null;
             if (null != specificS) {
@@ -437,8 +437,8 @@ public class NativeSqlQueryBuilder implements SelectBuilder, FromBuilder, WhereB
             }
             Set<String> columns = new HashSet<>();
             StringJoiner stringJoiner = new StringJoiner(",");
-            for (TableAliasDTO table : tables) {
-                TableDTO t = AliasThreadLocalCache.getTable(table.getClassName());
+            for (TableAlias table : tables) {
+                TableStruct t = AliasThreadLocalCache.getTable(table.getClassName());
                 Map<String, String> fields = t.getFields();
                 for (Map.Entry<String, String> entity : fields.entrySet()) {
                     String columnName = entity.getValue();
@@ -463,7 +463,7 @@ public class NativeSqlQueryBuilder implements SelectBuilder, FromBuilder, WhereB
         sj.add("SELECT " + select);
     }
 
-    private void buildForm(StringJoiner sj, List<TableAliasDTO> tables) {
+    private void buildForm(StringJoiner sj, List<TableAlias> tables) {
         //字符串from
         if (StringUtils.isNotBlank(from)) {
             sj.add("FROM " + from);
@@ -471,7 +471,7 @@ public class NativeSqlQueryBuilder implements SelectBuilder, FromBuilder, WhereB
             //class from
             sj.add("FROM");
             StringJoiner stringJoiner = new StringJoiner(", ");
-            for (TableAliasDTO table : tables) {
+            for (TableAlias table : tables) {
                 stringJoiner.add(StringFormatter.format("{} AS {}", table.getTableName(), table.getAliasName()));
             }
             sj.merge(stringJoiner);
@@ -483,7 +483,7 @@ public class NativeSqlQueryBuilder implements SelectBuilder, FromBuilder, WhereB
      */
     private String toSqlStr() {
         StringJoiner sj = new StringJoiner(" ");
-        List<TableAliasDTO> tables = AliasThreadLocalCache.getTables();
+        List<TableAlias> tables = AliasThreadLocalCache.getTables();
         //select
         buildSelect(sj, tables);
         //form

@@ -1,14 +1,14 @@
 package com.sondertara.joya.cache;
 
 
+import com.sondertara.common.exception.TaraException;
 import com.sondertara.common.function.TaraFunction;
 import com.sondertara.common.lang.Assert;
 import com.sondertara.common.util.StringFormatter;
 import com.sondertara.common.util.StringUtils;
-import com.sondertara.joya.core.exceptions.JoyaSQLException;
-import com.sondertara.joya.core.model.ColumnAliasDTO;
-import com.sondertara.joya.core.model.TableAliasDTO;
-import com.sondertara.joya.core.model.TableDTO;
+import com.sondertara.joya.core.model.ColumnAlias;
+import com.sondertara.joya.core.model.TableAlias;
+import com.sondertara.joya.core.model.TableStruct;
 import com.sondertara.joya.utils.ThreadLocalUtil;
 
 import javax.persistence.EntityNotFoundException;
@@ -54,16 +54,14 @@ public final class AliasThreadLocalCache {
     @SuppressWarnings("unchecked")
     public static void generateTableAlias(Class<?> aClass) {
 
+        TableStruct tableStruct = LocalEntityCache.getInstance().get(aClass.getName()).orElseThrow(() -> new TaraException("No entity found with class:{}", aClass.getName()));
+        LinkedHashMap<String, TableAlias> aliasMap = (LinkedHashMap<String, TableAlias>) ThreadLocalUtil.get(JOYA_SQL);
 
-        LocalEntityCache.getInstance().get(aClass.getName()).ifPresent(t -> {
-            LinkedHashMap<String, TableAliasDTO> aliasMap = (LinkedHashMap<String, TableAliasDTO>) ThreadLocalUtil.get(JOYA_SQL);
-
-            TableAliasDTO aliasDTO = new TableAliasDTO();
-            aliasDTO.setClassName(aClass.getName());
-            aliasDTO.setTableName(t.getTableName());
-            aliasDTO.setAliasName(StringFormatter.format("t{}", aliasMap.size()));
-            aliasMap.putIfAbsent(aClass.getName(), aliasDTO);
-        });
+        TableAlias aliasDTO = new TableAlias();
+        aliasDTO.setClassName(aClass.getName());
+        aliasDTO.setTableName(tableStruct.getTableName());
+        aliasDTO.setAliasName(StringFormatter.format("t{}", aliasMap.size()));
+        aliasMap.putIfAbsent(aClass.getName(), aliasDTO);
     }
 
     @SuppressWarnings("unchecked")
@@ -73,9 +71,9 @@ public final class AliasThreadLocalCache {
         String[] strings = tableAndAlias.split(" AS ");
 
         LocalEntityCache.getInstance().get(strings[0].toLowerCase()).ifPresent(t -> {
-            LinkedHashMap<String, TableAliasDTO> aliasMap = (LinkedHashMap<String, TableAliasDTO>) ThreadLocalUtil.get(JOYA_SQL);
+            LinkedHashMap<String, TableAlias> aliasMap = (LinkedHashMap<String, TableAlias>) ThreadLocalUtil.get(JOYA_SQL);
 
-            TableAliasDTO aliasDTO = new TableAliasDTO();
+            TableAlias aliasDTO = new TableAlias();
             aliasDTO.setClassName(t.getClassName());
             aliasDTO.setTableName(t.getTableName());
             aliasDTO.setAliasName(StringFormatter.format("t{}", aliasMap.size()));
@@ -92,7 +90,7 @@ public final class AliasThreadLocalCache {
      * @return Object contain
      */
     @SuppressWarnings("unchecked")
-    public static <T> ColumnAliasDTO getColumn(TaraFunction<T, ?> taraSqlFn) {
+    public static <T> ColumnAlias getColumn(TaraFunction<T, ?> taraSqlFn) {
         try {
             Method method = taraSqlFn.getClass().getDeclaredMethod("writeReplace");
             method.setAccessible(Boolean.TRUE);
@@ -102,7 +100,7 @@ public final class AliasThreadLocalCache {
 
             String className = implClass.replace("/", ".");
 
-            Optional<TableDTO> optional = LocalEntityCache.getInstance().get(className);
+            Optional<TableStruct> optional = LocalEntityCache.getInstance().get(className);
             // get the field name
             if (GET_PATTERN.matcher(getter).matches()) {
                 getter = getter.substring(3);
@@ -121,22 +119,22 @@ public final class AliasThreadLocalCache {
                 }
                 throw new EntityNotFoundException("No column found by " + finalGetter);
             }).orElseThrow(() -> new EntityNotFoundException("no entity found for " + implClass));
-            LinkedHashMap<String, TableAliasDTO> aliasMap = (LinkedHashMap<String, TableAliasDTO>) ThreadLocalUtil.get(JOYA_SQL);
-            TableAliasDTO tableAlias = aliasMap.computeIfAbsent(className, k -> {
-                TableAliasDTO aliasDTO = new TableAliasDTO();
+            LinkedHashMap<String, TableAlias> aliasMap = (LinkedHashMap<String, TableAlias>) ThreadLocalUtil.get(JOYA_SQL);
+            TableAlias tableAlias = aliasMap.computeIfAbsent(className, k -> {
+                TableAlias aliasDTO = new TableAlias();
                 aliasDTO.setTableName(tableName.get());
                 aliasDTO.setClassName(className);
                 aliasDTO.setAliasName(StringFormatter.format("t{}", aliasMap.size()));
                 return aliasDTO;
             });
-            ColumnAliasDTO columnAliasDTO = new ColumnAliasDTO();
-            columnAliasDTO.setTableName(tableName.get());
-            columnAliasDTO.setColumnName(columnName);
-            columnAliasDTO.setTableAlias(tableAlias.getAliasName());
-            columnAliasDTO.setColumnAlias(StringFormatter.format("{}.{}", tableAlias.getAliasName(), columnName));
-            return columnAliasDTO;
+            ColumnAlias columnAlias = new ColumnAlias();
+            columnAlias.setTableName(tableName.get());
+            columnAlias.setColumnName(columnName);
+            columnAlias.setTableAlias(tableAlias.getAliasName());
+            columnAlias.setColumnAlias(StringFormatter.format("{}.{}", tableAlias.getAliasName(), columnName));
+            return columnAlias;
         } catch (ReflectiveOperationException e) {
-            throw new JoyaSQLException(e);
+            throw new TaraException(e);
         }
 
     }
@@ -148,15 +146,15 @@ public final class AliasThreadLocalCache {
      * @return Object of table
      */
     @SuppressWarnings("unchecked")
-    public static List<TableAliasDTO> getTables() {
-        LinkedHashMap<String, TableAliasDTO> aliasMap = (LinkedHashMap<String, TableAliasDTO>) ThreadLocalUtil.get(JOYA_SQL);
+    public static List<TableAlias> getTables() {
+        LinkedHashMap<String, TableAlias> aliasMap = (LinkedHashMap<String, TableAlias>) ThreadLocalUtil.get(JOYA_SQL);
         return new ArrayList<>(aliasMap.values());
 
     }
 
-    public static TableDTO getTable(String className) {
-        Optional<TableDTO> optional = LocalEntityCache.getInstance().get(className);
-        return optional.orElseThrow(() -> new JoyaSQLException("No Table found by className:" + className));
+    public static TableStruct getTable(String className) {
+        Optional<TableStruct> optional = LocalEntityCache.getInstance().get(className);
+        return optional.orElseThrow(() -> new TaraException("No Table found by className:" + className));
     }
 
 
@@ -173,13 +171,13 @@ public final class AliasThreadLocalCache {
         }
         int index = column.indexOf(".");
         if (index < 0) {
-            throw new JoyaSQLException("The column is incorrect,it should like 't0.userName.'");
+            throw new TaraException("The column is incorrect,it should like 't0.userName.'");
         }
         String tableAlias = column.substring(0, index);
         String fieldName = column.substring(index + 1);
         String s = null;
-        List<TableAliasDTO> tables = getTables();
-        for (TableAliasDTO table : tables) {
+        List<TableAlias> tables = getTables();
+        for (TableAlias table : tables) {
             if (tableAlias.equals(table.getAliasName())) {
                 String className = table.getClassName();
                 s = LocalEntityCache.getInstance().get(className).map(t -> {
@@ -196,8 +194,8 @@ public final class AliasThreadLocalCache {
                             }
                         }
                     }
-                    throw new JoyaSQLException("No column found for table [{}] by name [{}]", table.getTableName(), fieldName);
-                }).orElseThrow(() -> new JoyaSQLException("No table found by className [{}]", className));
+                    throw new TaraException("No column found for table [{}] by name [{}]", table.getTableName(), fieldName);
+                }).orElseThrow(() -> new TaraException("No table found by className [{}]", className));
             }
         }
         return StringFormatter.format("{}.{}", tableAlias, s);

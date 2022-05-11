@@ -12,7 +12,7 @@ import java.io.Serializable;
  * @since 1.0.0
  */
 @Data
-public class TableAliasDTO implements Serializable {
+public class TableAlias implements Serializable {
     /**
      * the entity full class name
      */

@@ -11,8 +11,8 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.function.Consumer;
 
-import static com.sondertara.joya.core.constant.JoyaConst.SQL.ORACLE_GET_CURRENT_SCHEMA;
-import static com.sondertara.joya.core.constant.JoyaConst.SQL.ORACLE_SET_CURRENT_SCHEMA;
+import static com.sondertara.joya.core.constant.JoyaConst.Sql.ORACLE_GET_CURRENT_SCHEMA;
+import static com.sondertara.joya.core.constant.JoyaConst.Sql.ORACLE_SET_CURRENT_SCHEMA;
 
 /**
  * 连接管理器

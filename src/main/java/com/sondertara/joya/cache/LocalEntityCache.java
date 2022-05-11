@@ -1,6 +1,8 @@
 package com.sondertara.joya.cache;
 
-import com.sondertara.joya.core.model.TableDTO;
+import com.sondertara.joya.core.data.AbstractTableResult;
+import com.sondertara.joya.core.data.EntityManagerTableResultAdapter;
+import com.sondertara.joya.core.model.TableStruct;
 import com.sondertara.joya.utils.cache.GuavaAbstractLoadingCache;
 import com.sondertara.joya.utils.cache.ILocalCache;
 import org.slf4j.Logger;
@@ -15,7 +17,7 @@ import java.util.Optional;
  *
  * @author huangxiaohu
  */
-public class LocalEntityCache extends GuavaAbstractLoadingCache<String, TableDTO> implements ILocalCache<String, TableDTO> {
+public class LocalEntityCache extends GuavaAbstractLoadingCache<String, TableStruct> implements ILocalCache<String, TableStruct> {
 
     private static final Logger log = LoggerFactory.getLogger(LocalEntityCache.class);
 
@@ -26,7 +28,7 @@ public class LocalEntityCache extends GuavaAbstractLoadingCache<String, TableDTO
         setExpireAfterWriteDuration(60 * 5);
     }
 
-    private AnstractTableResult tableResult;
+    private AbstractTableResult tableResult;
 
     public synchronized static LocalEntityCache getInstance() {
         if (null == cache) {
@@ -40,20 +42,21 @@ public class LocalEntityCache extends GuavaAbstractLoadingCache<String, TableDTO
         return cache;
     }
 
-    public void setTableResult(AnstractTableResult tableResult) {
+    public void setTableResult(AbstractTableResult tableResult) {
         this.tableResult = tableResult;
     }
 
     @Override
-    protected TableDTO fetchData(String key) {
+    protected TableStruct fetchData(String key) {
 
-        List<TableDTO> list = tableResult.load();
-        for (TableDTO tableDTO : list) {
-            if (tableDTO.getTableName().equalsIgnoreCase(key)) {
-                put(tableDTO.getClassName(), tableDTO);
-
-            } else if (tableDTO.getClassName().equalsIgnoreCase(key)) {
-                put(tableDTO.getTableName(), tableDTO);
+        List<TableStruct> list = tableResult.load();
+        for (TableStruct tableStruct : list) {
+            if (tableStruct.getTableName().equalsIgnoreCase(key)) {
+                put(tableStruct.getClassName(), tableStruct);
+                return tableStruct;
+            } else if (tableStruct.getClassName().equalsIgnoreCase(key)) {
+                put(tableStruct.getTableName(), tableStruct);
+                return tableStruct;
             }
         }
         log.warn("no data to load by key=[{}]", key);
@@ -63,8 +66,8 @@ public class LocalEntityCache extends GuavaAbstractLoadingCache<String, TableDTO
     }
 
     @Override
-    public Optional<TableDTO> get(String key) {
-        TableDTO value = null;
+    public Optional<TableStruct> get(String key) {
+        TableStruct value = null;
         try {
             value = getValue(key);
         } catch (Exception e) {

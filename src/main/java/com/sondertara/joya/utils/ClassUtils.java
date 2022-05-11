@@ -1,7 +1,7 @@
 package com.sondertara.joya.utils;
 
+import com.sondertara.common.exception.TaraException;
 import com.sondertara.common.util.StringUtils;
-import com.sondertara.joya.core.exceptions.JoyaSQLException;
 import com.sondertara.joya.core.model.TableEntity;
 
 import javax.persistence.Column;
@@ -72,7 +72,7 @@ public class ClassUtils {
                     fields.add(field);
                 }
             } catch (Exception e) {
-                throw new JoyaSQLException(e);
+                throw new TaraException(e);
             }
         }
         return fields;
@@ -100,7 +100,7 @@ public class ClassUtils {
             }
         }
         if (null == tableName) {
-            throw new JoyaSQLException("No [@Table] or [@Entity] annotation found for class->" + clazz);
+            throw new TaraException("No [@Table] or [@Entity] annotation found for class->" + clazz);
         }
 
         TableEntity tableDTO = new TableEntity();
@@ -133,7 +133,7 @@ public class ClassUtils {
                     relation.put(name, field.getName());
                 }
             } catch (Exception e) {
-                throw new JoyaSQLException(e);
+                throw new TaraException(e);
             }
         }
 
@@ -178,7 +178,7 @@ public class ClassUtils {
         return null;
     }
 
-    //
+
     public static Field getExistedField(Class<?> clazz, String fieldName) {
         List<Field> fields = getFieldList(clazz);
         for (Field field : fields) {
@@ -186,6 +186,6 @@ public class ClassUtils {
                 return field;
             }
         }
-        throw new JoyaSQLException("no such field " + fieldName + "/" + clazz.getSimpleName());
+        throw new TaraException("No such field " + fieldName + "/" + clazz.getSimpleName());
     }
 }

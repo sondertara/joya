@@ -1,12 +1,12 @@
 package com.sondertara.joya.core.query.criterion;
 
 
+import com.sondertara.common.exception.TaraException;
 import com.sondertara.common.function.TaraFunction;
 import com.sondertara.common.structure.NodeList;
 import com.sondertara.joya.cache.AliasThreadLocalCache;
 import com.sondertara.joya.core.constant.JoyaConst;
-import com.sondertara.joya.core.exceptions.JoyaSQLException;
-import com.sondertara.joya.core.model.ColumnAliasDTO;
+import com.sondertara.joya.core.model.ColumnAlias;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -27,7 +27,7 @@ public class JoinCriterion {
     /**
      * from segments
      */
-    private final NodeList<ColumnAliasDTO> segments;
+    private final NodeList<ColumnAlias> segments;
 
     /**
      * the join type {@link JoinType};
@@ -96,10 +96,10 @@ public class JoinCriterion {
      *
      * @return node list for join field
      */
-    public NodeList<ColumnAliasDTO> getSegments() {
+    public NodeList<ColumnAlias> getSegments() {
         if (tableNames.size() > JoyaConst.MAX_JOIN_TABLE) {
 
-            throw new JoyaSQLException("Only support  three tables associated");
+            throw new TaraException("Only support  three tables associated");
 
         }
         return segments;
@@ -116,10 +116,10 @@ public class JoinCriterion {
 
     private <T, R> void setSegments(JoinType joinType, TaraFunction<T, ?> left, TaraFunction<R, ?> right) {
         if (this.segments.getSize() > MAX_JOIN_COUNT) {
-            throw new JoyaSQLException("Only support  two join association ," + "if you use too complicated query why no try to optimize the code.");
+            throw new TaraException("Only support  two join association ," + "if you use too complicated query why no try to optimize the code.");
         }
-        final ColumnAliasDTO columnLeft = AliasThreadLocalCache.getColumn(left);
-        ColumnAliasDTO columnRight = AliasThreadLocalCache.getColumn(right);
+        final ColumnAlias columnLeft = AliasThreadLocalCache.getColumn(left);
+        ColumnAlias columnRight = AliasThreadLocalCache.getColumn(right);
         setJoinStr(columnLeft, columnRight, joinType);
     }
 
@@ -130,7 +130,7 @@ public class JoinCriterion {
      * @param right    second part
      * @param joinType join type
      */
-    private void setJoinStr(ColumnAliasDTO left, ColumnAliasDTO right, JoinType joinType) {
+    private void setJoinStr(ColumnAlias left, ColumnAlias right, JoinType joinType) {
         this.segments.addLast(left);
         this.segments.addLast(right);
         tableNames.add(left.getTableName());
