@@ -27,12 +27,6 @@ version = '0.0.7.208'
 archivesBaseName = 'joya'
 sourceCompatibility = '1.8'
 
-
-ext.versions = [springBoot     : '2.6.0',
-                springData     : '2.6.0',
-                springframework: '5.3.13',
-                lombok         : '1.18.22']
-
 [compileJava, compileTestJava, javadoc]*.options*.encoding = "UTF-8"
 
 configurations {
@@ -61,23 +55,21 @@ jar {
         from files('LICENSE')
     }
     manifest {
-        attributes('Built-By': 'Sondertara',
-                'Build-Jdk-Spec': '1.8')
+        attributes('Built-By': 'Sondertara', 'Build-Jdk-Spec': '1.8')
     }
 }
 
-
 dependencies {
-    implementation 'org.springframework.data:spring-data-jpa:${versions.springData}'
-    implementation 'org.springframework.boot:spring-boot:${versions.springBoot}'
-    implementation 'org.springframework:spring-web:${versions.springframework}'
-    implementation group: 'org.hibernate', name: 'hibernate-core', version: '5.6.8.Final'
-    implementation group: 'com.github.vertical-blank', name: 'sql-formatter', version: '2.0.3'
-    implementation group: 'com.sondertara', name: 'common-tara', version: '0.0.4.0'
-    compileOnly group: 'org.projectlombok', name: 'lombok', version: '1.18.24'
-    compileOnly group: 'com.oracle.database.jdbc', name: 'ojdbc8', version: '21.5.0.0'
-    annotationProcessor group: 'org.projectlombok', name: 'lombok', version: '1.18.24'
+    implementation 'org.springframework.data:spring-data-jpa:2.6.3'
+    implementation 'org.springframework.boot:spring-boot:2.6.3'
+    implementation 'org.springframework:spring-web:5.3.14'
+    implementation 'org.hibernate:hibernate-core:5.6.8.Final'
+    implementation 'com.github.vertical-blank:sql-formatter:2.0.3'
+    implementation 'com.sondertara:common-tara:0.0.4.0'
+    compileOnly 'org.projectlombok:lombok:1.18.24'
+    compileOnly 'com.oracle.database.jdbc:ojdbc8:21.5.0.0'
 
+    annotationProcessor 'org.projectlombok:lombok:1.18.24'
 }
 
 
