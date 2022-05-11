@@ -3,6 +3,7 @@ package com.sondertara.joya.hibernate.type;
 import com.alibaba.fastjson.JSON;
 import com.alibaba.fastjson.serializer.SerializerFeature;
 import com.sondertara.common.util.StringUtils;
+import com.sondertara.joya.utils.ClassUtils;
 import org.hibernate.HibernateException;
 import org.hibernate.engine.spi.SharedSessionContractImplementor;
 import org.hibernate.internal.CoreMessageLogger;
@@ -195,7 +196,7 @@ public class JSONType implements UserType, DynamicParameterizedType, Serializabl
     }
 
     @Override
-    @SuppressWarnings("rawtypes")
+    @SuppressWarnings({"rawtypes", "deprecated"})
     public void setParameterValues(Properties parameters) {
         try {
             Class eClass = ReflectHelper.classForName(parameters.getProperty(DynamicParameterizedType.ENTITY), this.getClass());
@@ -211,22 +212,21 @@ public class JSONType implements UserType, DynamicParameterizedType, Serializabl
             LOG.error(e.getMessage());
         }
         //final ParameterType reader = (ParameterType) parameters.get(
-        final ParameterType reader = (ParameterType) parameters.get(
-                DynamicParameterizedType.PARAMETER_TYPE);
+        final ParameterType reader = (ParameterType) parameters.get(DynamicParameterizedType.PARAMETER_TYPE);
         if (reader != null) {
             type = reader.getReturnedClass();
             parseSqlType(reader.getAnnotationsMethod());
         } else {
             try {
-                type = ReflectHelper.classForName((String) parameters.get(CLASS_NAME));
+                type = ClassUtils.classForName((String) parameters.get(CLASS_NAME));
             } catch (ClassNotFoundException exception) {
                 throw new HibernateException("class not found", exception);
             }
         }
     }
 
-    private void parseSqlType(Annotation[] anns) {
-        for (Annotation an : anns) {
+    private void parseSqlType(Annotation[] annotations) {
+        for (Annotation an : annotations) {
             if (an instanceof Column) {
                 int length = ((Column) an).length();
                 if (length > 4000) {

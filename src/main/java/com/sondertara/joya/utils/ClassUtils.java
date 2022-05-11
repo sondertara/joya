@@ -109,7 +109,7 @@ public class ClassUtils {
             try {
                 Field[] list = c.getDeclaredFields();
                 for (Field field : list) {
-                    if(Modifier.isStatic(field.getModifiers())){
+                    if (Modifier.isStatic(field.getModifiers())) {
                         continue;
                     }
                     field.setAccessible(true);
@@ -164,7 +164,7 @@ public class ClassUtils {
 
 
     /**
-     * @param clazz the class
+     * @param clazz     the class
      * @param fieldName field name
      * @return the current Field
      */
@@ -187,5 +187,16 @@ public class ClassUtils {
             }
         }
         throw new TaraException("No such field " + fieldName + "/" + clazz.getSimpleName());
+    }
+
+    public static Class<?> classForName(String name) throws ClassNotFoundException {
+        try {
+            ClassLoader classLoader = Thread.currentThread().getContextClassLoader();
+            if (classLoader != null) {
+                return classLoader.loadClass(name);
+            }
+        } catch (Throwable ignore) {
+        }
+        return Class.forName(name);
     }
 }
