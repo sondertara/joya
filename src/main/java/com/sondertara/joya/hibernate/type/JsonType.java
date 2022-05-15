@@ -33,11 +33,11 @@ import java.util.Properties;
 /**
  * @author huangxiaohu
  */
-public class JSONType implements UserType, DynamicParameterizedType, Serializable {
+public class JsonType implements UserType, DynamicParameterizedType, Serializable {
     public static final String TYPE = "JSONType";
     public static final String CLASS_NAME = "class";
     private static final long serialVersionUID = 352044032843534075L;
-    private static final CoreMessageLogger LOG = Logger.getMessageLogger(CoreMessageLogger.class, JSONType.class.getName());
+    private static final CoreMessageLogger LOG = Logger.getMessageLogger(CoreMessageLogger.class, JsonType.class.getName());
     private int sqlType = Types.VARCHAR;
     private Type type = Object.class;
 
