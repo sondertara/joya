@@ -139,6 +139,20 @@ public class SqlUtils {
     }
 
     /**
+     * 替换连续空格 为标准一个空格
+     *
+     * @param sql sql str
+     * @return the single space sql srt
+     */
+    public static String replaceSpace(String sql) {
+        String patternString = "\\s*( {2,})\\s*";
+        Pattern pattern = Pattern.compile(patternString);
+        Matcher matcher = pattern.matcher(sql);
+        return matcher.replaceAll(" ").trim();
+    }
+
+
+    /**
      * 格式化列,只格式化左边部分
      *
      * @param sql str

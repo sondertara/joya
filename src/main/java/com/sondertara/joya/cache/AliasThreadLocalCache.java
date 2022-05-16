@@ -67,8 +67,7 @@ public final class AliasThreadLocalCache {
     @SuppressWarnings("unchecked")
     public static void generateTableAlias(String tableAndAlias) {
         Assert.notBlank(tableAndAlias);
-
-        String[] strings = tableAndAlias.split(" AS ");
+        String[] strings = tableAndAlias.split(" ");
 
         LocalEntityCache.getInstance().get(strings[0].toLowerCase()).ifPresent(t -> {
             LinkedHashMap<String, TableAlias> aliasMap = (LinkedHashMap<String, TableAlias>) ThreadLocalUtil.get(JOYA_SQL);

@@ -1,11 +1,11 @@
 package com.sondertara.joya.core.query;
 
 import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
 import com.sondertara.common.exception.TaraException;
 import com.sondertara.common.function.TaraFunction;
 import com.sondertara.common.structure.NodeList;
 import com.sondertara.common.util.CollectionUtils;
-import com.sondertara.common.util.PatternPool;
 import com.sondertara.common.util.StringFormatter;
 import com.sondertara.common.util.StringUtils;
 import com.sondertara.joya.cache.AliasThreadLocalCache;
@@ -69,8 +69,8 @@ public class NativeSqlQueryBuilder implements SelectBuilder, FromBuilder, WhereB
     private List<Object> params;
 
     public NativeSqlQueryBuilder() {
+        ThreadLocalUtil.put(JoyaConst.JOYA_SQL, Maps.newLinkedHashMap());
         this.orderBy = new ArrayList<>();
-
     }
 
 
@@ -238,20 +238,22 @@ public class NativeSqlQueryBuilder implements SelectBuilder, FromBuilder, WhereB
      * from 要查询的表以及关联表
      */
     @Override
-    public WhereBuilder from(String... tableAndJoinTable) {
-
+    public WhereBuilder from(String... tables) {
         StringJoiner sj = new StringJoiner(", ");
-        for (String s : tableAndJoinTable) {
-            String[] split = s.split(",");
+        //1.单表
+        for (String table : tables) {
+            String[] split = table.split(",");
             for (String s1 : split) {
-                String tableAndAlias = SqlUtils.replaceAs(s1).trim();
-                Pattern pattern = PatternPool.get("[A-Za-z0-9_]+( AS )[A-Za-z0-9_]+");
-                Matcher matcher = pattern.matcher(tableAndAlias);
-                while (matcher.find()) {
-                    AliasThreadLocalCache.generateTableAlias(matcher.group());
-
+                s1 = s1.trim();
+                if (s1.contains("join")) {
+                    throw new TaraException("Table join is not allowed here,please use [from(Class<?>... clazz)] or [from(UnaryOperator<JoinCriterion> func)].");
                 }
-                sj.add(tableAndAlias);
+                //有别名的情况
+                if (s1.contains(" ") || StringUtils.containsIgnoreCase(s1, "AS")) {
+                    throw new TaraException("The table alias name will generate by default,so don`t allocate the alias");
+                }
+                sj.add(s1);
+                AliasThreadLocalCache.generateTableAlias(s1);
             }
         }
         this.from = sj.toString();
@@ -472,7 +474,7 @@ public class NativeSqlQueryBuilder implements SelectBuilder, FromBuilder, WhereB
             sj.add("FROM");
             StringJoiner stringJoiner = new StringJoiner(", ");
             for (TableAlias table : tables) {
-                stringJoiner.add(StringFormatter.format("{} AS {}", table.getTableName(), table.getAliasName()));
+                stringJoiner.add(StringFormatter.format("{} {}", table.getTableName(), table.getAliasName()));
             }
             sj.merge(stringJoiner);
         }
