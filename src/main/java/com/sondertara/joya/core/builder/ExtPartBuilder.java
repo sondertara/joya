@@ -12,27 +12,40 @@ import java.util.function.UnaryOperator;
 public interface ExtPartBuilder extends SetupBuilder {
 
     /**
-     * groupBy
+     * group by
+     *
+     * @param groupBySegment param
+     * @return the builder
      */
     ExtPartBuilder groupBy(String groupBySegment);
 
     /**
      * having
-     * 使用方式: nativeSql.having(h -> h.eq().ne().in())
+     * <p>
+     * example:nativeSql.having(h -> h.eq().ne().in())
+     *
+     * @param func the function
+     * @return the builder
      */
     ExtPartBuilder having(UnaryOperator<WhereCriterion> func);
 
     /**
-     * orderBy
-     * 排序参数如果是前端传进来,用QueryRequest接收的 ===> nativeSql.orderBy( queryRequest.getOrderBy(表别名) )
-     * 手写逻辑指定排序字段 ==> nativeSql.orderBy("su.age asc")
+     * order by with function
+     * <p>
+     * example: nativeSql.orderBy("su.age asc")
+     *
+     * @param fn      the column function
+     * @param orderBy the order type
+     * @param <T>     the type of table class
+     * @return the builder
      */
     <T> ExtPartBuilder orderBy(TaraFunction<T, ?> fn, OrderParam.OrderBy orderBy);
 
     /**
-     * orderBy
-     * 排序参数如果是前端传进来,用QueryRequest接收的 ===> nativeSql.orderBy( queryRequest.getOrderBy(表别名) )
-     * 手写逻辑指定排序字段 ==> nativeSql.orderBy("su.age asc")
+     * order by with string
+     *
+     * @param orderBySegment order by params
+     * @return the builder
      */
     ExtPartBuilder orderBy(String... orderBySegment);
 }

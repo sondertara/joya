@@ -9,19 +9,25 @@ import java.util.function.UnaryOperator;
  */
 public interface WhereBuilder extends ExtPartBuilder {
 
+
     /**
-     * where
-     * 使用方式: nativeSql.where(w -> w.eq().ne().in())
+     * lambda where
+     * <p>
+     * example :nativeSql.where(w -> w.eq().ne().in())
+     *
+     * @param func the function
+     * @return the next builder
      */
     ExtPartBuilder where(UnaryOperator<WhereCriterion> func);
 
 
     /**
-     * where
+     * where part with  appoint the condition link type,default is #AND
      * 使用方式: nativeSql.where(w -> w.eq().ne().in())
      *
      * @param func   条件
      * @param linkOr 是否为or查询 默认为and
+     * @return the next builder
      */
     ExtPartBuilder where(UnaryOperator<WhereCriterion> func, boolean linkOr);
 
@@ -30,6 +36,7 @@ public interface WhereBuilder extends ExtPartBuilder {
      * 指定字段的别名
      *
      * @param whereFields 特殊字段
+     * @return this builder
      */
     WhereBuilder specificW(String... whereFields);
 }
