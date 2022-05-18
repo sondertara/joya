@@ -5,7 +5,7 @@ import com.alibaba.fastjson.JSON;
 import com.alibaba.fastjson.JSONObject;
 import com.sondertara.common.model.ResultDTO;
 import com.sondertara.common.util.CollectionUtils;
-import com.sondertara.joya.enums.ReqResultCodeEnum;
+import com.sondertara.joya.enums.ReqResultCode;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.web.client.RestTemplateBuilder;
 import org.springframework.core.ParameterizedTypeReference;
@@ -531,17 +531,17 @@ public class RestTemplateUtils {
         if (ex instanceof ResourceAccessException) {
             Throwable cause = ex.getCause();
             if (cause instanceof ConnectException) {
-                result = ResultDTO.fail(ReqResultCodeEnum.CONNECT_REFUSED.getCode(), ex.getMessage());
+                result = ResultDTO.fail(ReqResultCode.CONNECT_REFUSED.getCode(), ex.getMessage());
             } else if (cause instanceof SocketTimeoutException) {
                 if (cause.getMessage().toLowerCase().contains("connect")) {
-                    result = ResultDTO.fail(ReqResultCodeEnum.CONNECT_TIMEOUT.getCode(), ex.getMessage());
+                    result = ResultDTO.fail(ReqResultCode.CONNECT_TIMEOUT.getCode(), ex.getMessage());
                 } else if (cause.getMessage().toLowerCase().contains("read")) {
-                    result = ResultDTO.fail(ReqResultCodeEnum.READ_TIMEOUT.getCode(), ex.getMessage());
+                    result = ResultDTO.fail(ReqResultCode.READ_TIMEOUT.getCode(), ex.getMessage());
                 } else {
-                    result = ResultDTO.fail(ReqResultCodeEnum.SOCKET_TIMEOUT.getCode(), ex.getMessage());
+                    result = ResultDTO.fail(ReqResultCode.SOCKET_TIMEOUT.getCode(), ex.getMessage());
                 }
             } else {
-                result = ResultDTO.fail(ReqResultCodeEnum.RESOURCE_REQUEST_ERROR.getCode(), ex.getMessage());
+                result = ResultDTO.fail(ReqResultCode.RESOURCE_REQUEST_ERROR.getCode(), ex.getMessage());
             }
         } else if (ex instanceof HttpStatusCodeException) {
             HttpStatusCodeException e = (HttpStatusCodeException) ex;
@@ -558,7 +558,7 @@ public class RestTemplateUtils {
             object.put("headers", Objects.requireNonNull(e.getResponseHeaders()).toSingleValueMap());
             result = ResultDTO.fail(String.valueOf(e.getRawStatusCode()), object.toJSONString());
         } else {
-            result = ResultDTO.fail(ReqResultCodeEnum.REQUEST_ERROR.getCode(), ex.getMessage());
+            result = ResultDTO.fail(ReqResultCode.REQUEST_ERROR.getCode(), ex.getMessage());
         }
         log.error("请求接口失败,失败原因:\n{}", result);
         return result;

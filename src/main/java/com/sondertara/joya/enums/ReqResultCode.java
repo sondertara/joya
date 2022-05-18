@@ -7,7 +7,7 @@ package com.sondertara.joya.enums;
  * @date 2021/7/21 9:56
  */
 
-public enum ReqResultCodeEnum {
+public enum ReqResultCode {
     /**
      * 参数为空
      */
@@ -48,7 +48,7 @@ public enum ReqResultCodeEnum {
     ;
     private String code;
 
-    ReqResultCodeEnum(String code) {
+    ReqResultCode(String code) {
         this.code = code;
     }
 

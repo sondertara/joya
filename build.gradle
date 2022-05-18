@@ -30,7 +30,7 @@ allprojects {
 def isRelease = false
 
 group = 'com.sondertara'
-version = '0.0.7.208'
+version = '0.0.7.209'
 archivesBaseName = 'joya'
 sourceCompatibility = '1.8'
 

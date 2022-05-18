@@ -1,4 +1,4 @@
-package com.sondertara.joya.core.jdbc;
+package com.sondertara.joya.enums;
 
 import com.sondertara.common.exception.TaraException;
 import lombok.Getter;
