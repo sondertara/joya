@@ -37,8 +37,7 @@ public class CollectionToStringUserType implements UserType, ParameterizedType, 
     /**
      * 默认 ArrayList
      */
-    @SuppressWarnings("rawtypes")
-    private Class collectionType;
+    private Class<?> collectionType;
 
 
     @Override
@@ -132,7 +131,7 @@ public class CollectionToStringUserType implements UserType, ParameterizedType, 
     @SuppressWarnings("rawtypes")
     private Collection newCollection() {
         try {
-            return (Collection) collectionType.newInstance();
+            return (Collection) collectionType.getDeclaredConstructor().newInstance();
         } catch (Exception e) {
             throw new HibernateException(e);
         }
