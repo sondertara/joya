@@ -474,6 +474,7 @@ public class NativeSqlQueryBuilder implements SelectBuilder, FromBuilder, WhereB
             sj.add("FROM");
             StringJoiner stringJoiner = new StringJoiner(", ");
             for (TableAlias table : tables) {
+                // Oracle not support AS
                 stringJoiner.add(StringFormatter.format("{} {}", table.getTableName(), table.getAliasName()));
             }
             sj.merge(stringJoiner);

@@ -382,7 +382,7 @@ public class JoyaJdbc {
             List<String> set = data.keySet().stream().map(s -> "?").collect(Collectors.toList());
             return insert(StringFormatter.format("insert into {}({}) values({})", table.getTableName(), String.join(",", data.keySet()), String.join(",", set)), data.values().toArray());
         }
-        Object value = querySingleValue(StringFormatter.format("select {} from {} where {} = ?", table.getPrimaryKey(), table.getTableName(), table.getPrimaryKey()), Object.class,data.get(table.getPrimaryKey()));
+        Object value = querySingleValue(StringFormatter.format("select {} from {} where {} = ?", table.getPrimaryKey(), table.getTableName(), table.getPrimaryKey()), Object.class, data.get(table.getPrimaryKey()));
         List<String> set = data.keySet().stream().map(s -> "?").collect(Collectors.toList());
         if (null == value) {
             insert(StringFormatter.format("insert into {}({}) values({})", table.getTableName(), String.join(",", data.keySet()), String.join(",", set)), data.values().toArray());

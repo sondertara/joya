@@ -1,4 +1,5 @@
 package com.sondertara.joya.enums;
+
 /**
  * 请求返回通用结果
  *

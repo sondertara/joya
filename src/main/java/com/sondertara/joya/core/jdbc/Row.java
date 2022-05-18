@@ -14,72 +14,84 @@ import java.util.Date;
  */
 public interface Row {
     /**
-     *  get obj
+     * get obj
+     *
      * @param columnLabel column
-     * @return  column of one row
+     * @return column of one row
      */
     Object getObject(String columnLabel);
 
     /**
-     *  get obj
+     * get obj
+     *
      * @param columnIndex column index
-     * @return  column of one row
+     * @return column of one row
      */
     Object getObject(int columnIndex);
 
     /**
-     *  get long
+     * get long
+     *
      * @param columnLabel name
      * @return long
      */
     long getLong(String columnLabel);
 
     /**
-     *  long
+     * long
+     *
      * @param columnIndex index
      * @return long
      */
     long getLong(int columnIndex);
 
-     /**
-     *  get int
+    /**
+     * get int
+     *
      * @param columnLabel name
      * @return int
      */
     int getInt(String columnLabel);
 
     /**
-     *  int
+     * int
+     *
      * @param columnIndex index
      * @return i
      */
     int getInt(int columnIndex);
+
     boolean getBoolean(int columnIndex);
+
     boolean getBoolean(String columnLabel);
 
-     /**
-     *  get int
+    /**
+     * get int
+     *
      * @param columnLabel name
      * @return int
      */
     BigDecimal getBigDecimal(String columnLabel);
 
     /**
-     *  int
+     * int
+     *
      * @param columnIndex index
      * @return i
      */
     BigDecimal getBigDecimal(int columnIndex);
 
-     /**
-     *  get int
+    /**
+     * get int
+     *
      * @param columnLabel name
      * @return int
      */
     Date getDate(String columnLabel);
 
     /**
-     *  int
+     * int
+     *
      * @param columnIndex index
      * @return i
      */
@@ -87,6 +99,7 @@ public interface Row {
 
     /**
      * get str
+     *
      * @param columnLabel name
      * @return s
      */
@@ -94,6 +107,7 @@ public interface Row {
 
     /**
      * get str
+     *
      * @param columnIndex index
      * @return s
      */
@@ -101,6 +115,7 @@ public interface Row {
 
     /**
      * get double
+     *
      * @param columnLabel name
      * @return d
      */
@@ -108,6 +123,7 @@ public interface Row {
 
     /**
      * get double
+     *
      * @param columnIndex i
      * @return d
      */

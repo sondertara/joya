@@ -186,6 +186,7 @@ public class RecordAdapterForResultSet implements Record, Row {
             throw new RuntimeException(e.getMessage(), e);
         }
     }
+
     @Override
     public Date getDate(int columnIndex) {
         try {

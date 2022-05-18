@@ -13,7 +13,8 @@ import java.sql.Statement;
 public interface StatementCallback<T> {
 
     /**
-     *  in  Statement
+     * in  Statement
+     *
      * @param stmt sql Statement
      * @return result
      * @throws SQLException e

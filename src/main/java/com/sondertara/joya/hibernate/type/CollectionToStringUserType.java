@@ -104,7 +104,7 @@ public class CollectionToStringUserType implements UserType, ParameterizedType, 
      * @param names names
      * @param owner owner
      * @throws HibernateException e
-     * @throws SQLException e
+     * @throws SQLException       e
      */
     @Override
     @SuppressWarnings({"rawtypes", "unchecked"})

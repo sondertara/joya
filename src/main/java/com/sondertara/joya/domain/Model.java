@@ -68,7 +68,7 @@ public abstract class Model<T, ID extends Serializable> implements Serializable,
      * @return 查询到的对象
      */
     public T findById() {
-        return getRepository().findById(Objects.requireNonNull(getId())).orElseThrow(()->new NullPointerException("ID is null"));
+        return getRepository().findById(Objects.requireNonNull(getId())).orElseThrow(() -> new NullPointerException("ID is null"));
     }
 
     /**

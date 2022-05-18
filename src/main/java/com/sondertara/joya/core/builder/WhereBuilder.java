@@ -7,13 +7,13 @@ import java.util.function.UnaryOperator;
 /**
  * @author huangxiaohu
  */
-public interface WhereBuilder  extends ExtPartBuilder{
+public interface WhereBuilder extends ExtPartBuilder {
 
     /**
      * where
      * 使用方式: nativeSql.where(w -> w.eq().ne().in())
      */
-     ExtPartBuilder where(UnaryOperator<WhereCriterion> func);
+    ExtPartBuilder where(UnaryOperator<WhereCriterion> func);
 
 
     /**
