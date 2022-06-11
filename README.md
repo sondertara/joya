@@ -27,14 +27,14 @@ Maven Project
 <dependency>
     <groupId>com.sondertara</groupId>
     <artifactId>joya</artifactId>
-    <version>0.0.7.209</version>
+    <version>0.1.0</version>
 </dependency>
 ```
 
 Gradle Project
 
 ```groovy
-implementation 'com.sondertara:joya:0.0.7.209'
+implementation 'com.sondertara:joya:0.1.0'
 ```
 
 ### 2.添加配置
@@ -257,19 +257,17 @@ public class Test {
         NativeSqlQuery query1 = NativeSqlQuery.builder()
                 .select()
                 .from(j -> j.join(UserPo::getId, UserExtendPo::getUserId))
-                .where(w -> w
-                        .eq(UserPo::getUserName, "张三"))
+                .where(w -> w.eq(UserPo::getUserName, "张三"))
                 .build();
 
 
         //对于冲突字段可以指定别名,如user表和user_extend表同时有 updateTime字段,可以通过指定别名来避免字段值覆盖
         // SELECT t0.id,t0.user_name,t0.user_email,t0.user_phone,t0.update_time,t1.update_time AS modifyTime,t1.account_expired_time,t1.password_expired_time,t1.ext_data FROM user AS t0 JOIN user_extend AS t1 ON t0.id = t1.user_id WHERE t0.user_name = ?1
         NativeSqlQuery query3 = NativeSqlQuery.builder()
+                .wrapColumn("t1.updateTime AS modifyTime") //将user_extend中重名的updateTime 指定为modifyTime
                 .select()//查询全部字段
-                .specificS("t1.updateTime AS modifyTime") //将user_extend中重名的updateTime 指定为modifyTime
                 .from(j -> j.join(UserPo::getId, UserExtendPo::getUserId))
-                .where(w -> w
-                        .eq(UserPo::getUserName, "张三"))
+                .where(w -> w.eq(UserPo::getUserName, "张三"))
                 .build();
     }
 }
@@ -386,7 +384,7 @@ PageResult<UserDTO> pageResult=joyaRepository.queryPage(pageQueryParam,UserDTO.c
             .endsWith() // like '%a'
             .contains() // like '%a%'
             .startsWith() // like 'a%'
-            .specificS()) //指定特殊的查询语句
+            .addCondition()) //指定特殊的查询语句
 ```
 
 where 查询语句默认是`AND`条件联接,可以选择`OR`条件联接
