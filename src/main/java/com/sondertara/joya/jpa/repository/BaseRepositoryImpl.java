@@ -7,8 +7,7 @@ import com.sondertara.joya.hibernate.transformer.AliasToMapResultTransformer;
 import com.sondertara.joya.utils.BeanUtil;
 import com.sondertara.joya.utils.SqlUtils;
 import org.apache.commons.beanutils.BeanUtils;
-import org.hibernate.Session;
-import org.hibernate.query.internal.NativeQueryImpl;
+import org.hibernate.query.NativeQuery;
 import org.hibernate.transform.Transformers;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
@@ -77,7 +76,7 @@ public class BaseRepositoryImpl<T, ID extends Serializable> extends SimpleJpaRep
         } else {
             T po = super.findById(((ID) Objects.requireNonNull(eif.getId(entity)))).orElse(null);
             if (Objects.nonNull(po)) {
-                BeanUtil.copyProperties(entity, po);
+                BeanUtil.copyPropertiesIgnoreNull(entity, po);
                 return (S) this.em.merge(po);
             }
             return this.em.merge(entity);
@@ -140,39 +139,34 @@ public class BaseRepositoryImpl<T, ID extends Serializable> extends SimpleJpaRep
 
 
     @Override
-    @SuppressWarnings("unchecked")
+    @SuppressWarnings({"unchecked", "deprecation"})
     public <X> List<X> findListBySql(String sql, Class<X> clazz, Object... params) {
-        Query query = em.unwrap(Session.class).createNativeQuery(sql);
+        Query query = em.createNativeQuery(sql);
         setParameters(query, params);
-        return query.unwrap(NativeQueryImpl.class).setResultTransformer(new AliasToBeanTransformer<>(clazz)).list();
+        return query.unwrap(NativeQuery.class).setResultTransformer(new AliasToBeanTransformer<>(clazz)).list();
     }
 
     @Override
-    @SuppressWarnings("unchecked")
     public <X> List<X> findListBySql(NativeSqlQuery nativeSql, Class<X> resultClass) {
-        Query query = em.unwrap(Session.class).createNativeQuery(nativeSql.toSql());
-        setParameters(query, nativeSql.getParams());
-        return query.unwrap(NativeQueryImpl.class).setResultTransformer(new AliasToBeanTransformer<>(resultClass)).list();
+        return findListBySql(nativeSql.toSql(), resultClass, null != nativeSql.getParams() ? nativeSql.getParams().toArray() : new Object[0]);
     }
 
     @Override
-    @SuppressWarnings("unchecked")
+    @SuppressWarnings({"unchecked", "deprecation"})
     public <X> Page<X> queryPageBySql(NativeSqlQuery nativeSql, Class<X> resultClass, Integer pageNo, Integer pageSize) {
         String sqlStr = nativeSql.toSql();
 
         //获取总记录数
-        Session session = em.unwrap(Session.class);
         String countSql = SqlUtils.buildCountSql(sqlStr);
-        Query countQuery = session.createNativeQuery(countSql);
+        Query countQuery = em.createNativeQuery(countSql);
         setParameters(countQuery, nativeSql.getParams());
 
         long totalRecord = ((Number) countQuery.getSingleResult()).longValue();
 
         //获取分页结果
-        Query pageQuery = session.createNativeQuery(sqlStr);
+        Query pageQuery = em.createNativeQuery(sqlStr);
         setParameters(pageQuery, nativeSql.getParams());
-
-        List<X> result = totalRecord == 0 ? new ArrayList<>(0) : pageQuery.setFirstResult(pageNo).setMaxResults(pageSize).unwrap(NativeQueryImpl.class).setResultTransformer(new AliasToBeanTransformer<>(resultClass)).list();
+        List<X> result = totalRecord == 0 ? new ArrayList<>(0) : pageQuery.setFirstResult(pageNo).setMaxResults(pageSize).unwrap(NativeQuery.class).setResultTransformer(new AliasToBeanTransformer<>(resultClass)).list();
 
         return new PageImpl<>(result, PageRequest.of(pageNo, pageSize), totalRecord);
     }
@@ -190,7 +184,7 @@ public class BaseRepositoryImpl<T, ID extends Serializable> extends SimpleJpaRep
     }
 
     public List<T> findAllByHql(final String ql, final Object... params) {
-        return findAllByHql(ql, (Pageable) null, params);
+        return findAllByHql(ql, null, params);
     }
 
     /**
@@ -249,7 +243,7 @@ public class BaseRepositoryImpl<T, ID extends Serializable> extends SimpleJpaRep
      * 按顺序设置Query参数
      */
     private void setParameters(Query query, Object[] params) {
-        if (params != null) {
+        if (params != null && params.length > 0) {
             for (int i = 0; i < params.length; i++) {
                 query.setParameter(i + 1, params[i]);
             }
@@ -260,7 +254,7 @@ public class BaseRepositoryImpl<T, ID extends Serializable> extends SimpleJpaRep
      * 按顺序设置Query参数
      */
     private void setParameters(Query query, List<Object> params) {
-        if (params != null) {
+        if (params != null && params.size() > 0) {
             for (int i = 0; i < params.size(); i++) {
                 query.setParameter(i + 1, params.get(i));
             }
@@ -290,47 +284,45 @@ public class BaseRepositoryImpl<T, ID extends Serializable> extends SimpleJpaRep
 
     @Override
     public List<Map<String, Object>> findMapListBySql(NativeSqlQuery nativeSql, boolean camelCase) {
-
-        return findMapListBySql(nativeSql, camelCase);
+        return findMapListBySql(nativeSql.toSql(), nativeSql.getParams(), camelCase);
     }
 
     @Override
     public Map<String, Object> findMapBySql(NativeSqlQuery nativeSql, boolean camelCase) {
-
-        return findMapBySql(nativeSql, camelCase);
+        return findMapBySql(nativeSql.toSql(), nativeSql.getParams(), camelCase);
     }
 
     /**
      * (non-Javadoc)
      */
     @Override
-    @SuppressWarnings({"unchecked"})
+    @SuppressWarnings({"unchecked", "deprecation"})
     public List<Map<String, Object>> findMapListBySql(String querySql, List<Object> params, boolean camelCase) {
         Query query = em.createNativeQuery(querySql);
         setParameters(query, params);
-        query.unwrap(NativeQueryImpl.class).setResultTransformer(AliasToMapResultTransformer.getInstance(camelCase));
+        query.unwrap(NativeQuery.class).setResultTransformer(AliasToMapResultTransformer.getInstance(camelCase));
         return query.getResultList();
     }
 
     @Override
-    @SuppressWarnings({"unchecked"})
+    @SuppressWarnings({"unchecked", "deprecation"})
     public Map<String, Object> findMapBySql(String querySql, List<Object> params, boolean camelCase) {
         Query query = em.createNativeQuery(querySql);
         setParameters(query, params);
-        query.unwrap(NativeQueryImpl.class).setResultTransformer(AliasToMapResultTransformer.getInstance(camelCase));
+        query.unwrap(NativeQuery.class).setResultTransformer(AliasToMapResultTransformer.getInstance(camelCase));
         return (Map<String, Object>) query.getSingleResult();
     }
 
-    @SuppressWarnings({"unchecked"})
+    @SuppressWarnings({"unchecked", "deprecation"})
     @Override
     public List<Map<String, Object>> findMapListByHql(String querySql, Map<String, ?> params) {
         Query query = this.createSqlQueryWithNameParam(querySql, params);
-        query.unwrap(NativeQueryImpl.class).setResultTransformer(Transformers.ALIAS_TO_ENTITY_MAP);
+        query.unwrap(NativeQuery.class).setResultTransformer(Transformers.ALIAS_TO_ENTITY_MAP);
         return query.getResultList();
     }
 
-    @SuppressWarnings("unchecked")
     @Override
+    @SuppressWarnings({"unchecked"})
     public List<Object> findListBySql(String querySql, Map<String, ?> params) {
         Query query = this.createSqlQueryWithNameParam(querySql, params);
         return query.getResultList();
@@ -341,7 +333,7 @@ public class BaseRepositoryImpl<T, ID extends Serializable> extends SimpleJpaRep
      *
      * @param values 参数Map
      */
-    @SuppressWarnings({"rawtypes", "unchecked"})
+    @SuppressWarnings({"unchecked"})
     public Query createQueryWithNameParam(final String queryJql, final Map<String, ?> values) {
 
         Query query = this.em.createQuery(queryJql);
@@ -392,13 +384,13 @@ public class BaseRepositoryImpl<T, ID extends Serializable> extends SimpleJpaRep
         return com.sondertara.common.util.BeanUtils.beanToBean(result, clazz);
     }
 
-    @SuppressWarnings({"unchecked"})
+    @SuppressWarnings({"unchecked", "deprecation"})
     @Override
     public Map<String, Object> findMapBySql(String querySql, Map<String, ?> params) {
 
         Query query = this.createSqlQueryWithNameParam(querySql, params);
 
-        query.unwrap(NativeQueryImpl.class).setResultTransformer(Transformers.ALIAS_TO_ENTITY_MAP);
+        query.unwrap(NativeQuery.class).setResultTransformer(Transformers.ALIAS_TO_ENTITY_MAP);
         return (Map<String, Object>) query.getSingleResult();
     }
 
