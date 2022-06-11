@@ -41,7 +41,7 @@ public class WhereCriterion {
     /**
      * the link type for where segments
      */
-    private Operator currentOpt;
+    private final Operator currentOpt;
 
     /**
      * 默认用 and 连接 查询条件
@@ -639,7 +639,7 @@ public class WhereCriterion {
     /**
      * 追加到 where条件中自定义sql字符串片段
      */
-    public void specificW(String part) {
+    public void addCondition(String part) {
         this.segments.add(SqlUtils.underlineColumn(part));
     }
 

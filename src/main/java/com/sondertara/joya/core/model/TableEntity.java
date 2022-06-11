@@ -32,7 +32,7 @@ public class TableEntity implements Serializable {
     private Map<String, Object> data;
     /**
      * the relation of column and the field
-     *
+     * <p>
      * key is column name ,value is the field name
      */
     private Map<String, String> relation;

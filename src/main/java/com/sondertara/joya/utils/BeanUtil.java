@@ -26,7 +26,7 @@ public abstract class BeanUtil extends org.springframework.beans.BeanUtils {
     /**
      * 修改spring的BeanUtils,不用null覆盖已有的值
      */
-    public static void copyProperties(Object source, Object target) throws BeansException {
+    public static void copyPropertiesIgnoreNull(Object source, Object target) throws BeansException {
         Assert.notNull(source, "Source must not be null");
         Assert.notNull(target, "Target must not be null");
         Class<?> clazz = target.getClass();

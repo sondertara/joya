@@ -1,9 +1,9 @@
 package com.sondertara.joya.core.jdbc.mapper;
 
 import com.sondertara.common.util.StringUtils;
+import com.sondertara.joya.cache.TableClassCache;
 import com.sondertara.joya.core.jdbc.Row;
 import com.sondertara.joya.core.model.TableEntity;
-import com.sondertara.joya.utils.ClassUtils;
 
 import javax.persistence.Entity;
 import javax.persistence.Table;
@@ -30,7 +30,7 @@ public class BeanRowMapper<T> implements RowMapper<T> {
             T bean = type.getDeclaredConstructor().newInstance();
             TableEntity tableEntity = null;
             if (type.isAnnotationPresent(Table.class) || type.isAnnotationPresent(Entity.class)) {
-                tableEntity = ClassUtils.getTable(bean, false);
+                tableEntity = TableClassCache.getInstance().getTable(bean, false);
             }
             for (int i = 1; i <= count; i++) {
                 String propertyName;

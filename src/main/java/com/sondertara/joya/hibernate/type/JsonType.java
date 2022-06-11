@@ -3,7 +3,6 @@ package com.sondertara.joya.hibernate.type;
 import com.alibaba.fastjson.JSON;
 import com.alibaba.fastjson.serializer.SerializerFeature;
 import com.sondertara.common.util.StringUtils;
-import com.sondertara.joya.utils.ClassUtils;
 import org.hibernate.HibernateException;
 import org.hibernate.engine.spi.SharedSessionContractImplementor;
 import org.hibernate.internal.CoreMessageLogger;
@@ -218,7 +217,7 @@ public class JsonType implements UserType, DynamicParameterizedType, Serializabl
             parseSqlType(reader.getAnnotationsMethod());
         } else {
             try {
-                type = ClassUtils.classForName((String) parameters.get(CLASS_NAME));
+                type = org.apache.commons.lang3.ClassUtils.getClass((String) parameters.get(CLASS_NAME));
             } catch (ClassNotFoundException exception) {
                 throw new HibernateException("class not found", exception);
             }

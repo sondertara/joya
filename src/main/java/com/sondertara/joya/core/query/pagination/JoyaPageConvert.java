@@ -1,7 +1,7 @@
 package com.sondertara.joya.core.query.pagination;
 
+import com.sondertara.common.util.CollectionUtils;
 import com.sondertara.common.util.StringFormatter;
-import com.sondertara.common.util.StringUtils;
 import com.sondertara.joya.core.query.NativeSqlQuery;
 import com.sondertara.joya.core.query.NativeSqlQueryBuilder;
 import com.sondertara.joya.core.query.criterion.JoinCriterion;
@@ -50,8 +50,10 @@ public class JoyaPageConvert {
     private static NativeSqlQuery buildNativeQuery(PageQueryParam queryParam, UnaryOperator<JoinCriterion> joinFunc, Class<?>... targetClass) {
         List<SearchParam> searchParams = queryParam.getParams();
         UnaryOperator<WhereCriterion> func = w -> {
-            if (StringUtils.isNotBlank(queryParam.getSpecificW())) {
-                w.specificW(queryParam.getSpecificW());
+            if (CollectionUtils.isNotEmpty(queryParam.getCondition())) {
+                for (String s : queryParam.getCondition()) {
+                    w.addCondition(s);
+                }
             }
             for (SearchParam searchParam : searchParams) {
                 String fieldName = searchParam.getFieldName();
@@ -96,14 +98,10 @@ public class JoyaPageConvert {
             return w;
         };
         NativeSqlQueryBuilder builder = new NativeSqlQueryBuilder();
-        if (null != queryParam.getSelect()) {
-            builder.select(queryParam.getSelect());
-        } else {
-            if (null != queryParam.getSpecificS()) {
-                builder.specificS(queryParam.getSpecificS().toArray(new String[0]));
-            }
-            builder.select();
+        if (null != queryParam.getColumns()) {
+            builder.wrapColumn(queryParam.getColumns().toArray(new String[0]));
         }
+        builder.select();
         if (null != targetClass && targetClass.length > 0) {
             builder.from(targetClass);
         } else {

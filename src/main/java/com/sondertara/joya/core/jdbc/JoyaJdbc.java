@@ -3,6 +3,7 @@ package com.sondertara.joya.core.jdbc;
 
 import com.sondertara.common.exception.TaraException;
 import com.sondertara.common.util.StringFormatter;
+import com.sondertara.joya.cache.TableClassCache;
 import com.sondertara.joya.core.jdbc.mapper.BeanRowMapper;
 import com.sondertara.joya.core.jdbc.mapper.ListRecordMapper;
 import com.sondertara.joya.core.jdbc.mapper.MapRowMapper;
@@ -11,7 +12,6 @@ import com.sondertara.joya.core.jdbc.mapper.RowMapper;
 import com.sondertara.joya.core.jdbc.mapper.SingleColumnRowMapper;
 import com.sondertara.joya.core.jdbc.mapper.SingleRowRecordMapper;
 import com.sondertara.joya.core.model.TableEntity;
-import com.sondertara.joya.utils.ClassUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -36,7 +36,7 @@ import java.util.stream.Collectors;
  */
 public class JoyaJdbc {
 
-    private static final Logger LOG = LoggerFactory.getLogger(JoyaJdbc.class);
+    private static final Logger log = LoggerFactory.getLogger(JoyaJdbc.class);
     private final ConnectionManager connManager;
 
     /**
@@ -86,7 +86,7 @@ public class JoyaJdbc {
                 return recordMapper.map(new RecordAdapterForResultSet(rs));
             }
         } catch (Exception e) {
-            LOG.error("query sql error,sql:{}", sql, e);
+            log.error("query sql error,sql:{}", sql, e);
             throw new TaraException(e);
         } finally {
             connManager.close(conn);
@@ -184,7 +184,7 @@ public class JoyaJdbc {
                 return stmt.executeUpdate(sql);
             }
         } catch (Exception e) {
-            LOG.error("update sql error,sql:{}", sql, e);
+            log.error("update sql error,sql:{}", sql, e);
             throw new TaraException(e);
         } finally {
             connManager.close(conn);
@@ -239,7 +239,7 @@ public class JoyaJdbc {
     }
 
     public <T> Object saveEntityIgnoreNull(T entity) {
-        TableEntity table = ClassUtils.getTable(entity.getClass(), true);
+        TableEntity table = TableClassCache.getInstance().getTable(entity, true);
         Map<String, Object> data = table.getData();
         Map<String, Object> newData = new LinkedHashMap<>();
         for (Map.Entry<String, Object> entry : data.entrySet()) {
@@ -253,10 +253,11 @@ public class JoyaJdbc {
 
 
     public <T> Object saveEntity(T entity) {
-        TableEntity table = ClassUtils.getTable(entity, true);
+        TableEntity table = TableClassCache.getInstance().getTable(entity, true);
         return save(table);
 
     }
+
 
     /**
      * 执行sql命令, 失败则抛出DbException
@@ -271,7 +272,7 @@ public class JoyaJdbc {
                 stmt.execute(sql);
             }
         } catch (Exception e) {
-            LOG.error("execute sql error,sql:{}", sql, e);
+            log.error("execute sql error,sql:{}", sql, e);
             throw new TaraException(e);
         } finally {
             connManager.close(conn);
@@ -320,7 +321,7 @@ public class JoyaJdbc {
             this.commit();
             return t;
         } catch (Exception e) {
-            LOG.error("TransactionCallback", e);
+            log.error("TransactionCallback", e);
             this.rollback();
             throw new TaraException(e);
         }
@@ -343,7 +344,7 @@ public class JoyaJdbc {
                 return t;
             }
         } catch (Exception e) {
-            LOG.error("TransactionCallback", e);
+            log.error("TransactionCallback", e);
             throw new TaraException(e);
         } finally {
             connManager.close(conn);

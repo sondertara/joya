@@ -3,6 +3,7 @@ package com.sondertara.joya.core.query.pagination;
 import com.google.common.collect.Lists;
 import lombok.Data;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -13,29 +14,30 @@ import java.util.List;
 @Data
 public abstract class JoyaQuery {
 
-
     /**
      * 特殊where语句
      */
-    public String specificW;
+    protected List<String> condition = new ArrayList<>();
+
     /**
-     * 指定select语句
+     * 指定from
      */
-    public String select;
+    protected String from;
     /**
      * 特殊select 用来指定重名字段的别名
      */
-    public List<String> specificS;
+    protected List<String> columns;
 
-    public List<String> getSpecificS() {
-        return specificS;
+    protected List<String> getCondition() {
+        return condition;
     }
 
-    public void setSpecificS(String... specificS) {
-        this.specificS = Lists.newArrayList(specificS);
+    public void addCondition(String condition) {
+        this.condition.add(condition);
     }
 
-    public void setSpecificF(String... specificF) {
-        this.specificS = Lists.newArrayList(specificF);
+
+    public void column(String... columns) {
+        this.columns = Lists.newArrayList(columns);
     }
 }

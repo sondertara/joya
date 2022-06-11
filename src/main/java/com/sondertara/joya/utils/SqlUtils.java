@@ -4,6 +4,7 @@ import com.github.vertical_blank.sqlformatter.SqlFormatter;
 import com.sondertara.common.util.RegexUtils;
 import com.sondertara.common.util.StringUtils;
 import com.sondertara.joya.core.query.NativeSqlQuery;
+import lombok.extern.slf4j.Slf4j;
 
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -11,6 +12,7 @@ import java.util.regex.Pattern;
 /**
  * @author huangxiaohu
  */
+@Slf4j
 public class SqlUtils {
     /**
      * 左边字段提取

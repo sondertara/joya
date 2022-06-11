@@ -1,29 +1,51 @@
-package com.sondertara.joya.utils;
+package com.sondertara.joya.cache;
 
+import com.google.common.collect.Maps;
 import com.sondertara.common.exception.TaraException;
 import com.sondertara.common.util.StringUtils;
 import com.sondertara.joya.core.model.TableEntity;
+import com.sondertara.joya.utils.cache.GuavaAbstractLoadingCache;
+import com.sondertara.joya.utils.cache.ILocalCache;
 
 import javax.persistence.Column;
 import javax.persistence.Entity;
 import javax.persistence.Id;
 import javax.persistence.Table;
+import javax.persistence.Transient;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
-import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ExecutionException;
 
 /**
  * @author skydu
  */
-public class ClassUtils {
+public class TableClassCache extends GuavaAbstractLoadingCache<Class<?>, Map<String, Field>> implements ILocalCache<Class<?>, Map<String, Field>> {
+
+    private static volatile TableClassCache cache = null;
+
+    private TableClassCache() {
+        setMaximumSize(1000);
+        setExpireAfterWriteDuration(60 * 60);
+    }
+
+
+    public synchronized static TableClassCache getInstance() {
+        if (null == cache) {
+            synchronized (TableClassCache.class) {
+                if (null == cache) {
+                    cache = new TableClassCache();
+                }
+            }
+        }
+        return cache;
+    }
 
     /**
      * @return get current classloader
@@ -37,7 +59,7 @@ public class ClassUtils {
         }
         if (cl == null) {
             // No thread context class loader -> use class loader of this class.
-            cl = ClassUtils.class.getClassLoader();
+            cl = TableClassCache.class.getClassLoader();
             if (cl == null) {
                 // getClassLoader() returning null indicates the bootstrap ClassLoader
                 try {
@@ -57,8 +79,8 @@ public class ClassUtils {
      * @param clazz class
      * @return field
      */
-    public static List<Field> getFieldList(Class<?> clazz) {
-        List<Field> fields = new ArrayList<>();
+    public static Map<String, Field> getAllFields(Class<?> clazz) {
+        Map<String, Field> fields = Maps.newLinkedHashMap();
         Set<String> filedNames = new HashSet<>();
         for (Class<?> c = clazz; c != Object.class; c = c.getSuperclass()) {
             try {
@@ -69,7 +91,7 @@ public class ClassUtils {
                         continue;
                     }
                     filedNames.add(field.getName());
-                    fields.add(field);
+                    fields.put(field.getName(), field);
                 }
             } catch (Exception e) {
                 throw new TaraException(e);
@@ -78,6 +100,7 @@ public class ClassUtils {
         return fields;
     }
 
+
     /**
      * 获取一个实体类对应数据库字段
      *
@@ -85,9 +108,9 @@ public class ClassUtils {
      * @param <T>  the class type of bean
      * @return the table data
      */
-    public static <T> TableEntity getTable(T bean, boolean readData) {
+    public <T> TableEntity getTable(T bean, boolean readData) {
         Map<String, Object> filedNames = new LinkedHashMap<>();
-        Map<String, String> relation = new HashMap<>();
+        Map<String, String> relation = Maps.newHashMap();
         Class<?> clazz = bean.getClass();
         Table table = clazz.getAnnotation(Table.class);
         String tableName = null;
@@ -102,46 +125,55 @@ public class ClassUtils {
         if (null == tableName) {
             throw new TaraException("No [@Table] or [@Entity] annotation found for class->" + clazz);
         }
-
         TableEntity tableDTO = new TableEntity();
         tableDTO.setTableName(tableName);
-        for (Class<?> c = clazz; c != Object.class; c = c.getSuperclass()) {
-            try {
-                Field[] list = c.getDeclaredFields();
-                for (Field field : list) {
-                    if (Modifier.isStatic(field.getModifiers())) {
-                        continue;
-                    }
-                    field.setAccessible(true);
-                    String name = field.getName();
-                    name = StringUtils.toUnderlineCase(name);
-                    Column column = field.getAnnotation(Column.class);
-                    if (null != column) {
-                        name = column.name();
-                    }
-                    Id id = field.getAnnotation(Id.class);
-                    if (null != id) {
-                        tableDTO.setPrimaryKey(name);
-                        tableDTO.setPrimaryKeyType(field.getType());
-                    }
-                    if (filedNames.containsKey(name)) {
-                        continue;
-                    }
-                    if (readData) {
-                        filedNames.put(name, field.get(bean));
-                    }
-                    relation.put(name, field.getName());
+        Optional<Map<String, Field>> optional = get(clazz);
+        return optional.map(fields -> {
+            for (Field field : fields.values()) {
+                if (Modifier.isStatic(field.getModifiers())) {
+                    continue;
                 }
-            } catch (Exception e) {
-                throw new TaraException(e);
+                if (field.isAnnotationPresent(Transient.class) || field.isAnnotationPresent(org.springframework.data.annotation.Transient.class)) {
+                    continue;
+                }
+                String name = field.getName();
+                name = StringUtils.toUnderlineCase(name);
+                Column column = field.getAnnotation(Column.class);
+                if (null != column) {
+                    name = column.name();
+                }
+                Id id = field.getAnnotation(Id.class);
+                if (null != id) {
+                    tableDTO.setPrimaryKey(name);
+                    tableDTO.setPrimaryKeyType(field.getType());
+                }
+                if (filedNames.containsKey(name)) {
+                    continue;
+                }
+                if (readData) {
+                    try {
+                        Object o;
+                        if (field.isAccessible()) {
+                            o = field.get(bean);
+                        } else {
+                            field.setAccessible(true);
+                            o = field.get(bean);
+                            field.setAccessible(false);
+                        }
+                        filedNames.put(name, o);
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                    }
+                }
+                relation.put(name, field.getName());
+
             }
-        }
+            tableDTO.setData(filedNames);
+            tableDTO.setRelation(relation);
+            return tableDTO;
+        }).orElseThrow(() -> new TaraException("Get Class definition error"));
 
-        tableDTO.setData(filedNames);
-        tableDTO.setRelation(relation);
-        return tableDTO;
     }
-
 
     /**
      * @param clazz
@@ -169,24 +201,8 @@ public class ClassUtils {
      * @return the current Field
      */
     public static Field getField(Class<?> clazz, String fieldName) {
-        List<Field> fields = getFieldList(clazz);
-        for (Field field : fields) {
-            if (field.getName().equals(fieldName)) {
-                return field;
-            }
-        }
-        return null;
-    }
-
-
-    public static Field getExistedField(Class<?> clazz, String fieldName) {
-        List<Field> fields = getFieldList(clazz);
-        for (Field field : fields) {
-            if (field.getName().equals(fieldName)) {
-                return field;
-            }
-        }
-        throw new TaraException("No such field " + fieldName + "/" + clazz.getSimpleName());
+        Map<String, Field> map = getAllFields(clazz);
+        return map.get(fieldName);
     }
 
     public static Class<?> classForName(String name) throws ClassNotFoundException {
@@ -198,5 +214,24 @@ public class ClassUtils {
         } catch (Throwable ignore) {
         }
         return Class.forName(name);
+    }
+
+    @Override
+    protected Map<String, Field> fetchData(Class<?> key) {
+        return getAllFields(key);
+    }
+
+    @Override
+    public Optional<Map<String, Field>> get(Class<?> key) {
+        try {
+            return Optional.ofNullable(getValue(key));
+        } catch (ExecutionException e) {
+            throw new TaraException(e);
+        }
+    }
+
+    @Override
+    public void remove(Class<?> key) {
+
     }
 }

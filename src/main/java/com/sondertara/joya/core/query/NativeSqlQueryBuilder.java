@@ -90,7 +90,7 @@ public class NativeSqlQueryBuilder implements SelectBuilder, FromBuilder, WhereB
     }
 
     /**
-     * 查询表的全部列,对于联表查询 如果字段名字有重复,只保留前面一个字段,可以配置specificS来指定字段别名
+     * 查询表的全部列,对于联表查询 如果字段名字有重复,只保留前面一个字段,可以配置 {@link NativeSqlQueryBuilder#wrapColumn(String...)} ()}wrapColumn来指定字段别名
      */
     @Override
     public FromBuilder select() {
@@ -103,7 +103,7 @@ public class NativeSqlQueryBuilder implements SelectBuilder, FromBuilder, WhereB
      * @param selectFields 特殊字段
      */
     @Override
-    public SelectBuilder specificS(String... selectFields) {
+    public SelectBuilder wrapColumn(String... selectFields) {
         this.specificS = Lists.newArrayList(selectFields);
         return this;
     }
@@ -121,19 +121,7 @@ public class NativeSqlQueryBuilder implements SelectBuilder, FromBuilder, WhereB
         return this;
     }
 
-    /**
-     * where 字段追加 一般用于特殊sql,如联表查询条件、特殊sql处理
-     * 指定字段的别名
-     *
-     * @param whereFields 特殊字段
-     */
-    @Override
-    public WhereBuilder specificW(String... whereFields) {
-        for (String whereField : whereFields) {
-            this.where.specificW(whereField);
-        }
-        return this;
-    }
+
 
 
     /**

@@ -1,10 +1,13 @@
 package com.sondertara.joya.core.query.pagination;
 
+import lombok.ToString;
+
 import java.io.Serializable;
 
 /**
  * @author huangxiaohu
  */
+@ToString
 public class SearchParam implements Serializable {
     private static final long serialVersionUID = -2687523337885804193L;
     private String fieldName;
