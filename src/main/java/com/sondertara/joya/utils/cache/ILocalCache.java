@@ -11,18 +11,18 @@ import java.util.Optional;
  */
 public interface ILocalCache<K, V> {
 
-    /**
-     * 从缓存中获取数据
-     *
-     * @param key key
-     * @return value
-     */
-    Optional<V> get(K key);
+  /**
+   * 从缓存中获取数据
+   *
+   * @param key key
+   * @return value
+   */
+  Optional<V> get(K key);
 
-    /**
-     * 从缓存中获取数据
-     *
-     * @param key key
-     */
-    void remove(K key);
-}  
+  /**
+   * 从缓存中获取数据
+   *
+   * @param key key
+   */
+  void remove(K key);
+}

@@ -13,40 +13,35 @@ import java.util.StringJoiner;
  */
 public class SelectCriterion {
 
-    /**
-     * select fields
-     */
-    private final StringJoiner fields;
+  /** select fields */
+  private final StringJoiner fields;
 
-    /**
-     * construct
-     */
-    public SelectCriterion() {
-        this.fields = new StringJoiner(", ");
-    }
+  /** construct */
+  public SelectCriterion() {
+    this.fields = new StringJoiner(", ");
+  }
 
-    /**
-     * add select field
-     *
-     * @param fn  apply column
-     * @param <T> generic table entity
-     * @return this
-     */
-    public <T> SelectCriterion add(TaraFunction<T, ?> fn) {
+  /**
+   * add select field
+   *
+   * @param fn apply column
+   * @param <T> generic table entity
+   * @return this
+   */
+  public <T> SelectCriterion add(TaraFunction<T, ?> fn) {
 
-        String column = AliasThreadLocalCache.getColumn(fn).getColumnAlias();
-        fields.add(column);
+    String column = AliasThreadLocalCache.getColumn(fn).getColumnAlias();
+    fields.add(column);
 
-        return this;
+    return this;
+  }
 
-    }
-
-    /**
-     * get select sql str
-     *
-     * @return sql str
-     */
-    public String getSelectFields() {
-        return this.fields.toString();
-    }
+  /**
+   * get select sql str
+   *
+   * @return sql str
+   */
+  public String getSelectFields() {
+    return this.fields.toString();
+  }
 }

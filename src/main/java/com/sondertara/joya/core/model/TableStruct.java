@@ -14,15 +14,9 @@ import java.util.Map;
  */
 @Data
 public final class TableStruct implements Serializable {
-    private String tableName;
-    /**
-     * entity className
-     */
-    private String className;
-    /**
-     * the  columns map
-     * key : the fieldName
-     * value: the table columnName
-     */
-    private Map<String, String> fields;
+  private String tableName;
+  /** entity className */
+  private String className;
+  /** the columns map key : the fieldName value: the table columnName */
+  private Map<String, String> fields;
 }

@@ -10,27 +10,25 @@ import java.util.Map;
  * @author SonderTara
  */
 public class MapFields extends Fields {
-    public MapFields(PropertyDescriptor propertyDescriptor) {
-        super(propertyDescriptor);
-    }
+  public MapFields(PropertyDescriptor propertyDescriptor) {
+    super(propertyDescriptor);
+  }
 
+  @Override
+  public boolean isMap() {
+    return true;
+  }
 
-    @Override
-    public boolean isMap() {
-        return true;
-    }
+  @Override
+  @SuppressWarnings({"unchecked", "rawtypes"})
+  public void setResultPropertyValue(
+      BeanWrapper bw, Object instantiate, String name, Object value) {
+    Map map = (Map) instantiate;
+    map.put(name, value);
+  }
 
-    @Override
-    @SuppressWarnings({"unchecked", "rawtypes"})
-    public void setResultPropertyValue(BeanWrapper bw, Object instantiate, String name, Object value) {
-        Map map = (Map) instantiate;
-        map.put(name, value);
-    }
-
-    @Override
-    public Object instantiateObjectValue() {
-        return new HashMap<>();
-    }
-
-
+  @Override
+  public Object instantiateObjectValue() {
+    return new HashMap<>();
+  }
 }

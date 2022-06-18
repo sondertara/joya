@@ -9,14 +9,13 @@ import java.io.Serializable;
  * @author huangxiaohu
  */
 public class PersistEntity implements Serializable {
-    @Transient
-    private boolean isNew = true;
+  @Transient private boolean isNew = true;
 
-    public boolean isNew() {
-        return isNew;
-    }
+  public boolean isNew() {
+    return isNew;
+  }
 
-    public void setNew(boolean aNew) {
-        isNew = aNew;
-    }
+  public void setNew(boolean aNew) {
+    isNew = aNew;
+  }
 }

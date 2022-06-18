@@ -10,11 +10,11 @@ import com.sondertara.joya.core.jdbc.Record;
 @FunctionalInterface
 public interface RecordMapper<T> {
 
-    /**
-     * convert the record
-     *
-     * @param record the result record
-     * @return the target object
-     */
-    T map(Record record);
+  /**
+   * convert the record
+   *
+   * @param record the result record
+   * @return the target object
+   */
+  T map(Record record);
 }

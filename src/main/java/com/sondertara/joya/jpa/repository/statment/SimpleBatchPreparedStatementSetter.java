@@ -17,31 +17,30 @@ import java.util.Map;
  */
 public class SimpleBatchPreparedStatementSetter implements BatchPreparedStatementSetter {
 
+  private final List<TableEntity> rows;
 
-    private final List<TableEntity> rows;
+  public SimpleBatchPreparedStatementSetter(List<TableEntity> rows) {
+    this.rows = rows;
+  }
 
-    public SimpleBatchPreparedStatementSetter(List<TableEntity> rows) {
-        this.rows = rows;
+  @Override
+  public void setValues(@NonNull PreparedStatement ps, int i) throws SQLException {
+    TableEntity table = rows.get(i);
+    Map<String, Object> data = table.getData();
+    int colIndex = 0;
+    for (Object value : data.values()) {
+      colIndex++;
+      if (value instanceof SqlParameterValue) {
+        SqlParameterValue paramValue = (SqlParameterValue) value;
+        StatementCreatorUtils.setParameterValue(ps, colIndex, paramValue, paramValue.getValue());
+      } else {
+        StatementCreatorUtils.setParameterValue(ps, colIndex, SqlTypeValue.TYPE_UNKNOWN, value);
+      }
     }
+  }
 
-    @Override
-    public void setValues(@NonNull PreparedStatement ps, int i) throws SQLException {
-        TableEntity table = rows.get(i);
-        Map<String, Object> data = table.getData();
-        int colIndex = 0;
-        for (Object value : data.values()) {
-            colIndex++;
-            if (value instanceof SqlParameterValue) {
-                SqlParameterValue paramValue = (SqlParameterValue) value;
-                StatementCreatorUtils.setParameterValue(ps, colIndex, paramValue, paramValue.getValue());
-            } else {
-                StatementCreatorUtils.setParameterValue(ps, colIndex, SqlTypeValue.TYPE_UNKNOWN, value);
-            }
-        }
-    }
-
-    @Override
-    public int getBatchSize() {
-        return this.rows.size();
-    }
+  @Override
+  public int getBatchSize() {
+    return this.rows.size();
+  }
 }

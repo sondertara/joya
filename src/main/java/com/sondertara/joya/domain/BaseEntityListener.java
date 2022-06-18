@@ -1,6 +1,5 @@
 package com.sondertara.joya.domain;
 
-
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Configurable;
 
@@ -19,33 +18,33 @@ import org.springframework.beans.factory.annotation.Configurable;
  */
 @Slf4j
 @Configurable
-//@CreatedDate @LastModifiedDate 由AuditingEntityListener完成
-//@CreatedBy LastModifiedBy 由CurrentUserAuditor完成
+// @CreatedDate @LastModifiedDate 由AuditingEntityListener完成
+// @CreatedBy LastModifiedBy 由CurrentUserAuditor完成
 public class BaseEntityListener {
 
-    /*@PrePersist
-    public void touchForCreate(BaseEntity domain){
-        domain.setDelFlag(BaseEntity.DEL_FLAG_NORMAL);
-        //log.info("开始保存------>"+domain.toString());
-    }
+  /*@PrePersist
+  public void touchForCreate(BaseEntity domain){
+      domain.setDelFlag(BaseEntity.DEL_FLAG_NORMAL);
+      //log.info("开始保存------>"+domain.toString());
+  }
 
 
-    @PreUpdate
-    public void touchForUpdate(BaseEntity domain){
-        if (null == domain.getDelFlag()){
-            domain.setDelFlag(BaseEntity.DEL_FLAG_NORMAL);
-        }
-        //log.info("开始更新------>"+domain.toString());
-    }
+  @PreUpdate
+  public void touchForUpdate(BaseEntity domain){
+      if (null == domain.getDelFlag()){
+          domain.setDelFlag(BaseEntity.DEL_FLAG_NORMAL);
+      }
+      //log.info("开始更新------>"+domain.toString());
+  }
 
-    @PostPersist
-    public void PostPersist(Object domain){
-        log.info("保存完毕------>"+domain.toString());
-    }
+  @PostPersist
+  public void PostPersist(Object domain){
+      log.info("保存完毕------>"+domain.toString());
+  }
 
-    @PostUpdate
-    public void PostUpdate(Object domain){
-       log.info("更新完毕------>"+domain.toString());
-    }*/
+  @PostUpdate
+  public void PostUpdate(Object domain){
+     log.info("更新完毕------>"+domain.toString());
+  }*/
 
 }

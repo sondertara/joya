@@ -12,14 +12,13 @@ import java.sql.SQLException;
 @FunctionalInterface
 public interface ConnectionCallback<T> {
 
-    /**
-     * do in transaction
-     *
-     * @param conn sql Connection
-     * @return result
-     * @throws SQLException e
-     */
-    @Nullable
-    T doInTransaction(Connection conn) throws SQLException;
-
+  /**
+   * do in transaction
+   *
+   * @param conn sql Connection
+   * @return result
+   * @throws SQLException e
+   */
+  @Nullable
+  T doInTransaction(Connection conn) throws SQLException;
 }

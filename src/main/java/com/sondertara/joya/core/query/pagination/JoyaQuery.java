@@ -14,30 +14,23 @@ import java.util.List;
 @Data
 public abstract class JoyaQuery {
 
-    /**
-     * 特殊where语句
-     */
-    protected List<String> condition = new ArrayList<>();
+  /** 特殊where语句 */
+  protected List<String> condition = new ArrayList<>();
 
-    /**
-     * 指定from
-     */
-    protected String from;
-    /**
-     * 特殊select 用来指定重名字段的别名
-     */
-    protected List<String> columns;
+  /** 指定from */
+  protected String from;
+  /** 特殊select 用来指定重名字段的别名 */
+  protected List<String> columns;
 
-    protected List<String> getCondition() {
-        return condition;
-    }
+  protected List<String> getCondition() {
+    return condition;
+  }
 
-    public void addCondition(String condition) {
-        this.condition.add(condition);
-    }
+  public void addCondition(String condition) {
+    this.condition.add(condition);
+  }
 
-
-    public void column(String... columns) {
-        this.columns = Lists.newArrayList(columns);
-    }
+  public void column(String... columns) {
+    this.columns = Lists.newArrayList(columns);
+  }
 }
