@@ -44,7 +44,7 @@ public class EntityManagerTableResultAdapter extends AbstractTableResult {
                 }
                 field.setAccessible(true);
                 Column fieldAnnotation = field.getAnnotation(Column.class);
-                String columnName = Optional.ofNullable(fieldAnnotation).map(f -> StringUtils.toLowerCase(f.name())).orElse(StringUtils.toUnderlineCase(field.getName()));
+                String columnName = Optional.ofNullable(fieldAnnotation).map(f -> StringUtils.isBlank(f.name()) ? StringUtils.toUnderlineCase(field.getName()) : StringUtils.toLowerCase(f.name())).orElse(StringUtils.toUnderlineCase(field.getName()));
                 fieldNames.put(field.getName(), columnName);
                 field.setAccessible(false);
             }

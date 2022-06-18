@@ -1,14 +1,17 @@
 package com.sondertara.joya.core.query.pagination;
 
+import com.sondertara.common.exception.TaraException;
+import com.sondertara.common.util.ArrayUtils;
+import com.sondertara.common.util.CollectionUtils;
 import com.sondertara.common.util.StringFormatter;
-import com.sondertara.common.util.StringUtils;
 import com.sondertara.joya.core.query.NativeSqlQuery;
 import com.sondertara.joya.core.query.NativeSqlQueryBuilder;
 import com.sondertara.joya.core.query.criterion.JoinCriterion;
 import com.sondertara.joya.core.query.criterion.WhereCriterion;
 import com.sondertara.joya.utils.SqlUtils;
 
-import java.util.Collections;
+import java.util.Arrays;
+import java.util.Collection;
 import java.util.List;
 import java.util.function.UnaryOperator;
 
@@ -47,11 +50,14 @@ public class JoyaPageConvert {
     }
 
 
+    @SuppressWarnings("unchecked")
     private static NativeSqlQuery buildNativeQuery(PageQueryParam queryParam, UnaryOperator<JoinCriterion> joinFunc, Class<?>... targetClass) {
         List<SearchParam> searchParams = queryParam.getParams();
         UnaryOperator<WhereCriterion> func = w -> {
-            if (StringUtils.isNotBlank(queryParam.getSpecificW())) {
-                w.specificW(queryParam.getSpecificW());
+            if (CollectionUtils.isNotEmpty(queryParam.getCondition())) {
+                for (String s : queryParam.getCondition()) {
+                    w.addCondition(s);
+                }
             }
             for (SearchParam searchParam : searchParams) {
                 String fieldName = searchParam.getFieldName();
@@ -78,7 +84,13 @@ public class JoyaPageConvert {
                         w.lte(fieldName, fieldValue);
                         break;
                     case IN:
-                        w.in(fieldName, Collections.singleton(fieldValue));
+                        if (ArrayUtils.isArray(fieldValue)) {
+                            w.in(fieldName, Arrays.asList((Object[]) fieldValue));
+                        } else if (fieldValue instanceof Collection) {
+                            w.in(fieldName, (Collection<Object>) fieldValue);
+                        } else {
+                            throw new TaraException("The value of operator [IN] must be  collection");
+                        }
                         break;
                     case LIKE:
                         w.contains(fieldName, fieldValue);
@@ -96,14 +108,10 @@ public class JoyaPageConvert {
             return w;
         };
         NativeSqlQueryBuilder builder = new NativeSqlQueryBuilder();
-        if (null != queryParam.getSelect()) {
-            builder.select(queryParam.getSelect());
-        } else {
-            if (null != queryParam.getSpecificS()) {
-                builder.specificS(queryParam.getSpecificS().toArray(new String[0]));
-            }
-            builder.select();
+        if (null != queryParam.getColumns()) {
+            builder.wrapColumn(queryParam.getColumns().toArray(new String[0]));
         }
+        builder.select();
         if (null != targetClass && targetClass.length > 0) {
             builder.from(targetClass);
         } else {

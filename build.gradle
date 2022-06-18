@@ -30,7 +30,7 @@ allprojects {
 def isRelease = false
 
 group = 'com.sondertara'
-version = '0.0.7.209'
+version = '0.1.1'
 archivesBaseName = 'joya'
 sourceCompatibility = '1.8'
 
@@ -75,8 +75,16 @@ dependencies {
     implementation 'com.sondertara:common-tara:0.1.0'
     compileOnly 'org.projectlombok:lombok:1.18.24'
     compileOnly 'com.oracle.database.jdbc:ojdbc8:21.5.0.0'
-
     annotationProcessor 'org.projectlombok:lombok:1.18.24'
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.8.2'
+
+}
+
+test {
+    useJUnitPlatform()
+    testLogging {
+        events "passed", "skipped", "failed"
+    }
 }
 
 

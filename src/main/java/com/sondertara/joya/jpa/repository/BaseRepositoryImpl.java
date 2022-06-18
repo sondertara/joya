@@ -77,7 +77,7 @@ public class BaseRepositoryImpl<T, ID extends Serializable> extends SimpleJpaRep
         } else {
             T po = super.findById(((ID) Objects.requireNonNull(eif.getId(entity)))).orElse(null);
             if (Objects.nonNull(po)) {
-                BeanUtil.copyProperties(entity, po);
+                BeanUtil.copyPropertiesIgnoreNull(entity, po);
                 return (S) this.em.merge(po);
             }
             return this.em.merge(entity);

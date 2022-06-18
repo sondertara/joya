@@ -31,12 +31,4 @@ public interface WhereBuilder extends ExtPartBuilder {
      */
     ExtPartBuilder where(UnaryOperator<WhereCriterion> func, boolean linkOr);
 
-    /**
-     * where 字段追加 一般用于特殊sql,如联表查询条件、特殊sql处理
-     * 指定字段的别名
-     *
-     * @param whereFields 特殊字段
-     * @return this builder
-     */
-    WhereBuilder specificW(String... whereFields);
 }

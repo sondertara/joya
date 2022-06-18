@@ -1,7 +1,6 @@
 package com.sondertara.joya.core.query.pagination;
 
 import com.google.common.collect.Lists;
-import lombok.Data;
 import lombok.EqualsAndHashCode;
 
 import java.io.Serializable;
@@ -15,7 +14,6 @@ import java.util.List;
  * @version 1.0 2020年12月
  */
 @EqualsAndHashCode(callSuper = true)
-@Data
 public class PageQueryParam extends JoyaQuery implements Serializable {
     /**
      * page size
@@ -62,5 +60,45 @@ public class PageQueryParam extends JoyaQuery implements Serializable {
     public void addSearchParam(String filed, Object value, FieldParam.Operator operator) {
 
         this.params.add(new SearchParam(filed, value, operator));
+    }
+
+    public Integer getPageSize() {
+        return pageSize;
+    }
+
+    public void pageSize(Integer pageSize) {
+        this.pageSize = pageSize;
+    }
+
+    public Integer getPage() {
+        return page;
+    }
+
+    public void page(Integer page) {
+        this.page = page;
+    }
+
+    public void linkType(LinkType linkType) {
+        this.linkType = linkType;
+    }
+
+    public void setParams(List<SearchParam> params) {
+        this.params = params;
+    }
+
+    public List<SearchParam> getParams() {
+        return params;
+    }
+
+    public LinkType getLinkType() {
+        return linkType;
+    }
+
+    public List<OrderParam> getOrderList() {
+        return orderList;
+    }
+
+    public void setOrderList(List<OrderParam> orderList) {
+        this.orderList = orderList;
     }
 }
