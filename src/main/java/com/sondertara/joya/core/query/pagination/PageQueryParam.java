@@ -6,6 +6,7 @@ import lombok.EqualsAndHashCode;
 import java.io.Serializable;
 import java.util.List;
 
+
 /**
  * pagination param
  *
@@ -14,73 +15,90 @@ import java.util.List;
  */
 @EqualsAndHashCode(callSuper = true)
 public class PageQueryParam extends JoyaQuery implements Serializable {
-  /** page size 分页大小 */
-  private Integer pageSize = 10;
-  /** page start default is zero 页数 默认从0开始 */
-  private Integer page = 0;
-  /** the query type,default is AND 连接类型 默认and */
-  private LinkType linkType = LinkType.AND;
-  /** the order param 排序字段 */
-  private List<OrderParam> orderList = Lists.newArrayList();
+    /**
+     * page size
+     * 分页大小
+     */
+    private Integer pageSize = 10;
+    /**
+     * page start default is zero
+     * 页数 默认从0开始
+     */
+    private Integer page = 0;
+    /**
+     * the query type,default is AND
+     * 连接类型 默认and
+     */
+    private LinkType linkType = LinkType.AND;
+    /**
+     * the order param
+     * 排序字段
+     */
+    private List<OrderParam> orderList = Lists.newArrayList();
 
-  /** the param of where 搜索参数 */
-  private List<SearchParam> params = Lists.newArrayList();
+    /**
+     * the param of where
+     * 搜索参数
+     */
+    private List<SearchParam> params = Lists.newArrayList();
 
-  public enum LinkType {
-    /** */
-    AND,
-    OR
-  }
+    public enum LinkType {
+        /**
+         *
+         */
+        AND, OR
 
-  /**
-   * add search param
-   *
-   * @param filed fileName
-   * @param value value
-   * @param operator operator
-   */
-  public void addSearchParam(String filed, Object value, FieldParam.Operator operator) {
+    }
 
-    this.params.add(new SearchParam(filed, value, operator));
-  }
+    /**
+     * add search param
+     *
+     * @param filed    fileName
+     * @param value    value
+     * @param operator operator
+     */
+    public void addSearchParam(String filed, Object value, FieldParam.Operator operator) {
 
-  public Integer getPageSize() {
-    return pageSize;
-  }
+        this.params.add(new SearchParam(filed, value, operator));
+    }
 
-  public void pageSize(Integer pageSize) {
-    this.pageSize = pageSize;
-  }
+    public Integer getPageSize() {
+        return pageSize;
+    }
 
-  public Integer getPage() {
-    return page;
-  }
+    public void pageSize(Integer pageSize) {
+        this.pageSize = pageSize;
+    }
 
-  public void page(Integer page) {
-    this.page = page;
-  }
+    public Integer getPage() {
+        return page;
+    }
 
-  public void linkType(LinkType linkType) {
-    this.linkType = linkType;
-  }
+    public void page(Integer page) {
+        this.page = page;
+    }
 
-  public void setParams(List<SearchParam> params) {
-    this.params = params;
-  }
+    public void linkType(LinkType linkType) {
+        this.linkType = linkType;
+    }
 
-  public List<SearchParam> getParams() {
-    return params;
-  }
+    public void setParams(List<SearchParam> params) {
+        this.params = params;
+    }
 
-  public LinkType getLinkType() {
-    return linkType;
-  }
+    public List<SearchParam> getParams() {
+        return params;
+    }
 
-  public List<OrderParam> getOrderList() {
-    return orderList;
-  }
+    public LinkType getLinkType() {
+        return linkType;
+    }
 
-  public void setOrderList(List<OrderParam> orderList) {
-    this.orderList = orderList;
-  }
+    public List<OrderParam> getOrderList() {
+        return orderList;
+    }
+
+    public void setOrderList(List<OrderParam> orderList) {
+        this.orderList = orderList;
+    }
 }

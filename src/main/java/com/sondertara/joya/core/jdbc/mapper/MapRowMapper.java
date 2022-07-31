@@ -16,22 +16,22 @@ import java.util.Map;
  */
 @Slf4j
 public class MapRowMapper implements RowMapper<Map<String, Object>> {
-  @Override
-  public Map<String, Object> map(Row row) {
-    Map<String, Object> map = new LinkedHashMap<>();
-    int count = row.getColumnCount();
-    for (int i = 1; i <= count; i++) {
-      String key = row.getColumnLabel(i);
-      Object value = row.getObject(i);
-      if (null != value) {
-        if (SqlDataHelper.isClob(value.getClass())) {
-          value = SqlDataHelper.extractString((Clob) value);
-        } else if (value instanceof TIMESTAMP) {
-          value = SqlDataHelper.extractDate(value);
+    @Override
+    public Map<String, Object> map(Row row) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        int count = row.getColumnCount();
+        for (int i = 1; i <= count; i++) {
+            String key = row.getColumnLabel(i);
+            Object value = row.getObject(i);
+            if (null != value) {
+                if (SqlDataHelper.isClob(value.getClass())) {
+                    value = SqlDataHelper.extractString((Clob) value);
+                } else if (value instanceof TIMESTAMP) {
+                    value = SqlDataHelper.extractDate(value);
+                }
+            }
+            map.put(key, value);
         }
-      }
-      map.put(key, value);
+        return map;
     }
-    return map;
-  }
 }

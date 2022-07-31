@@ -15,19 +15,19 @@ import java.util.List;
 @Data
 public class PageResult<T> implements Serializable {
 
-  private final Integer page;
-  private final Integer pageSize;
-  private final Long total;
-  private final List<T> data;
+    private final Integer page;
+    private final Integer pageSize;
+    private final Long total;
+    private final List<T> data;
 
-  public PageResult(Integer page, Integer pageSize, Long total, List<T> data) {
-    this.page = page;
-    this.pageSize = pageSize;
-    this.total = total;
-    if (null == data) {
-      this.data = new ArrayList<T>();
-    } else {
-      this.data = data;
+    public PageResult(Integer page, Integer pageSize, Long total, List<T> data) {
+        this.page = page;
+        this.pageSize = pageSize;
+        this.total = total;
+        if (null == data) {
+            this.data = new ArrayList<T>();
+        } else {
+            this.data = data;
+        }
     }
-  }
 }

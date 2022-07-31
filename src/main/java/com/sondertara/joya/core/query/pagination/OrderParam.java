@@ -1,5 +1,6 @@
 package com.sondertara.joya.core.query.pagination;
 
+
 import lombok.Data;
 
 import java.io.Serializable;
@@ -13,35 +14,48 @@ import java.io.Serializable;
 @Data
 public class OrderParam implements Serializable {
 
-  /** */
-  private static final long serialVersionUID = -7226188298305059440L;
-  /** 排序字段 */
-  private String fieldName;
-  /** 排序方式 asc desc; */
-  private OrderBy orderType;
 
-  public OrderParam(String fieldName, OrderBy orderType) {
+    /**
+     *
+     */
+    private static final long serialVersionUID = -7226188298305059440L;
+    /**
+     * 排序字段
+     */
+    private String fieldName;
+    /**
+     * 排序方式 asc desc;
+     */
+    private OrderBy orderType;
 
-    this.fieldName = fieldName;
-    this.orderType = orderType;
-  }
+    public OrderParam(String fieldName, OrderBy orderType) {
 
-  public OrderParam(String fieldName) {
+        this.fieldName = fieldName;
+        this.orderType = orderType;
+    }
 
-    this.fieldName = fieldName;
-    this.orderType = OrderBy.ASC;
-  }
+    public OrderParam(String fieldName) {
 
-  /**
-   * order parameter
-   *
-   * @author SonderTara
-   * @date 2021/11/14 17:55
-   */
-  public enum OrderBy {
-    /** asc */
-    ASC,
-    /** desc */
-    DESC
-  }
+        this.fieldName = fieldName;
+        this.orderType = OrderBy.ASC;
+    }
+
+    /**
+     * order parameter
+     *
+     * @author SonderTara
+     * @date 2021/11/14 17:55
+     */
+    public enum OrderBy {
+        /**
+         * asc
+         */
+        ASC,
+        /**
+         * desc
+         */
+        DESC
+    }
+
+
 }

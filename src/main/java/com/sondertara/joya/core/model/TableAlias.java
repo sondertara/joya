@@ -13,10 +13,16 @@ import java.io.Serializable;
  */
 @Data
 public class TableAlias implements Serializable {
-  /** the entity full class name */
-  private String className;
-  /** the table name form database */
-  private String tableName;
-  /** the table alias */
-  private String aliasName;
+    /**
+     * the entity full class name
+     */
+    private String className;
+    /**
+     * the table name form database
+     */
+    private String tableName;
+    /**
+     * the  table alias
+     */
+    private String aliasName;
 }

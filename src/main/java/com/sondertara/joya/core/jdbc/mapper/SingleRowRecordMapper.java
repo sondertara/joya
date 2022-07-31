@@ -8,17 +8,17 @@ import com.sondertara.joya.core.jdbc.Record;
  * @author huangxiaohu
  */
 public class SingleRowRecordMapper<T> implements RecordMapper<T> {
-  private final RowMapper<T> rowMapper;
+    private final RowMapper<T> rowMapper;
 
-  public SingleRowRecordMapper(RowMapper<T> rowMapper) {
-    this.rowMapper = rowMapper;
-  }
-
-  @Override
-  public T map(Record record) {
-    if (record.next()) {
-      return rowMapper.map(record.getCurrentRow());
+    public SingleRowRecordMapper(RowMapper<T> rowMapper) {
+        this.rowMapper = rowMapper;
     }
-    return null;
-  }
+
+    @Override
+    public T map(Record record) {
+        if (record.next()) {
+            return rowMapper.map(record.getCurrentRow());
+        }
+        return null;
+    }
 }

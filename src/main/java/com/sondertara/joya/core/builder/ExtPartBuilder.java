@@ -11,41 +11,41 @@ import java.util.function.UnaryOperator;
  */
 public interface ExtPartBuilder extends SetupBuilder {
 
-  /**
-   * group by
-   *
-   * @param groupBySegment param
-   * @return the builder
-   */
-  ExtPartBuilder groupBy(String groupBySegment);
+    /**
+     * group by
+     *
+     * @param groupBySegment param
+     * @return the builder
+     */
+    ExtPartBuilder groupBy(String groupBySegment);
 
-  /**
-   * having
-   *
-   * <p>example:nativeSql.having(h -> h.eq().ne().in())
-   *
-   * @param func the function
-   * @return the builder
-   */
-  ExtPartBuilder having(UnaryOperator<WhereCriterion> func);
+    /**
+     * having
+     * <p>
+     * example:nativeSql.having(h -> h.eq().ne().in())
+     *
+     * @param func the function
+     * @return the builder
+     */
+    ExtPartBuilder having(UnaryOperator<WhereCriterion> func);
 
-  /**
-   * order by with function
-   *
-   * <p>example: nativeSql.orderBy("su.age asc")
-   *
-   * @param fn the column function
-   * @param orderBy the order type
-   * @param <T> the type of table class
-   * @return the builder
-   */
-  <T> ExtPartBuilder orderBy(TaraFunction<T, ?> fn, OrderParam.OrderBy orderBy);
+    /**
+     * order by with function
+     * <p>
+     * example: nativeSql.orderBy("su.age asc")
+     *
+     * @param fn      the column function
+     * @param orderBy the order type
+     * @param <T>     the type of table class
+     * @return the builder
+     */
+    <T> ExtPartBuilder orderBy(TaraFunction<T, ?> fn, OrderParam.OrderBy orderBy);
 
-  /**
-   * order by with string
-   *
-   * @param orderBySegment order by params
-   * @return the builder
-   */
-  ExtPartBuilder orderBy(String... orderBySegment);
+    /**
+     * order by with string
+     *
+     * @param orderBySegment order by params
+     * @return the builder
+     */
+    ExtPartBuilder orderBy(String... orderBySegment);
 }

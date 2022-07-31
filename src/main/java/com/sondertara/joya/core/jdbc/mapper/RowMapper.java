@@ -8,5 +8,5 @@ import com.sondertara.joya.core.jdbc.Row;
  * @author huangxiaohu
  */
 public interface RowMapper<T> {
-  T map(Row row);
+    T map(Row row);
 }

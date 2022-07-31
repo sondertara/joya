@@ -1,6 +1,5 @@
 package com.sondertara.joya.init;
 
-import com.sondertara.joya.jpa.repository.BaseRepositoryImpl;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.support.JpaRepositoryFactoryBean;
 import org.springframework.data.repository.core.support.RepositoryFactorySupport;
@@ -10,25 +9,25 @@ import javax.persistence.EntityManager;
 import java.io.Serializable;
 
 /**
- * The factory bean to create {@link BaseRepositoryImpl}
+ * 简单实现 factory bean
  *
  * @author huangxiaohu
  */
-public class BaseRepositoryFactoryBean<R extends JpaRepository<T, ID>, T, ID extends Serializable>
-    extends JpaRepositoryFactoryBean<R, T, ID> {
+public class BaseRepositoryFactoryBean<R extends JpaRepository<T, ID>, T, ID extends Serializable> extends JpaRepositoryFactoryBean<R, T, ID> {
 
-  /**
-   * Creates a new {@link JpaRepositoryFactoryBean} for the given repository interface.
-   *
-   * @param repositoryInterface must not be {@literal null}.
-   */
-  public BaseRepositoryFactoryBean(Class<? extends R> repositoryInterface) {
-    super(repositoryInterface);
-  }
+    /**
+     * Creates a new {@link JpaRepositoryFactoryBean} for the given repository interface.
+     *
+     * @param repositoryInterface must not be {@literal null}.
+     */
+    public BaseRepositoryFactoryBean(Class<? extends R> repositoryInterface) {
+        super(repositoryInterface);
+    }
 
-  @Override
-  @NonNull
-  protected RepositoryFactorySupport createRepositoryFactory(@NonNull EntityManager entityManager) {
-    return new BaseRepositoryFactory<>(entityManager);
-  }
+    @Override
+    @NonNull
+    protected RepositoryFactorySupport createRepositoryFactory(@NonNull EntityManager entityManager) {
+        return new BaseRepositoryFactory<>(entityManager);
+    }
+
 }

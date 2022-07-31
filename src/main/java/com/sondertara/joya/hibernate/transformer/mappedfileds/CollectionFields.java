@@ -17,41 +17,44 @@ import java.util.Set;
  * @author huangxiaohu
  */
 public class CollectionFields extends Fields {
-  private final Class<?> genericClass;
+    private final Class<?> genericClass;
 
-  public CollectionFields(PropertyDescriptor propertyDescriptor, Class<?> genericClass) {
-    super(propertyDescriptor);
-    this.genericClass = genericClass;
-  }
-
-  @Override
-  public boolean isCollection() {
-    return true;
-  }
-
-  @Override
-  public void setResultPropertyValue(
-      BeanWrapper bw, Object instantiate, String name, Object value) {}
-
-  @Override
-  public Object instantiateObjectValue() {
-    Class<?> propertyType = this.propertyDescriptor.getPropertyType();
-    if (propertyType.isAssignableFrom(Set.class)) {
-      return new HashSet<>();
-    } else if (propertyType.isAssignableFrom(List.class)) {
-      return new ArrayList<>();
+    public CollectionFields(PropertyDescriptor propertyDescriptor, Class<?> genericClass) {
+        super(propertyDescriptor);
+        this.genericClass = genericClass;
     }
-    throw new RuntimeException("只支持两种集合类型：Set,List");
-  }
 
-  public Class<?> getGenericClass() {
-    return genericClass;
-  }
-
-  public Object instantiateGenericObject() {
-    if (this.genericClass.isAssignableFrom(Map.class)) {
-      return new HashMap<>();
+    @Override
+    public boolean isCollection() {
+        return true;
     }
-    return BeanUtils.instantiateClass(this.genericClass);
-  }
+
+    @Override
+    public void setResultPropertyValue(BeanWrapper bw, Object instantiate, String name, Object value) {
+
+    }
+
+    @Override
+    public Object instantiateObjectValue() {
+        Class<?> propertyType = this.propertyDescriptor.getPropertyType();
+        if (propertyType.isAssignableFrom(Set.class)) {
+            return new HashSet<>();
+        } else if (propertyType.isAssignableFrom(List.class)) {
+            return new ArrayList<>();
+        }
+        throw new RuntimeException("只支持两种集合类型：Set,List");
+    }
+
+    public Class<?> getGenericClass() {
+        return genericClass;
+    }
+
+
+    public Object instantiateGenericObject() {
+        if (this.genericClass.isAssignableFrom(Map.class)) {
+            return new HashMap<>();
+        }
+        return BeanUtils.instantiateClass(this.genericClass);
+    }
+
 }

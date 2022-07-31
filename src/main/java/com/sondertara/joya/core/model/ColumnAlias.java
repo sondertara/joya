@@ -14,14 +14,26 @@ import java.io.Serializable;
 @Data
 public class ColumnAlias implements Serializable {
 
-  /** table name of database eg: user */
-  private String tableName;
+    /**
+     * table name of database
+     * eg: user
+     */
+    private String tableName;
 
-  /** column name form database which has parsed tto lowercase eg: user_name */
-  private String columnName;
+    /**
+     * column name form database which has parsed tto lowercase
+     * eg: user_name
+     */
+    private String columnName;
 
-  /** table alias eg: t0 */
-  private String tableAlias;
-  /** column alias eg: t0.user_name */
-  private String columnAlias;
+    /**
+     * table alias
+     * eg: t0
+     */
+    private String tableAlias;
+    /**
+     * column alias
+     * eg: t0.user_name
+     */
+    private String columnAlias;
 }

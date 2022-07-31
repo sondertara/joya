@@ -2,7 +2,8 @@
 
 ![GitHub Workflow Status](https://img.shields.io/github/workflow/status/sondertara/joya/Java%20CI%20with%20Gradle) ![Maven Central](https://img.shields.io/maven-central/v/com.sondertara/joya) ![GitHub](https://img.shields.io/github/license/sondertara/joya)
 
-> Joya 是对`Spring Data JPA` 扩展，JPA本身功能已经很强大了，但是复杂查询语句`HQL`通常都是大量字符串拼接，不利于维护和阅读，提供优雅、易读和强大的链式查询语句的`Joya`应运而生
+> Joya 是对`Spring Data JPA` 扩展，JPA本身功能已经很强大了，但是复杂查询语句`HQL`
+> 通常都是大量字符串拼接，不利于维护和阅读，提供优雅、易读和强大的链式查询语句的`Joya`应运而生
 
 ## 🍹 项目特性
 
@@ -15,7 +16,7 @@
 
 ## 🎯 使用前提
 
-适用于 使用Java `Spring Data JPA` 和`JDK 1.8` 及以上的项目
+适用于 使用Java `Spring Data JPA` 和`JDK 1.8` 及以上的项目,完美兼容`Spring Boot 2.x`
 
 ## 🧩 项目集成
 
@@ -24,17 +25,18 @@
 Maven Project
 
 ```xml
+
 <dependency>
     <groupId>com.sondertara</groupId>
     <artifactId>joya</artifactId>
-    <version>0.1.1</version>
+    <version>0.1.2</version>
 </dependency>
 ```
 
 Gradle Project
 
 ```groovy
-implementation 'com.sondertara:joya:0.1.1'
+implementation 'com.sondertara:joya:0.1.2'
 ```
 
 ### 2.添加配置
@@ -161,14 +163,14 @@ public class Test {
     @Test
     public void testSelectAll() {
         // SELECT t0.id,t0.user_name,t0.user_email,t0.user_phone,t0.age FROM user AS t0 WHERE t0.user_name = ?1
-        
+
         //使用function函数和 entity对于的class类
         NativeSqlQuery query = NativeSqlQuery.builder()
                 .select()
                 .from(UserPo.class)
                 .where(w -> w.eq(UserPo::getUserName, "张三"))
                 .build();
-        
+
         //使用字符串格式
         NativeSqlQuery query = NativeSqlQuery.builder()
                 .select()
@@ -228,7 +230,7 @@ public class Test {
                 .from(UserPo.class)
                 .where(w -> w.eq(UserPo::getUserName, "张三"))
                 .build();
-        
+
         List<String> list1 = joyaRepository.findListBySql(query3, String.class);
     }
 }
@@ -305,7 +307,7 @@ public class PageQueryParam extends JoyaQuery implements Serializable {
      * 搜索参数
      */
     private List<SearchParam> params = Lists.newArrayList();
-    
+
     public enum LinkType {
         /**
          *
@@ -354,7 +356,7 @@ public class PageQueryParam extends JoyaQuery implements Serializable {
 ```java
 PageQueryParam pageQueryParam=JSON.parseObject(jsonString,PageQueryParam.class);
 
-PageResult<UserDTO> pageResult=joyaRepository.queryPage(pageQueryParam,UserDTO.class,j->j.join(UserPo::getId,UserExtendPo::getUserId));
+        PageResult<UserDTO> pageResult=joyaRepository.queryPage(pageQueryParam,UserDTO.class,j->j.join(UserPo::getId,UserExtendPo::getUserId));
 ```
 
 - 分页查询(指定where语句中的联接字段)
@@ -362,10 +364,10 @@ PageResult<UserDTO> pageResult=joyaRepository.queryPage(pageQueryParam,UserDTO.c
 ```java
  PageQueryParam pageQueryParam1=JSON.parseObject("",PageQueryParam.class);
 //附加where
-pageQueryParam1.setSpecificW("t0.id=t1.userId");
+        pageQueryParam1.setSpecificW("t0.id=t1.userId");
 
 //指定要查询的表，顺序要注意,因为别名按照先后顺序来生成
-PageResult<UserDTO> pageResult=joyaRepository.queryPage(pageQueryParam,UserDTO.class,UserPo.class,UserExtendPo.class);
+        PageResult<UserDTO> pageResult=joyaRepository.queryPage(pageQueryParam,UserDTO.class,UserPo.class,UserExtendPo.class);
 ```
 
 ### 4.特殊定制化查询

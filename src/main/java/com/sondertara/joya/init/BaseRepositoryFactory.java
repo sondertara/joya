@@ -13,46 +13,47 @@ import org.springframework.lang.NonNull;
 import javax.persistence.EntityManager;
 import java.io.Serializable;
 
+
 /**
  * @author huangxiaohu
  */
 public class BaseRepositoryFactory<T, ID extends Serializable> extends JpaRepositoryFactory {
 
-  private EntityManager entityManager;
-  private PersistenceProvider extractor;
+    private EntityManager entityManager;
+    private PersistenceProvider extractor;
 
-  public BaseRepositoryFactory(EntityManager entityManager) {
-    super(entityManager);
-    this.entityManager = entityManager;
-    this.extractor = PersistenceProvider.fromEntityManager(entityManager);
-  }
 
-  @SuppressWarnings("unchecked")
-  @Override
-  @NonNull
-  protected JpaRepositoryImplementation<?, ?> getTargetRepository(
-      RepositoryInformation information, @NonNull EntityManager entityManager) {
-    Class<?> repositoryInterface = information.getRepositoryInterface();
-
-    if (isBaseRepository(repositoryInterface)) {
-      JpaEntityInformation<T, ID> entityInformation =
-          getEntityInformation((Class<T>) information.getDomainType());
-
-      return new BaseRepositoryImpl<>(entityInformation, entityManager);
+    public BaseRepositoryFactory(EntityManager entityManager) {
+        super(entityManager);
+        this.entityManager = entityManager;
+        this.extractor = PersistenceProvider.fromEntityManager(entityManager);
     }
-    return super.getTargetRepository(information, entityManager);
-  }
 
-  @Override
-  @NonNull
-  protected Class<?> getRepositoryBaseClass(RepositoryMetadata metadata) {
-    if (isBaseRepository(metadata.getRepositoryInterface())) {
-      return BaseRepositoryImpl.class;
+    @SuppressWarnings("unchecked")
+    @Override
+    @NonNull
+    protected JpaRepositoryImplementation<?, ?> getTargetRepository(RepositoryInformation information, @NonNull EntityManager entityManager) {
+        Class<?> repositoryInterface = information.getRepositoryInterface();
+
+        if (isBaseRepository(repositoryInterface)) {
+            JpaEntityInformation<T, ID> entityInformation = getEntityInformation((Class<T>) information.getDomainType());
+
+            return new BaseRepositoryImpl<>(entityInformation, entityManager);
+        }
+        return super.getTargetRepository(information, entityManager);
     }
-    return super.getRepositoryBaseClass(metadata);
-  }
 
-  private boolean isBaseRepository(Class<?> repositoryInterface) {
-    return BaseRepository.class.isAssignableFrom(repositoryInterface);
-  }
+    @Override
+    @NonNull
+    protected Class<?> getRepositoryBaseClass(RepositoryMetadata metadata) {
+        if (isBaseRepository(metadata.getRepositoryInterface())) {
+            return BaseRepositoryImpl.class;
+        }
+        return super.getRepositoryBaseClass(metadata);
+    }
+
+    private boolean isBaseRepository(Class<?> repositoryInterface) {
+        return BaseRepository.class.isAssignableFrom(repositoryInterface);
+    }
+
 }
