@@ -44,7 +44,7 @@ import java.util.stream.Collectors;
  *
  * @author huangxiaohu
  */
-@SuppressWarnings("deprecated")
+@SuppressWarnings("deprecation")
 @Transactional(readOnly = true)
 public class JoyaRepository {
 
