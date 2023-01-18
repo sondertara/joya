@@ -1,6 +1,7 @@
 package com.sondertara.joya.jpa.repository;
 
 
+import com.sondertara.common.model.PageResult;
 import com.sondertara.common.util.CollectionUtils;
 import com.sondertara.common.util.StringFormatter;
 import com.sondertara.joya.cache.TableClassCache;
@@ -9,7 +10,6 @@ import com.sondertara.joya.core.query.NativeSqlQuery;
 import com.sondertara.joya.core.query.criterion.JoinCriterion;
 import com.sondertara.joya.core.query.pagination.JoyaPageConvert;
 import com.sondertara.joya.core.query.pagination.PageQueryParam;
-import com.sondertara.joya.core.query.pagination.PageResult;
 import com.sondertara.joya.domain.PersistEntity;
 import com.sondertara.joya.ext.JoyaSpringContext;
 import com.sondertara.joya.hibernate.transformer.AliasToBeanTransformer;
@@ -18,7 +18,6 @@ import com.sondertara.joya.jpa.repository.statment.SimpleBatchPreparedStatementS
 import com.sondertara.joya.utils.SqlUtils;
 import org.hibernate.Session;
 import org.hibernate.query.NativeQuery;
-import org.hibernate.transform.Transformers;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.PageRequest;
@@ -210,7 +209,7 @@ public class JoyaRepository {
             result = totalRecord == 0 ? new ArrayList<>(0) : pageQuery.setFirstResult(pageNo * pageSize).setMaxResults(pageSize).unwrap(NativeQuery.class).setResultTransformer(new AliasToBeanTransformer<>(resultClass)).list();
 
         }
-        return new PageResult<>(pageNo, pageSize, totalRecord, result);
+        return new PageResult<>(result,totalRecord,pageNo, pageSize);
     }
 
     /**

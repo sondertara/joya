@@ -1,5 +1,7 @@
 package com.sondertara.joya.utils.idgenerate;
 
+import com.sondertara.common.lang.id.MeteorId;
+import com.sondertara.common.lang.id.NanoId;
 import org.hibernate.HibernateException;
 import org.hibernate.engine.spi.SharedSessionContractImplementor;
 import org.hibernate.id.IdentifierGenerator;
@@ -15,17 +17,16 @@ import java.util.UUID;
  */
 public class IdGen implements IdentifierGenerator {
 
-    private static final SecureRandom random = new SecureRandom();
-    private static IdWorker idWorker = new IdWorker(-1, -1);
+    private static final SecureRandom RANDOM = new SecureRandom();
+
 
     /**
      * Change the  snowflake workId and datacenterId
      *
-     * @param workerId     workId
-     * @param datacenterId datacenterId
+     * @param nodeId     nodeId
      */
-    public static void setIdWorker(int workerId, int datacenterId) {
-        idWorker = new IdWorker(workerId, datacenterId);
+    public static void setNodeId(int nodeId) {
+       MeteorId.setNodeId(nodeId);
     }
 
     /**
@@ -39,14 +40,14 @@ public class IdGen implements IdentifierGenerator {
      * 使用SecureRandom随机生成Long
      */
     public static long randomLong() {
-        return Math.abs(random.nextLong());
+        return Math.abs(RANDOM.nextLong());
     }
 
     /**
      * 使用snowflake生成18位唯一编号
      */
     public static long snowflake() {
-        return idWorker.nextId();
+        return MeteorId.nextId();
     }
 
     /**
@@ -57,7 +58,7 @@ public class IdGen implements IdentifierGenerator {
      */
     @Override
     public Serializable generate(SharedSessionContractImplementor sharedSessionContractImplementor, Object o) throws HibernateException {
-        return idWorker.nextId();
+        return MeteorId.nextId();
     }
 }
 
