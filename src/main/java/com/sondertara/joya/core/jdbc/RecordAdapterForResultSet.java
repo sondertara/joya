@@ -1,10 +1,12 @@
 package com.sondertara.joya.core.jdbc;
 
+import java.io.IOException;
 import java.math.BigDecimal;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.util.Date;
+import java.util.NoSuchElementException;
 
 /**
  * 将java.sql.ResultSet转换成自定义的Record，封装底层实现细节
@@ -13,6 +15,8 @@ import java.util.Date;
  */
 public class RecordAdapterForResultSet implements Record, Row {
     private final ResultSet rs;
+    private volatile boolean hasNext = false;
+    private volatile boolean cursorReady = false;
 
     public RecordAdapterForResultSet(ResultSet resultSet) {
         this.rs = resultSet;
@@ -129,18 +133,19 @@ public class RecordAdapterForResultSet implements Record, Row {
     }
 
     @Override
+    public boolean hasMore() {
+        if (hasNext()) {
+            cursorReady = false;
+            return true;
+        }
+        return false;
+    }
+
+    @Override
     public Row getCurrentRow() {
         return this;
     }
 
-    @Override
-    public boolean next() {
-        try {
-            return rs.next();
-        } catch (SQLException e) {
-            throw new RuntimeException(e.getMessage(), e);
-        }
-    }
 
     @Override
     public long getLong(String columnLabel) {
@@ -193,6 +198,53 @@ public class RecordAdapterForResultSet implements Record, Row {
             return rs.getDate(columnIndex);
         } catch (SQLException e) {
             throw new RuntimeException(e.getMessage(), e);
+        }
+    }
+
+    /**
+     * The last checking closes all resources.
+     */
+    @Override
+    public boolean hasNext() throws IllegalStateException {
+        if (!cursorReady) {
+            try {
+                hasNext = rs.next();
+                if (!hasNext) {
+                    try {
+                        close();
+                    } catch (IOException e) {
+                        throw new IllegalStateException(e);
+                    }
+                }
+                cursorReady = true;
+            } catch (SQLException e) {
+                throw new IllegalStateException(e);
+            }
+        }
+        return hasNext;
+    }
+
+    @Override
+    public Row next() {
+        if (hasNext()) {
+            cursorReady = false;
+            return getCurrentRow();
+        }
+        throw new NoSuchElementException();
+    }
+
+    /**
+     * Close all resources
+     */
+    @Override
+    public void close() throws IOException {
+        if (rs != null) {
+            try (ResultSet tempRs = rs) {
+                cursorReady = true;
+                hasNext = false;
+            } catch (SQLException e) {
+                throw new IllegalStateException(e);
+            }
         }
     }
 }

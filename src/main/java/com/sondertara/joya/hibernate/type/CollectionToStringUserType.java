@@ -1,8 +1,7 @@
 package com.sondertara.joya.hibernate.type;
 
-
+import com.sondertara.common.convert.ConvertUtils;
 import com.sondertara.common.util.StringUtils;
-import org.apache.commons.beanutils.ConvertUtils;
 import org.hibernate.HibernateException;
 import org.hibernate.engine.spi.SharedSessionContractImplementor;
 import org.hibernate.usertype.ParameterizedType;
@@ -19,7 +18,7 @@ import java.util.Objects;
 import java.util.Properties;
 
 /**
- * 将List转换为指定分隔符分隔的字符串存储 List的元素类型只支持常见的数据类型 可参考{@link org.apache.commons.beanutils.ConvertUtilsBean}
+ * 将List转换为指定分隔符分隔的字符串存储 List的元素类型只支持常见的数据类型
  *
  * @author Wu Tianqiang
  */
@@ -119,9 +118,9 @@ public class CollectionToStringUserType implements UserType, ParameterizedType, 
                 if (Persistable.class.isAssignableFrom(this.elementType)) {
                     Integer id = Integer.valueOf(value);
                     Object obj = session.immediateLoad(this.elementType.getName(), id);
-                    result.add(ConvertUtils.convert(obj, elementType));
+                    result.add(ConvertUtils.convert(elementType, obj));
                 } else {
-                    result.add(ConvertUtils.convert(value, elementType));
+                    result.add(ConvertUtils.convert(elementType, value));
                 }
             }
         }

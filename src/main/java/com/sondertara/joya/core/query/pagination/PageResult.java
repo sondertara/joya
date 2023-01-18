@@ -1,9 +1,9 @@
 package com.sondertara.joya.core.query.pagination;
 
-import lombok.Data;
+import com.alibaba.fastjson2.JSONObject;
+import com.alibaba.fastjson2.JSONWriter;
+import lombok.Getter;
 
-import java.io.Serializable;
-import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -12,22 +12,16 @@ import java.util.List;
  * @author huangxiaohu
  * @date 2021/7/21 12:43
  */
-@Data
-public class PageResult<T> implements Serializable {
+@Getter
+public class PageResult<T> extends com.sondertara.common.model.PageResult<T> {
 
-    private final Integer page;
-    private final Integer pageSize;
-    private final Long total;
-    private final List<T> data;
 
     public PageResult(Integer page, Integer pageSize, Long total, List<T> data) {
-        this.page = page;
-        this.pageSize = pageSize;
-        this.total = total;
-        if (null == data) {
-            this.data = new ArrayList<T>();
-        } else {
-            this.data = data;
-        }
+        super(data, total, page, pageSize);
+    }
+
+    @Override
+    public String toString() {
+        return JSONObject.toJSONString(this, JSONWriter.Feature.WriteMapNullValue);
     }
 }

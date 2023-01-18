@@ -13,7 +13,7 @@ import org.hibernate.transform.AliasedTupleSubsetResultTransformer;
 
 import java.io.Reader;
 import java.sql.Clob;
-import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -37,29 +37,30 @@ public class AliasToMapResultTransformer extends AliasedTupleSubsetResultTransfo
 
     @Override
     public Object transformTuple(Object[] tuple, String[] aliases) {
-        Map<String, Object> result = new HashMap<>(tuple.length);
+        Map<String, Object> result = new LinkedHashMap<>(tuple.length);
         for (int i = 0; i < tuple.length; i++) {
             String alias = aliases[i];
-            if (alias != null) {
-                Object value = tuple[i];
-                if (camelCase) {
-                    int index = alias.indexOf(".");
-                    if (index > -1) {
-                        alias = alias.substring(index + 1);
-                    }
-                    alias = StringUtils.toCamelCase(alias);
-                }
-                if (null != value) {
-                    if (SqlDataHelper.isClob(value.getClass())) {
-                        value = SqlDataHelper.extractString((Clob) value);
-                    } else if (Reader.class.isAssignableFrom(value.getClass())) {
-                        value = SqlDataHelper.extractString((Reader) value);
-                    } else if (value instanceof TIMESTAMP) {
-                        value = SqlDataHelper.extractDate(value);
-                    }
-                }
-                result.put(alias, value);
+            if (null == alias) {
+                continue;
             }
+            Object value = tuple[i];
+            if (camelCase) {
+                int index = alias.indexOf(".");
+                if (index > -1) {
+                    alias = alias.substring(index + 1);
+                }
+                alias = StringUtils.toCamelCase(alias);
+            }
+            if (null != value) {
+                if (SqlDataHelper.isClob(value.getClass())) {
+                    value = SqlDataHelper.extractString((Clob) value);
+                } else if (Reader.class.isAssignableFrom(value.getClass())) {
+                    value = SqlDataHelper.extractString((Reader) value);
+                } else if (value instanceof TIMESTAMP) {
+                    value = SqlDataHelper.extractDate(value);
+                }
+            }
+            result.put(alias, value);
         }
         return result;
     }

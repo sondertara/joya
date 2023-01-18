@@ -1,12 +1,11 @@
 package com.sondertara.joya.cache;
 
 import com.google.common.collect.Maps;
+import com.sondertara.common.cache.GuavaAbstractLoadingCache;
 import com.sondertara.common.exception.TaraException;
 import com.sondertara.common.util.StringUtils;
 import com.sondertara.joya.core.model.TableEntity;
 import com.sondertara.joya.ext.JoyaSpringContext;
-import com.sondertara.joya.utils.cache.GuavaAbstractLoadingCache;
-import com.sondertara.joya.utils.cache.ILocalCache;
 
 import javax.persistence.Column;
 import javax.persistence.Entity;
@@ -29,7 +28,7 @@ import java.util.concurrent.ExecutionException;
 /**
  * @author skydu
  */
-public class TableClassCache extends GuavaAbstractLoadingCache<Class<?>, Map<String, Field>> implements ILocalCache<Class<?>, Map<String, Field>> {
+public class TableClassCache extends GuavaAbstractLoadingCache<Class<?>, Map<String, Field>> {
 
     private static volatile TableClassCache cache = null;
     private final DataSource dataSource;
@@ -51,32 +50,6 @@ public class TableClassCache extends GuavaAbstractLoadingCache<Class<?>, Map<Str
             }
         }
         return cache;
-    }
-
-    /**
-     * @return get current classloader
-     */
-    public static ClassLoader getDefaultClassLoader() {
-        ClassLoader cl = null;
-        try {
-            cl = Thread.currentThread().getContextClassLoader();
-        } catch (Throwable ex) {
-            // Cannot access thread context ClassLoader - falling back...
-        }
-        if (cl == null) {
-            // No thread context class loader -> use class loader of this class.
-            cl = TableClassCache.class.getClassLoader();
-            if (cl == null) {
-                // getClassLoader() returning null indicates the bootstrap ClassLoader
-                try {
-                    cl = ClassLoader.getSystemClassLoader();
-                } catch (Throwable ex) {
-                    // Cannot access system ClassLoader - oh well, maybe the caller can live with
-                    // null...
-                }
-            }
-        }
-        return cl;
     }
 
     /**
@@ -131,14 +104,6 @@ public class TableClassCache extends GuavaAbstractLoadingCache<Class<?>, Map<Str
         if (null == tableName) {
             throw new TaraException("No [@Table] or [@Entity] annotation found for class->" + clazz);
         }
-        //TableMetaDataContext tableMetaDataContext = new TableMetaDataContext();
-        //tableMetaDataContext.setTableName(tableName);
-        //tableMetaDataContext.setAccessTableColumnMetaData(true);
-        //TableMetaDataProvider tableMetaDataProvider = TableMetaDataProviderFactory.createMetaDataProvider(dataSource, tableMetaDataContext);
-        //
-        //List<TableParameterMetaData> metaData = tableMetaDataProvider.getTableParameterMetaData();
-        //Map<String, TableParameterMetaData> map = metaData.stream().collect(Collectors.toMap(TableParameterMetaData::getParameterName, Function.identity()));
-        //Map<String, SqlParameterValue> sqlType = new HashMap<>();
 
         Map<String, Class<?>> columnType = new HashMap<>();
         TableEntity tableDTO = new TableEntity();
@@ -177,11 +142,6 @@ public class TableClassCache extends GuavaAbstractLoadingCache<Class<?>, Map<Str
                             o = field.get(bean);
                             field.setAccessible(false);
                         }
-                        //TableParameterMetaData parameterMetaData = map.get(name);
-                        //if (null != parameterMetaData) {
-                        //    SqlParameterValue sqlParameterValue = new SqlParameterValue(parameterMetaData.getSqlType(), o);
-                        //    sqlType.put(name, sqlParameterValue);
-                        //}
                         filedNames.put(name, o);
                     } catch (Exception e) {
                         e.printStackTrace();
@@ -189,7 +149,6 @@ public class TableClassCache extends GuavaAbstractLoadingCache<Class<?>, Map<Str
                 }
                 relation.put(name, field.getName());
             }
-            //tableDTO.setSqlType(sqlType);
             tableDTO.setColumnType(columnType);
             tableDTO.setData(filedNames);
             tableDTO.setRelation(relation);
@@ -202,11 +161,11 @@ public class TableClassCache extends GuavaAbstractLoadingCache<Class<?>, Map<Str
      * @param clazz
      * @return the super class
      */
-    public static Class<?> getSuperClassGenricType(Class<?> clazz) {
+    public static Class<?> getSuperClassGenericType(Class<?> clazz) {
         Type genType = clazz.getGenericSuperclass();
         if (!(genType instanceof ParameterizedType)) {
             if (genType instanceof Class) {
-                return getSuperClassGenricType((Class<?>) genType);
+                return getSuperClassGenericType((Class<?>) genType);
             }
             return Object.class;
         }
@@ -240,21 +199,12 @@ public class TableClassCache extends GuavaAbstractLoadingCache<Class<?>, Map<Str
     }
 
     @Override
-    protected Map<String, Field> fetchData(Class<?> key) {
-        return getAllFields(key);
+    protected Optional<Map<String, Field>> fetchData(Class<?> key) {
+        return Optional.of(getAllFields(key));
     }
 
     @Override
     public Optional<Map<String, Field>> get(Class<?> key) {
-        try {
-            return Optional.ofNullable(getValue(key));
-        } catch (ExecutionException e) {
-            throw new TaraException(e);
-        }
-    }
-
-    @Override
-    public void remove(Class<?> key) {
-
+        return getValue(key);
     }
 }

@@ -13,7 +13,7 @@ import java.util.Map;
  * @since 1.0.0
  */
 @Data
-public final class TableStruct implements Serializable {
+public final class TableStructDef implements Serializable {
     private String tableName;
     /**
      * entity className

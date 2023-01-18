@@ -1,12 +1,12 @@
 package com.sondertara.joya.jpa.repository;
 
 
+import com.sondertara.common.bean.PropertyUtils;
+import com.sondertara.common.util.BeanUtils;
 import com.sondertara.joya.core.query.NativeSqlQuery;
 import com.sondertara.joya.hibernate.transformer.AliasToBeanTransformer;
 import com.sondertara.joya.hibernate.transformer.AliasToMapResultTransformer;
-import com.sondertara.joya.utils.BeanUtil;
 import com.sondertara.joya.utils.SqlUtils;
-import org.apache.commons.beanutils.BeanUtils;
 import org.hibernate.Session;
 import org.hibernate.query.internal.NativeQueryImpl;
 import org.hibernate.transform.Transformers;
@@ -77,7 +77,7 @@ public class BaseRepositoryImpl<T, ID extends Serializable> extends SimpleJpaRep
         } else {
             T po = super.findById(((ID) Objects.requireNonNull(eif.getId(entity)))).orElse(null);
             if (Objects.nonNull(po)) {
-                BeanUtil.copyPropertiesIgnoreNull(entity, po);
+                BeanUtils.copyNonNullProperties(entity,po);
                 return (S) this.em.merge(po);
             }
             return this.em.merge(entity);
@@ -103,7 +103,7 @@ public class BaseRepositoryImpl<T, ID extends Serializable> extends SimpleJpaRep
                 throw new RuntimeException("batch delete " + entityClass + " error", e);
             }
             try {
-                BeanUtils.setProperty(model, idName, id);
+                PropertyUtils.setProperty(model, idName, id);
             } catch (Exception e) {
                 throw new RuntimeException("batch delete " + entityClass + " error, can not set id", e);
             }
@@ -341,7 +341,7 @@ public class BaseRepositoryImpl<T, ID extends Serializable> extends SimpleJpaRep
      *
      * @param values 参数Map
      */
-    @SuppressWarnings({"rawtypes", "unchecked"})
+    @SuppressWarnings({"unchecked"})
     public Query createQueryWithNameParam(final String queryJql, final Map<String, ?> values) {
 
         Query query = this.em.createQuery(queryJql);
@@ -389,7 +389,7 @@ public class BaseRepositoryImpl<T, ID extends Serializable> extends SimpleJpaRep
 
         Object result = query.getSingleResult();
 
-        return com.sondertara.common.util.BeanUtils.beanToBean(result, clazz);
+        return BeanUtils.beanToBean(result, clazz);
     }
 
     @SuppressWarnings({"unchecked"})

@@ -1,7 +1,12 @@
 package com.sondertara.joya.core.jdbc;
 
+import java.io.Closeable;
+import java.io.IOException;
 import java.math.BigDecimal;
 import java.util.Date;
+import java.util.Iterator;
+import java.util.stream.Stream;
+import java.util.stream.StreamSupport;
 
 /**
  * 数据行：封装了结果集的一行数据。
@@ -12,7 +17,7 @@ import java.util.Date;
  * @author huangxiaohu
  * @see Record
  */
-public interface Row {
+public interface Row extends Iterator<Row>, Iterable<Row>, Closeable {
     /**
      * get obj
      *
@@ -143,4 +148,27 @@ public interface Row {
      * @return 列标签
      */
     String getColumnLabel(int index);
+
+
+    /**
+     * Returns the same object to iterate over elements of type {@code T}.
+     *
+     * @return an Iterator.
+     */
+
+    @Override
+    default Iterator<Row> iterator() {
+        return this;
+    }
+
+
+    default Stream<Row> toStream() {
+        return StreamSupport.stream(spliterator(), false).onClose(() -> {
+            try {
+                close();
+            } catch (IOException e) {
+                throw new IllegalStateException(e);
+            }
+        });
+    }
 }

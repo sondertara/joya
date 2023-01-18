@@ -24,5 +24,7 @@ public interface Record {
      *
      * @return 若当前已到达最后一行，则返回false，否则返回true
      */
-    boolean next();
+    boolean hasMore();
+
+
 }

@@ -21,6 +21,7 @@ import java.util.Map;
  *
  * @author huangxiaohu
  */
+
 public class JoyaSpringContext implements ApplicationContextAware {
 
     private static ApplicationContext applicationContext;

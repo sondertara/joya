@@ -1,7 +1,6 @@
 package com.sondertara.joya.core.model;
 
 import lombok.Data;
-import org.springframework.jdbc.core.SqlParameterValue;
 
 import java.io.Serializable;
 import java.util.Map;
@@ -38,8 +37,6 @@ public class TableEntity implements Serializable {
      */
     private Map<String, String> relation;
 
-    private Map<String, SqlParameterValue> sqlType;
-
-    private Map<String, Class<?>> columnType;
+    private Map<String,Class<?>> columnType;
 
 }

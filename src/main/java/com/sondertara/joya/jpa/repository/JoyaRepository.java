@@ -18,6 +18,7 @@ import com.sondertara.joya.jpa.repository.statment.SimpleBatchPreparedStatementS
 import com.sondertara.joya.utils.SqlUtils;
 import org.hibernate.Session;
 import org.hibernate.query.NativeQuery;
+import org.hibernate.transform.Transformers;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.PageRequest;
@@ -44,7 +45,6 @@ import java.util.stream.Collectors;
  *
  * @author huangxiaohu
  */
-@SuppressWarnings("deprecation")
 @Transactional(readOnly = true)
 public class JoyaRepository {
 
@@ -69,7 +69,7 @@ public class JoyaRepository {
      * @param <T>         泛型
      * @return list
      */
-    @SuppressWarnings({"unchecked"})
+    @SuppressWarnings({"unchecked","deprecation"})
     public <T> List<T> findListBySql(String sql, Class<T> resultClass, Object... params) {
         if (JoyaSpringContext.getConfig(SQL_VIEW_SWITCH, true)) {
             log.info("[findListBySql] SQL:\nJoya-SQL: {}", sql);
@@ -87,7 +87,7 @@ public class JoyaRepository {
      * @param <T>         generic
      * @return list
      */
-    @SuppressWarnings("unchecked")
+    @SuppressWarnings({"unchecked","deprecation"})
     public <T> List<T> findListBySql(NativeSqlQuery nativeSql, Class<T> resultClass) {
 
         if (JoyaSpringContext.getConfig(SQL_VIEW_SWITCH, true)) {
@@ -127,7 +127,7 @@ public class JoyaRepository {
     /**
      * (non-Javadoc)
      */
-    @SuppressWarnings({"unchecked"})
+    @SuppressWarnings({"unchecked","deprecation"})
     public List<Map<String, Object>> findMapListBySql(String querySql, List<Object> params, boolean camelCase) {
         Query query = em.createNativeQuery(querySql);
         setParameters(query, params);
@@ -135,7 +135,7 @@ public class JoyaRepository {
         return query.getResultList();
     }
 
-    @SuppressWarnings({"unchecked"})
+    @SuppressWarnings({"unchecked","deprecation"})
     public Map<String, Object> findMapBySql(String querySql, List<Object> params, boolean camelCase) {
         Query query = em.createNativeQuery(querySql);
         setParameters(query, params);
@@ -186,7 +186,7 @@ public class JoyaRepository {
      * @param params      the query params
      * @return pagination result
      */
-    @SuppressWarnings("unchecked")
+    @SuppressWarnings({"unchecked","deprecation"})
     public <T> PageResult<T> queryPage(String sql, Class<T> resultClass, Integer pageNo, Integer pageSize, Object... params) {
         Boolean opened = JoyaSpringContext.getConfig(SQL_VIEW_SWITCH, false);
         if (opened) {
@@ -202,10 +202,14 @@ public class JoyaRepository {
         Query pageQuery = em.createNativeQuery(sql);
 
         setParameters(pageQuery, params);
+        List<T> result = null;
+        if (Map.class.isAssignableFrom(resultClass)) {
+            result = totalRecord == 0 ? new ArrayList<>(0) : pageQuery.setFirstResult(pageNo * pageSize).setMaxResults(pageSize).unwrap(NativeQuery.class).setResultTransformer(AliasToMapResultTransformer.getInstance(false)).list();
 
+        } else {
+            result = totalRecord == 0 ? new ArrayList<>(0) : pageQuery.setFirstResult(pageNo * pageSize).setMaxResults(pageSize).unwrap(NativeQuery.class).setResultTransformer(new AliasToBeanTransformer<>(resultClass)).list();
 
-        List<T> result = totalRecord == 0 ? new ArrayList<>(0) : pageQuery.setFirstResult(pageNo * pageSize).setMaxResults(pageSize).unwrap(NativeQuery.class).setResultTransformer(new AliasToBeanTransformer<>(resultClass)).list();
-
+        }
         return new PageResult<>(pageNo, pageSize, totalRecord, result);
     }
 

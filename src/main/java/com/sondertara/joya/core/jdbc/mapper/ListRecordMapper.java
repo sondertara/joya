@@ -20,7 +20,7 @@ public class ListRecordMapper<T> implements RecordMapper<List<T>> {
     @Override
     public List<T> map(Record record) {
         List<T> result = new ArrayList<>();
-        while (record.next()) {
+        while (record.hasMore()) {
             result.add(rowMapper.map(record.getCurrentRow()));
         }
         return result;

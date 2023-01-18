@@ -14,7 +14,9 @@ public enum DbType {
     /**
      * 数据库类型
      */
-    MYSQL("MYSQL", "com.mysql.cj.jdbc.Driver"), ORACLE("ORACLE", "oracle.jdbc.driver.OracleDriver");
+    MYSQL("MYSQL", "com.mysql.cj.jdbc.Driver"),
+    ORACLE("ORACLE", "oracle.jdbc.driver.OracleDriver"),
+    CLICKHOUSE("CLICKHOUSE", "com.clickhouse.jdbc.ClickHouseDrive");
 
     private final String type;
     private final String driverClassName;

@@ -7,7 +7,7 @@ import com.sondertara.common.util.CollectionUtils;
 import com.sondertara.common.util.RegexUtils;
 import com.sondertara.common.util.StringFormatter;
 import com.sondertara.common.util.StringUtils;
-import com.sondertara.joya.cache.AliasThreadLocalCache;
+import com.sondertara.joya.cache.AliasCacheHelper;
 import com.sondertara.joya.core.constant.JoyaConst;
 import com.sondertara.joya.utils.SqlUtils;
 
@@ -70,7 +70,7 @@ public class WhereCriterion {
      */
     public WhereCriterion eq(String columnName, Object value) {
         if (Objects.nonNull(value)) {
-            segments.add(StringUtils.format("{} = ?{}", AliasThreadLocalCache.getColumnName(columnName), counts++));
+            segments.add(StringUtils.format("{} = ?{}", AliasCacheHelper.getColumnName(columnName), counts++));
             params.add(value);
         }
         return this;
@@ -81,7 +81,7 @@ public class WhereCriterion {
      */
     public <T> WhereCriterion eq(TaraFunction<T, ?> fn, Object value) {
         if (Objects.nonNull(value)) {
-            String tableColumn = AliasThreadLocalCache.getColumn(fn).getColumnAlias();
+            String tableColumn = AliasCacheHelper.getColumn(fn).getColumnAlias();
             segments.add(StringUtils.format("{} = ?{}", tableColumn, counts++));
             params.add(value);
         }
@@ -96,8 +96,8 @@ public class WhereCriterion {
         if (null == left || null == right) {
             throw new TaraException("The params is required");
         }
-        String tableColumnL = AliasThreadLocalCache.getColumn(left).getColumnAlias();
-        String tableColumnR = AliasThreadLocalCache.getColumn(right).getColumnAlias();
+        String tableColumnL = AliasCacheHelper.getColumn(left).getColumnAlias();
+        String tableColumnR = AliasCacheHelper.getColumn(right).getColumnAlias();
         segments.add(StringUtils.format("{} = {}", tableColumnL, tableColumnR));
         return this;
     }
@@ -146,7 +146,7 @@ public class WhereCriterion {
      */
     public WhereCriterion ne(String columnName, Object value) {
         if (Objects.nonNull(value)) {
-            segments.add(StringUtils.format("{} != ?{}", AliasThreadLocalCache.getColumnName(columnName), counts++));
+            segments.add(StringUtils.format("{} != ?{}", AliasCacheHelper.getColumnName(columnName), counts++));
             params.add(value);
         }
         return this;
@@ -161,7 +161,7 @@ public class WhereCriterion {
      */
     public <T> WhereCriterion lt(TaraFunction<T, ?> fn, Object value) {
         if (Objects.nonNull(value)) {
-            String tableColumn = AliasThreadLocalCache.getColumn(fn).getColumnAlias();
+            String tableColumn = AliasCacheHelper.getColumn(fn).getColumnAlias();
             segments.add(StringUtils.format("{} < ?{}", tableColumn, counts++));
             params.add(value);
         }
@@ -177,7 +177,7 @@ public class WhereCriterion {
      */
     public WhereCriterion lt(String columnName, Object value) {
         if (Objects.nonNull(value)) {
-            segments.add(StringUtils.format("{} < ?{}", AliasThreadLocalCache.getColumnName(columnName), counts++));
+            segments.add(StringUtils.format("{} < ?{}", AliasCacheHelper.getColumnName(columnName), counts++));
             params.add(value);
         }
         return this;
@@ -192,7 +192,7 @@ public class WhereCriterion {
      */
     public <T> WhereCriterion lte(TaraFunction<T, ?> fn, Object value) {
         if (Objects.nonNull(value)) {
-            String tableColumn = AliasThreadLocalCache.getColumn(fn).getColumnAlias();
+            String tableColumn = AliasCacheHelper.getColumn(fn).getColumnAlias();
             segments.add(StringUtils.format("{} <= ?{}", tableColumn, counts++));
             params.add(value);
         }
@@ -208,7 +208,7 @@ public class WhereCriterion {
      */
     public WhereCriterion lte(String columnName, Object value) {
         if (Objects.nonNull(value)) {
-            segments.add(StringUtils.format("{} <= ?{}", AliasThreadLocalCache.getColumnName(columnName), counts++));
+            segments.add(StringUtils.format("{} <= ?{}", AliasCacheHelper.getColumnName(columnName), counts++));
             params.add(value);
         }
         return this;
@@ -223,7 +223,7 @@ public class WhereCriterion {
      */
     public <T> WhereCriterion gt(TaraFunction<T, ?> fn, Object value) {
         if (Objects.nonNull(value)) {
-            String tableColumn = AliasThreadLocalCache.getColumn(fn).getColumnAlias();
+            String tableColumn = AliasCacheHelper.getColumn(fn).getColumnAlias();
             segments.add(StringUtils.format("{} > ?{}", tableColumn, counts++));
             params.add(value);
         }
@@ -239,7 +239,7 @@ public class WhereCriterion {
      */
     public WhereCriterion gt(String columnName, Object value) {
         if (Objects.nonNull(value)) {
-            segments.add(StringUtils.format("{} > ?{}", AliasThreadLocalCache.getColumnName(columnName), counts++));
+            segments.add(StringUtils.format("{} > ?{}", AliasCacheHelper.getColumnName(columnName), counts++));
             params.add(value);
         }
         return this;
@@ -254,7 +254,7 @@ public class WhereCriterion {
      */
     public <T> WhereCriterion gte(TaraFunction<T, ?> fn, Object value) {
         if (Objects.nonNull(value)) {
-            String tableColumn = AliasThreadLocalCache.getColumn(fn).getColumnAlias();
+            String tableColumn = AliasCacheHelper.getColumn(fn).getColumnAlias();
             segments.add(StringUtils.format("{} >= ?{}", tableColumn, counts++));
             params.add(value);
         }
@@ -270,7 +270,7 @@ public class WhereCriterion {
      */
     public WhereCriterion gte(String columnName, Object value) {
         if (Objects.nonNull(value)) {
-            segments.add(StringUtils.format("{} >= ?{}", AliasThreadLocalCache.getColumnName(columnName), counts++));
+            segments.add(StringUtils.format("{} >= ?{}", AliasCacheHelper.getColumnName(columnName), counts++));
             params.add(value);
         }
         return this;
@@ -283,7 +283,7 @@ public class WhereCriterion {
      * @return where criterion
      */
     public <T> WhereCriterion isNull(TaraFunction<T, ?> fn) {
-        String tableColumn = AliasThreadLocalCache.getColumn(fn).getColumnAlias();
+        String tableColumn = AliasCacheHelper.getColumn(fn).getColumnAlias();
         segments.add(tableColumn + " IS NULL");
         return this;
     }
@@ -295,7 +295,7 @@ public class WhereCriterion {
      * @return where criterion
      */
     public WhereCriterion isNull(String columnName) {
-        segments.add(AliasThreadLocalCache.getColumnName(columnName) + " IS NULL");
+        segments.add(AliasCacheHelper.getColumnName(columnName) + " IS NULL");
         return this;
     }
 
@@ -306,7 +306,7 @@ public class WhereCriterion {
      * @return where criterion
      */
     public <T> WhereCriterion isNotNull(TaraFunction<T, ?> fn) {
-        String tableColumn = AliasThreadLocalCache.getColumn(fn).getColumnAlias();
+        String tableColumn = AliasCacheHelper.getColumn(fn).getColumnAlias();
 
         segments.add(tableColumn + " IS NOT NULL");
         return this;
@@ -319,7 +319,7 @@ public class WhereCriterion {
      * @return where criterion
      */
     public WhereCriterion isNotNull(String columnName) {
-        segments.add(AliasThreadLocalCache.getColumnName(columnName) + " IS NOT NULL");
+        segments.add(AliasCacheHelper.getColumnName(columnName) + " IS NOT NULL");
         return this;
     }
 
@@ -332,7 +332,7 @@ public class WhereCriterion {
      */
     public <T> WhereCriterion startsWith(TaraFunction<T, ?> fn, Object value) {
         if (Objects.nonNull(value)) {
-            String tableColumn = AliasThreadLocalCache.getColumn(fn).getColumnAlias();
+            String tableColumn = AliasCacheHelper.getColumn(fn).getColumnAlias();
             segments.add(StringUtils.format("{} LIKE ?{}", tableColumn, counts++));
             params.add(value + "%");
         }
@@ -348,8 +348,8 @@ public class WhereCriterion {
      */
     public WhereCriterion startsWith(String columnName, Object value) {
         if (Objects.nonNull(value)) {
-            AliasThreadLocalCache.getColumnName(columnName);
-            segments.add(StringUtils.format("{} LIKE ?{}", AliasThreadLocalCache.getColumnName(columnName), counts++));
+            AliasCacheHelper.getColumnName(columnName);
+            segments.add(StringUtils.format("{} LIKE ?{}", AliasCacheHelper.getColumnName(columnName), counts++));
             params.add(value + "%");
         }
         return this;
@@ -364,7 +364,7 @@ public class WhereCriterion {
      */
     public <T> WhereCriterion contains(TaraFunction<T, ?> fn, Object value) {
         if (Objects.nonNull(value)) {
-            String tableColumn = AliasThreadLocalCache.getColumn(fn).getColumnAlias();
+            String tableColumn = AliasCacheHelper.getColumn(fn).getColumnAlias();
             segments.add(StringUtils.format("{} LIKE ?{}", tableColumn, counts++));
             params.add("%" + value + "%");
         }
@@ -380,7 +380,7 @@ public class WhereCriterion {
      */
     public WhereCriterion contains(String columnName, Object value) {
         if (Objects.nonNull(value)) {
-            segments.add(StringUtils.format("{} LIKE ?{}", AliasThreadLocalCache.getColumnName(columnName), counts++));
+            segments.add(StringUtils.format("{} LIKE ?{}", AliasCacheHelper.getColumnName(columnName), counts++));
             params.add("%" + value + "%");
         }
         return this;
@@ -395,7 +395,7 @@ public class WhereCriterion {
      */
     public <T> WhereCriterion endsWith(TaraFunction<T, ?> fn, Object value) {
         if (Objects.nonNull(value)) {
-            String tableColumn = AliasThreadLocalCache.getColumn(fn).getColumnAlias();
+            String tableColumn = AliasCacheHelper.getColumn(fn).getColumnAlias();
             segments.add(StringUtils.format("{} LIKE ?{}", tableColumn, counts++));
             params.add("%" + value);
         }
@@ -411,7 +411,7 @@ public class WhereCriterion {
      */
     public WhereCriterion endsWith(String columnName, Object value) {
         if (Objects.nonNull(value)) {
-            segments.add(StringUtils.format("{} LIKE ?{}", AliasThreadLocalCache.getColumnName(columnName), counts++));
+            segments.add(StringUtils.format("{} LIKE ?{}", AliasCacheHelper.getColumnName(columnName), counts++));
             params.add("%" + value);
         }
         return this;
@@ -426,7 +426,7 @@ public class WhereCriterion {
      */
     public <T> WhereCriterion notStartsWith(TaraFunction<T, ?> fn, Object value) {
         if (Objects.nonNull(value)) {
-            String tableColumn = AliasThreadLocalCache.getColumn(fn).getColumnAlias();
+            String tableColumn = AliasCacheHelper.getColumn(fn).getColumnAlias();
             segments.add(StringUtils.format("{} NOT LIKE ?{}", tableColumn, counts++));
             params.add(value + "%");
         }
@@ -442,7 +442,7 @@ public class WhereCriterion {
      */
     public WhereCriterion notStartsWith(String columnName, Object value) {
         if (Objects.nonNull(value)) {
-            segments.add(StringUtils.format("{} NOT LIKE ?{}", AliasThreadLocalCache.getColumnName(columnName), counts++));
+            segments.add(StringUtils.format("{} NOT LIKE ?{}", AliasCacheHelper.getColumnName(columnName), counts++));
             params.add(value + "%");
         }
         return this;
@@ -457,7 +457,7 @@ public class WhereCriterion {
      */
     public <T> WhereCriterion notContains(TaraFunction<T, ?> fn, Object value) {
         if (Objects.nonNull(value)) {
-            String tableColumn = AliasThreadLocalCache.getColumn(fn).getColumnAlias();
+            String tableColumn = AliasCacheHelper.getColumn(fn).getColumnAlias();
             segments.add(StringUtils.format("{} NOT LIKE ?{}", tableColumn, counts++));
             params.add("%" + value + "%");
         }
@@ -473,7 +473,7 @@ public class WhereCriterion {
      */
     public WhereCriterion notContains(String columnName, Object value) {
         if (Objects.nonNull(value)) {
-            segments.add(StringUtils.format("{} NOT LIKE ?{}", AliasThreadLocalCache.getColumnName(columnName), counts++));
+            segments.add(StringUtils.format("{} NOT LIKE ?{}", AliasCacheHelper.getColumnName(columnName), counts++));
             params.add("%" + value + "%");
         }
         return this;
@@ -489,7 +489,7 @@ public class WhereCriterion {
 
     public WhereCriterion notEndsWith(String columnName, Object value) {
         if (Objects.nonNull(value)) {
-            segments.add(StringUtils.format("{} NOT LIKE ?{}", AliasThreadLocalCache.getColumnName(columnName), counts++));
+            segments.add(StringUtils.format("{} NOT LIKE ?{}", AliasCacheHelper.getColumnName(columnName), counts++));
             params.add("%" + value);
         }
         return this;
@@ -505,7 +505,7 @@ public class WhereCriterion {
 
     public <T> WhereCriterion notEndsWith(TaraFunction<T, ?> fn, Object value) {
         if (Objects.nonNull(value)) {
-            String tableColumn = AliasThreadLocalCache.getColumn(fn).getColumnAlias();
+            String tableColumn = AliasCacheHelper.getColumn(fn).getColumnAlias();
             segments.add(StringUtils.format("{} NOT LIKE ?{}", tableColumn, counts++));
             params.add("%" + value);
         }
@@ -521,7 +521,7 @@ public class WhereCriterion {
      */
     public WhereCriterion in(String columnName, Collection<Object> value) {
         if (Objects.nonNull(value)) {
-            segments.add(StringUtils.format("{} IN ?{}", AliasThreadLocalCache.getColumnName(columnName), counts++));
+            segments.add(StringUtils.format("{} IN ?{}", AliasCacheHelper.getColumnName(columnName), counts++));
             params.add(value);
         }
         return this;
@@ -536,7 +536,7 @@ public class WhereCriterion {
      */
     public <T> WhereCriterion in(TaraFunction<T, ?> fn, Collection<Object> value) {
         if (Objects.nonNull(value)) {
-            String tableColumn = AliasThreadLocalCache.getColumn(fn).getColumnAlias();
+            String tableColumn = AliasCacheHelper.getColumn(fn).getColumnAlias();
             segments.add(StringUtils.format("{} IN ?{}", tableColumn, counts++));
             params.add(value);
         }
@@ -552,7 +552,7 @@ public class WhereCriterion {
      */
     public WhereCriterion notIn(String columnName, Collection<Object> value) {
         if (Objects.nonNull(value)) {
-            segments.add(StringUtils.format("{} NOT IN ?{}", AliasThreadLocalCache.getColumnName(columnName), counts++));
+            segments.add(StringUtils.format("{} NOT IN ?{}", AliasCacheHelper.getColumnName(columnName), counts++));
             params.add(value);
         }
         return this;
@@ -567,7 +567,7 @@ public class WhereCriterion {
      */
     public <T> WhereCriterion notIn(TaraFunction<T, ?> fn, Collection<Object> value) {
         if (Objects.nonNull(value)) {
-            String tableColumn = AliasThreadLocalCache.getColumn(fn).getColumnAlias();
+            String tableColumn = AliasCacheHelper.getColumn(fn).getColumnAlias();
             segments.add(StringUtils.format("{} NOT IN ?{}", tableColumn, counts++));
             params.add(value);
         }
@@ -583,7 +583,7 @@ public class WhereCriterion {
      */
     public WhereCriterion between(String columnName, List<Object> values) {
         if (CollectionUtils.isNotEmpty(values) && values.size() == JoyaConst.TWO_QUERY_COUNT) {
-            segments.add(StringUtils.format("{} BETWEEN ?{} AND ?{}", AliasThreadLocalCache.getColumnName(columnName), counts++, counts++));
+            segments.add(StringUtils.format("{} BETWEEN ?{} AND ?{}", AliasCacheHelper.getColumnName(columnName), counts++, counts++));
             params.addAll(values);
         }
         return this;
@@ -598,7 +598,7 @@ public class WhereCriterion {
      */
     public <T> WhereCriterion between(TaraFunction<T, ?> fn, List<Object> values) {
         if (CollectionUtils.isNotEmpty(values) && values.size() == JoyaConst.TWO_QUERY_COUNT) {
-            String tableColumn = AliasThreadLocalCache.getColumn(fn).getColumnAlias();
+            String tableColumn = AliasCacheHelper.getColumn(fn).getColumnAlias();
             segments.add(StringUtils.format("{} BETWEEN ?{} AND ?{}", tableColumn, counts++, counts++));
             params.addAll(values);
         }
@@ -614,7 +614,7 @@ public class WhereCriterion {
      */
     public WhereCriterion notBetween(String columnName, List<Object> values) {
         if (CollectionUtils.isNotEmpty(values) && values.size() == JoyaConst.TWO_QUERY_COUNT) {
-            segments.add(StringUtils.format("{} NOT BETWEEN ?{} AND ?{}", AliasThreadLocalCache.getColumnName(columnName), counts++, counts++));
+            segments.add(StringUtils.format("{} NOT BETWEEN ?{} AND ?{}", AliasCacheHelper.getColumnName(columnName), counts++, counts++));
             params.addAll(values);
         }
         return this;
@@ -629,7 +629,7 @@ public class WhereCriterion {
      */
     public <T> WhereCriterion notBetween(TaraFunction<T, ?> fn, List<Object> values) {
         if (CollectionUtils.isNotEmpty(values) && values.size() == JoyaConst.TWO_QUERY_COUNT) {
-            String tableColumn = AliasThreadLocalCache.getColumn(fn).getColumnAlias();
+            String tableColumn = AliasCacheHelper.getColumn(fn).getColumnAlias();
             segments.add(StringUtils.format("{} NOT BETWEEN ?{} AND ?{}", tableColumn, counts++, counts++));
             params.addAll(values);
         }

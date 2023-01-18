@@ -3,8 +3,8 @@ package com.sondertara.joya.core.query.criterion;
 
 import com.sondertara.common.exception.TaraException;
 import com.sondertara.common.function.TaraFunction;
-import com.sondertara.common.structure.NodeList;
-import com.sondertara.joya.cache.AliasThreadLocalCache;
+import com.sondertara.common.lang.tree.NodeList;
+import com.sondertara.joya.cache.AliasCacheHelper;
 import com.sondertara.joya.core.constant.JoyaConst;
 import com.sondertara.joya.core.model.ColumnAlias;
 
@@ -118,8 +118,8 @@ public class JoinCriterion {
         if (this.segments.getSize() > MAX_JOIN_COUNT) {
             throw new TaraException("Only support  two join association ," + "if you use too complicated query why no try to optimize the code.");
         }
-        final ColumnAlias columnLeft = AliasThreadLocalCache.getColumn(left);
-        ColumnAlias columnRight = AliasThreadLocalCache.getColumn(right);
+        final ColumnAlias columnLeft = AliasCacheHelper.getColumn(left);
+        ColumnAlias columnRight = AliasCacheHelper.getColumn(right);
         setJoinStr(columnLeft, columnRight, joinType);
     }
 

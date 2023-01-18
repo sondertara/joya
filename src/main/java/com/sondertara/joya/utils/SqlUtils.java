@@ -236,7 +236,7 @@ public class SqlUtils {
      * format column name
      * <p>
      * t0.userName ->t0.user_name
-     * t0.userId AA user -> t0.user_id AS user
+     * t0.userId as user -> t0.user_id AS user
      *
      * @param columnName name
      * @return formatted name
@@ -247,7 +247,6 @@ public class SqlUtils {
         }
         String column = replaceAs(columnName);
         // 有AS
-
         int asIndex = column.indexOf("AS");
 
         String asPart = null;

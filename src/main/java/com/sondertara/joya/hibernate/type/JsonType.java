@@ -1,7 +1,8 @@
 package com.sondertara.joya.hibernate.type;
 
-import com.alibaba.fastjson.JSON;
-import com.alibaba.fastjson.serializer.SerializerFeature;
+
+import com.alibaba.fastjson2.JSON;
+import com.alibaba.fastjson2.JSONWriter;
 import com.sondertara.common.util.StringUtils;
 import org.hibernate.HibernateException;
 import org.hibernate.engine.spi.SharedSessionContractImplementor;
@@ -128,7 +129,7 @@ public class JsonType implements UserType, DynamicParameterizedType, Serializabl
         } else {
             String json;
             if (type == Object.class) {
-                json = JSON.toJSONString(value, SerializerFeature.WriteClassName);
+                json = JSON.toJSONString(value, JSONWriter.Feature.WriteClassName);
             } else {
                 json = JSON.toJSONString(value);
             }

@@ -1,7 +1,7 @@
 package com.sondertara.joya.core.query.criterion;
 
 import com.sondertara.common.function.TaraFunction;
-import com.sondertara.joya.cache.AliasThreadLocalCache;
+import com.sondertara.joya.cache.AliasCacheHelper;
 
 import java.util.StringJoiner;
 
@@ -34,7 +34,7 @@ public class SelectCriterion {
      */
     public <T> SelectCriterion add(TaraFunction<T, ?> fn) {
 
-        String column = AliasThreadLocalCache.getColumn(fn).getColumnAlias();
+        String column = AliasCacheHelper.getColumn(fn).getColumnAlias();
         fields.add(column);
 
         return this;

@@ -27,22 +27,17 @@ public class SimpleBatchPreparedStatementSetter implements BatchPreparedStatemen
     public void setValues(@NonNull PreparedStatement ps, int i) throws SQLException {
         TableEntity table = rows.get(i);
         Map<String, Object> data = table.getData();
-        Map<String, SqlParameterValue> sqlType = table.getSqlType();
+
         Map<String, Class<?>> columnType = table.getColumnType();
         int colIndex = 0;
         for (Map.Entry<String, Object> entry : data.entrySet()) {
             Object value = entry.getValue();
             colIndex++;
-            //if (sqlType.containsKey(entry.getKey())) {
-            //    value = sqlType.get(entry.getKey());
-            //}
+
             int type = StatementCreatorUtils.javaTypeToSqlParameterType(columnType.get(entry.getKey()));
 
             SqlParameterValue paramValue = new SqlParameterValue(type, value);
             StatementCreatorUtils.setParameterValue(ps, colIndex, paramValue, paramValue.getValue());
-            //} else {
-            //    StatementCreatorUtils.setParameterValue(ps, colIndex, SqlTypeValue.TYPE_UNKNOWN, value);
-            //}
         }
     }
 

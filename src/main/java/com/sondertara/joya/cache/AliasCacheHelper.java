@@ -8,7 +8,7 @@ import com.sondertara.common.util.StringFormatter;
 import com.sondertara.common.util.StringUtils;
 import com.sondertara.joya.core.model.ColumnAlias;
 import com.sondertara.joya.core.model.TableAlias;
-import com.sondertara.joya.core.model.TableStruct;
+import com.sondertara.joya.core.model.TableStructDef;
 import com.sondertara.joya.utils.ThreadLocalUtil;
 
 import javax.persistence.EntityNotFoundException;
@@ -32,7 +32,7 @@ import static com.sondertara.joya.core.constant.JoyaConst.JOYA_SQL;
  *
  * @author huangxiaohu
  */
-public final class AliasThreadLocalCache {
+public final class AliasCacheHelper {
 
     /**
      * The pattern  for get part of method
@@ -54,12 +54,12 @@ public final class AliasThreadLocalCache {
     @SuppressWarnings("unchecked")
     public static void generateTableAlias(Class<?> aClass) {
 
-        TableStruct tableStruct = LocalEntityCache.getInstance().get(aClass.getName()).orElseThrow(() -> new TaraException("No entity found with class:{}", aClass.getName()));
+        TableStructDef tableStructDef = LocalEntityCache.getInstance().get(aClass.getName()).orElseThrow(() -> new TaraException("No entity found with class:{}", aClass.getName()));
         LinkedHashMap<String, TableAlias> aliasMap = (LinkedHashMap<String, TableAlias>) ThreadLocalUtil.get(JOYA_SQL);
 
         TableAlias aliasDTO = new TableAlias();
         aliasDTO.setClassName(aClass.getName());
-        aliasDTO.setTableName(tableStruct.getTableName());
+        aliasDTO.setTableName(tableStructDef.getTableName());
         aliasDTO.setAliasName(StringFormatter.format("t{}", aliasMap.size()));
         aliasMap.putIfAbsent(aClass.getName(), aliasDTO);
     }
@@ -99,7 +99,7 @@ public final class AliasThreadLocalCache {
 
             String className = implClass.replace("/", ".");
 
-            Optional<TableStruct> optional = LocalEntityCache.getInstance().get(className);
+            Optional<TableStructDef> optional = LocalEntityCache.getInstance().get(className);
             // get the field name
             if (GET_PATTERN.matcher(getter).matches()) {
                 getter = getter.substring(3);
@@ -151,8 +151,8 @@ public final class AliasThreadLocalCache {
 
     }
 
-    public static TableStruct getTable(String className) {
-        Optional<TableStruct> optional = LocalEntityCache.getInstance().get(className);
+    public static TableStructDef getTable(String className) {
+        Optional<TableStructDef> optional = LocalEntityCache.getInstance().get(className);
         return optional.orElseThrow(() -> new TaraException("No Table found by className:" + className));
     }
 

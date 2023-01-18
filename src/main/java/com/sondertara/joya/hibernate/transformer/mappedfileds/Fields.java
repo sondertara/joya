@@ -11,6 +11,7 @@ import java.util.Map;
  */
 public class Fields {
     protected String name;
+
     protected PropertyDescriptor propertyDescriptor;
     protected Map<String, Fields> childrenFields;
 

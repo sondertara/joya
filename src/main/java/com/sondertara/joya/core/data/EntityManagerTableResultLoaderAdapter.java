@@ -3,7 +3,7 @@ package com.sondertara.joya.core.data;
 import com.sondertara.common.util.StringFormatter;
 import com.sondertara.common.util.StringUtils;
 import com.sondertara.joya.cache.LocalEntityCache;
-import com.sondertara.joya.core.model.TableStruct;
+import com.sondertara.joya.core.model.TableStructDef;
 import com.sondertara.joya.ext.JoyaSpringContext;
 
 import javax.persistence.Column;
@@ -22,14 +22,15 @@ import java.util.Optional;
 
 /**
  * Get the tables with EntityManager
- * you can implement your own adapter,and customize it by use {@link LocalEntityCache#setTableResult(AbstractTableResult)}
+ * you can implement your own adapter,and customize it by use {@link LocalEntityCache#setTableResultAdapter(TableResultLoader)} (TableResultLoader)}
  *
  * @author huangxiaohu
  */
-public class EntityManagerTableResultAdapter extends AbstractTableResult {
+public class EntityManagerTableResultLoaderAdapter implements TableResultLoader {
     @Override
-    public List<TableStruct> load() {
-        List<TableStruct> result = new ArrayList<>();
+
+    public List<TableStructDef> load() {
+        List<TableStructDef> result = new ArrayList<>();
         EntityManager entityManager = JoyaSpringContext.getBean(EntityManager.class);
         Metamodel metamodel = entityManager.getEntityManagerFactory().getMetamodel();
         for (EntityType<?> entity : metamodel.getEntities()) {
@@ -44,15 +45,15 @@ public class EntityManagerTableResultAdapter extends AbstractTableResult {
                 }
                 field.setAccessible(true);
                 Column fieldAnnotation = field.getAnnotation(Column.class);
-                String columnName = Optional.ofNullable(fieldAnnotation).map(f -> StringUtils.isBlank(f.name()) ? StringUtils.toUnderlineCase(field.getName()) : StringUtils.toLowerCase(f.name())).orElse(StringUtils.toUnderlineCase(field.getName()));
+                String columnName = Optional.ofNullable(fieldAnnotation).filter(f -> !StringUtils.isBlank(f.name())).map(f -> StringUtils.toLowerCase(f.name())).orElse(StringUtils.toUnderlineCase(field.getName()));
                 fieldNames.put(field.getName(), columnName);
                 field.setAccessible(false);
             }
-            TableStruct tableStruct = new TableStruct();
-            tableStruct.setClassName(aClass.getName());
-            tableStruct.setTableName(tableName);
-            tableStruct.setFields(fieldNames);
-            result.add(tableStruct);
+            TableStructDef tableStructDef = new TableStructDef();
+            tableStructDef.setClassName(aClass.getName());
+            tableStructDef.setTableName(tableName);
+            tableStructDef.setFields(fieldNames);
+            result.add(tableStructDef);
         }
         return result;
     }

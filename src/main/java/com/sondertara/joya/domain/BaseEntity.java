@@ -1,7 +1,7 @@
 package com.sondertara.joya.domain;
 
 
-import com.alibaba.fastjson.annotation.JSONField;
+import com.alibaba.fastjson2.annotation.JSONField;
 import com.sondertara.common.util.LocalDateTimeUtils;
 import com.sondertara.common.util.StringUtils;
 
@@ -60,7 +60,7 @@ public abstract class BaseEntity<T extends Model<T, ID>, ID extends Serializable
 
             if ((StringUtils.endWith(fieldName, "Time", true) || StringUtils.endWith(fieldName, "Date", true))) {
                 if (objects.length == 2) {
-                    return Arrays.asList(LocalDateTimeUtils.parseToDate((String) objects[0]), LocalDateTimeUtils.parseToDate((String) objects[1]));
+                    return Arrays.asList(LocalDateTimeUtils.parseDate((String) objects[0]), LocalDateTimeUtils.parseDate((String) objects[1]));
                 }
             }
             return Arrays.asList(objects);

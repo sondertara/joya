@@ -1,17 +1,17 @@
 package com.sondertara.joya.core.data;
 
-import com.sondertara.joya.core.model.TableStruct;
+import com.sondertara.joya.core.model.TableStructDef;
 
 import java.util.List;
 
 /**
  * @author huangxiaohu
  */
-public abstract class AbstractTableResult {
+public  interface TableResultLoader {
     /**
      * Load the table information and the entity class  of the associated control.
      *
      * @return the list of table
      */
-    public abstract List<TableStruct> load();
+    public abstract List<TableStructDef> load();
 }

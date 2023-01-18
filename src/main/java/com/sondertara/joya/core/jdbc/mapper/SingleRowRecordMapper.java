@@ -16,7 +16,7 @@ public class SingleRowRecordMapper<T> implements RecordMapper<T> {
 
     @Override
     public T map(Record record) {
-        if (record.next()) {
+        if (record.hasMore()) {
             return rowMapper.map(record.getCurrentRow());
         }
         return null;
