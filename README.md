@@ -29,14 +29,14 @@ Maven Project
 <dependency>
     <groupId>com.sondertara</groupId>
     <artifactId>joya</artifactId>
-    <version>0.1.2</version>
+    <version>0.2.0</version>
 </dependency>
 ```
 
 Gradle Project
 
 ```groovy
-implementation 'com.sondertara:joya:0.1.2'
+implementation 'com.sondertara:joya:0.2.0'
 ```
 
 ### 2.添加配置
