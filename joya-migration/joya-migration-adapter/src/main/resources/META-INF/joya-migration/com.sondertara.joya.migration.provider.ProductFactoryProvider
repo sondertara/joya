@@ -1,0 +1,2 @@
+mysql=com.sondertara.joya.migration.mysql.MysqlProductFactoryProvider
+oracle=com.sondertara.joya.migration.oracle.OracleProductFactoryProvider
