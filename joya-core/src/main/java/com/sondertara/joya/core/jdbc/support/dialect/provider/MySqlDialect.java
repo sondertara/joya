@@ -15,7 +15,7 @@
  */
 package com.sondertara.joya.core.jdbc.support.dialect.provider;
 
-import com.sondertara.common.base.StringUtils;
+import com.sondertara.joya.utils.Strings;
 import com.sondertara.joya.core.jdbc.support.dialect.BoundSql;
 import com.sondertara.joya.core.jdbc.support.dialect.InsertSqlDialect;
 import com.sondertara.joya.core.jdbc.support.dialect.PageSqlDialect;
@@ -43,8 +43,8 @@ public class MySqlDialect extends AbstractDialect implements PageSqlDialect, Ins
 
     @Override
     public String tableName(boolean useQualifier, String catalog, String schema, String table) {
-        boolean catalogBlank = StringUtils.isBlank(catalog);
-        boolean schemaBlank = StringUtils.isBlank(schema);
+        boolean catalogBlank = Strings.isBlank(catalog);
+        boolean schemaBlank = Strings.isBlank(schema);
 
         if (!catalogBlank && !schemaBlank) {
             return fmtName(useQualifier, catalog) + "." + fmtName(useQualifier, table);

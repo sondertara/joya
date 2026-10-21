@@ -15,7 +15,7 @@
  */
 package com.sondertara.joya.core.jdbc.support.dialect.provider;
 
-import com.sondertara.common.base.StringUtils;
+import com.sondertara.joya.utils.Strings;
 import com.sondertara.joya.core.jdbc.support.dialect.BoundSql;
 import com.sondertara.joya.core.jdbc.support.dialect.PageSqlDialect;
 
@@ -53,7 +53,7 @@ public class SqlServerDialect extends AbstractDialect implements PageSqlDialect 
 
     @Override
     public String fmtName(boolean useQualifier, String name) {
-        if (StringUtils.isBlank(name)) {
+        if (Strings.isBlank(name)) {
             return name;
         }
         if (this.keywords().contains(name.toUpperCase()) || name.contains(" ")) {
@@ -70,14 +70,14 @@ public class SqlServerDialect extends AbstractDialect implements PageSqlDialect 
     @Override
     public String tableName(boolean useQualifier, String catalog, String schema, String table) {
         StringBuilder strBuilder = new StringBuilder();
-        if (StringUtils.isNotBlank(catalog)) {
+        if (Strings.isNotBlank(catalog)) {
             strBuilder.append(fmtName(useQualifier, catalog));
             strBuilder.append(".");
         }
-        if (StringUtils.isNotBlank(schema)) {
+        if (Strings.isNotBlank(schema)) {
             strBuilder.append(fmtName(useQualifier, schema));
             strBuilder.append(".");
-        } else if (StringUtils.isNotBlank(catalog)) {
+        } else if (Strings.isNotBlank(catalog)) {
             strBuilder.append("dbo.");
         }
 
@@ -105,7 +105,7 @@ public class SqlServerDialect extends AbstractDialect implements PageSqlDialect 
         }
         pagingBuilder.append(sqlPartString);
         // if no ORDER BY is specified use fake ORDER BY field to avoid errors
-        if (StringUtils.isBlank(orderby)) {
+        if (Strings.isBlank(orderby)) {
             orderby = "ORDER BY CURRENT_TIMESTAMP";
         }
         long firstParam = start + 1;

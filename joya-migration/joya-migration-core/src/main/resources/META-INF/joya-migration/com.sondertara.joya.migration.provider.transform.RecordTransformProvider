@@ -1,2 +1,0 @@
-mapped=com.sondertara.joya.migration.provider.transform.MappedTransformProvider
-default=com.sondertara.joya.migration.provider.transform.DefaultTransformProvider

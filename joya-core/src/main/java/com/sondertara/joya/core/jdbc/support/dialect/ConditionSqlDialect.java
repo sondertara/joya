@@ -15,7 +15,7 @@
  */
 package com.sondertara.joya.core.jdbc.support.dialect;
 
-import com.sondertara.common.base.StringUtils;
+import com.sondertara.joya.utils.Strings;
 
 import java.util.List;
 
@@ -36,7 +36,7 @@ public interface ConditionSqlDialect extends SqlDialect {
     }
 
     default String like(SqlLike likeType, Object value) {
-        if (value == null || StringUtils.isBlank(value.toString())) {
+        if (value == null || Strings.isBlank(value.toString())) {
             return "%";
         }
         switch (likeType) {

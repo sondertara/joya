@@ -7,10 +7,7 @@
 package com.sondertara.joya.utils;
 
 import com.sondertara.common.convert.ConvertUtils;
-import com.sondertara.common.exception.TaraException;
-import com.sondertara.common.base.StringUtils;
-import com.sondertara.joya.core.jdbc.support.SqlParameter;
-import com.sondertara.joya.core.jdbc.support.SqlParameterValue;
+import com.sondertara.joya.exceptions.TaraException;
 import lombok.extern.slf4j.Slf4j;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
@@ -27,8 +24,6 @@ import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.sql.Blob;
 import java.sql.Clob;
-import java.sql.DatabaseMetaData;
-import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
@@ -38,13 +33,9 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.ZoneId;
-import java.time.ZoneOffset;
-import java.util.Arrays;
 import java.util.Calendar;
-import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.TimeZone;
 
 /**
  * A help for dealing with BLOB and CLOB data
@@ -264,7 +255,7 @@ public final class SqlDataUtils {
 
     public static String lookupColumnName(ResultSetMetaData resultSetMetaData, int columnIndex) throws SQLException {
         String name = resultSetMetaData.getColumnLabel(columnIndex);
-        if (!StringUtils.hasLength(name)) {
+        if (!Strings.hasLength(name)) {
             name = resultSetMetaData.getColumnName(columnIndex);
         }
         return name;
@@ -353,27 +344,31 @@ public final class SqlDataUtils {
                 String typeName = requiredType.getSimpleName();
                 if (LocalDate.class.isAssignableFrom(requiredType)) {
                     if (String.class.getName().equals(columnClassName)) {
-                        return ConvertUtils.convert(requiredType, rs.getObject(index));
+                        return ConvertUtils.convert(rs.getObject(index), requiredType);
                     } else {
-                        return rs.getDate(index).toLocalDate();
+                        java.sql.Date d = rs.getDate(index);
+                        return d == null ? null : d.toLocalDate();
                     }
                 } else if (LocalTime.class.isAssignableFrom(requiredType)) {
                     if (String.class.getName().equals(columnClassName)) {
-                        return ConvertUtils.convert(requiredType, rs.getObject(index));
+                        return ConvertUtils.convert(rs.getObject(index), requiredType);
                     } else {
-                        return rs.getTime(index).toLocalTime();
+                        java.sql.Time t = rs.getTime(index);
+                        return t == null ? null : t.toLocalTime();
                     }
                 } else if (LocalDateTime.class.getSimpleName().equals(typeName)) {
                     if (String.class.getName().equals(columnClassName)) {
-                        return ConvertUtils.convert(requiredType, rs.getObject(index));
+                        return ConvertUtils.convert(rs.getObject(index), requiredType);
                     } else {
-                        return rs.getTimestamp(index).toLocalDateTime();
+                        java.sql.Timestamp ts = rs.getTimestamp(index);
+                        return ts == null ? null : ts.toLocalDateTime();
                     }
                 } else if (java.time.OffsetDateTime.class.isAssignableFrom(requiredType)) {
                     if (String.class.getName().equals(columnClassName)) {
-                        return ConvertUtils.convert(requiredType, rs.getObject(index));
+                        return ConvertUtils.convert(rs.getObject(index), requiredType);
                     } else {
-                        return rs.getTimestamp(index).toInstant().atZone(ZoneId.systemDefault()).toOffsetDateTime();
+                        java.sql.Timestamp ts = rs.getTimestamp(index);
+                        return ts == null ? null : ts.toInstant().atZone(ZoneId.systemDefault()).toOffsetDateTime();
                     }
                 }
             } catch (Exception e) {
@@ -382,7 +377,7 @@ public final class SqlDataUtils {
                 }
             }
             try {
-                return ConvertUtils.convert(requiredType, rs.getObject(index));
+                return ConvertUtils.convert(rs.getObject(index), requiredType);
             } catch (Exception e) {
                 if (log.isDebugEnabled()) {
                     log.debug("Column of type {} cannot be converted to {} by ConvertUtils", columnClassName, requiredType.getName(), e);
@@ -503,251 +498,6 @@ public final class SqlDataUtils {
     }
 
     /**
-     * Set the value for a parameter. The method used is based on the SQL type
-     * of the parameter and we can handle complex types like arrays and LOBs.
-     *
-     * @param ps         the prepared statement or callable statement
-     * @param paramIndex index of the parameter we are setting
-     * @param param      the parameter as it is declared including type
-     * @param inValue    the value to set
-     * @throws SQLException if thrown by PreparedStatement methods
-     */
-    public static void setParameterValue(PreparedStatement ps, int paramIndex, SqlParameter param,
-                                         @Nullable Object inValue) throws SQLException {
-
-        setParameterValueInternal(ps, paramIndex, param.getSqlType(), param.getTypeName(), param.getScale(), inValue);
-    }
-
-    /**
-     * Set the value for a parameter. The method used is based on the SQL type
-     * of the parameter and we can handle complex types like arrays and LOBs.
-     *
-     * @param ps         the prepared statement or callable statement
-     * @param paramIndex index of the parameter we are setting
-     * @param sqlType    the SQL type of the parameter
-     * @param inValue    the value to set (plain value or an SqlTypeValue)
-     * @throws SQLException if thrown by PreparedStatement methods
-     */
-    public static void setParameterValue(PreparedStatement ps, int paramIndex, int sqlType,
-                                         @Nullable Object inValue) throws SQLException {
-
-        setParameterValueInternal(ps, paramIndex, sqlType, null, null, inValue);
-    }
-
-    /**
-     * Set the value for a parameter. The method used is based on the SQL type
-     * of the parameter and we can handle complex types like arrays and LOBs.
-     *
-     * @param ps         the prepared statement or callable statement
-     * @param paramIndex index of the parameter we are setting
-     * @param sqlType    the SQL type of the parameter
-     * @param typeName   the type name of the parameter
-     *                   (optional, only used for SQL NULL and SqlTypeValue)
-     * @param inValue    the value to set (plain value or an SqlTypeValue)
-     * @throws SQLException if thrown by PreparedStatement methods
-     */
-    public static void setParameterValue(PreparedStatement ps, int paramIndex, int sqlType, String typeName,
-                                         @Nullable Object inValue) throws SQLException {
-
-        setParameterValueInternal(ps, paramIndex, sqlType, typeName, null, inValue);
-    }
-
-    /**
-     * Set the value for a parameter. The method used is based on the SQL type
-     * of the parameter and we can handle complex types like arrays and LOBs.
-     *
-     * @param ps         the prepared statement or callable statement
-     * @param paramIndex index of the parameter we are setting
-     * @param sqlType    the SQL type of the parameter
-     * @param typeName   the type name of the parameter
-     *                   (optional, only used for SQL NULL and SqlTypeValue)
-     * @param scale      the number of digits after the decimal point
-     *                   (for DECIMAL and NUMERIC types)
-     * @param inValue    the value to set (plain value or an SqlTypeValue)
-     * @throws SQLException if thrown by PreparedStatement methods
-     */
-    private static void setParameterValueInternal(PreparedStatement ps, int paramIndex, int sqlType,
-                                                  @Nullable String typeName, @Nullable Integer scale, @Nullable Object inValue) throws SQLException {
-
-        String typeNameToUse = typeName;
-        int sqlTypeToUse = sqlType;
-        Object inValueToUse = inValue;
-
-        // override type info?
-        if (inValue instanceof SqlParameterValue) {
-            SqlParameterValue parameterValue = (SqlParameterValue) inValue;
-            if (log.isDebugEnabled()) {
-                log.debug("Overriding type info with runtime info from SqlParameterValue: column index " + paramIndex +
-                        ", SQL type " + parameterValue.getSqlType() + ", type name " + parameterValue.getTypeName());
-            }
-            if (parameterValue.getSqlType() != JdbcUtils.TYPE_UNKNOWN) {
-                sqlTypeToUse = parameterValue.getSqlType();
-            }
-            if (parameterValue.getTypeName() != null) {
-                typeNameToUse = parameterValue.getTypeName();
-            }
-            inValueToUse = parameterValue.getValue();
-        }
-
-        if (log.isTraceEnabled()) {
-            log.trace("Setting SQL statement parameter value: column index " + paramIndex +
-                    ", parameter value [" + inValueToUse +
-                    "], value class [" + (inValueToUse != null ? inValueToUse.getClass().getName() : "null") +
-                    "], SQL type " + (sqlTypeToUse == JdbcUtils.TYPE_UNKNOWN ? "unknown" : Integer.toString(sqlTypeToUse)));
-        }
-
-        if (inValueToUse == null) {
-            setNull(ps, paramIndex, sqlTypeToUse, typeNameToUse);
-        } else {
-            setValue(ps, paramIndex, sqlTypeToUse, scale, inValueToUse);
-        }
-    }
-
-    /**
-     * Set the specified PreparedStatement parameter to null,
-     * respecting database-specific peculiarities.
-     */
-    private static void setNull(PreparedStatement ps, int paramIndex, int sqlType, String typeName)
-            throws SQLException {
-
-        if (sqlType == JdbcUtils.TYPE_UNKNOWN || (sqlType == Types.OTHER && typeName == null)) {
-            boolean useSetObject = false;
-            Integer sqlTypeToUse = null;
-            if (!shouldIgnoreGetParameterType) {
-                try {
-                    sqlTypeToUse = ps.getParameterMetaData().getParameterType(paramIndex);
-                } catch (SQLException ex) {
-                    if (log.isDebugEnabled()) {
-                        log.debug("JDBC getParameterType call failed - using fallback method instead: " + ex);
-                    }
-                }
-            }
-            if (sqlTypeToUse == null) {
-                // Proceed with database-specific checks
-                sqlTypeToUse = Types.NULL;
-                DatabaseMetaData dbmd = ps.getConnection().getMetaData();
-                String jdbcDriverName = dbmd.getDriverName();
-                String databaseProductName = dbmd.getDatabaseProductName();
-                if (databaseProductName.startsWith("Informix") ||
-                        (jdbcDriverName.startsWith("Microsoft") && jdbcDriverName.contains("SQL Server"))) {
-                    // "Microsoft SQL Server JDBC Driver 3.0" versus "Microsoft JDBC Driver 4.0 for SQL Server"
-                    useSetObject = true;
-                } else if (databaseProductName.startsWith("DB2") ||
-                        jdbcDriverName.startsWith("jConnect") ||
-                        jdbcDriverName.startsWith("SQLServer") ||
-                        jdbcDriverName.startsWith("Apache Derby")) {
-                    sqlTypeToUse = Types.VARCHAR;
-                }
-            }
-            if (useSetObject) {
-                ps.setObject(paramIndex, null);
-            } else {
-                ps.setNull(paramIndex, sqlTypeToUse);
-            }
-        } else if (typeName != null) {
-            ps.setNull(paramIndex, sqlType, typeName);
-        } else {
-            ps.setNull(paramIndex, sqlType);
-        }
-    }
-
-    private static void setValue(PreparedStatement ps, int paramIndex, int sqlType, @Nullable Integer scale, Object inValue) throws SQLException {
-
-        if (sqlType == Types.VARCHAR || sqlType == Types.LONGVARCHAR) {
-            ps.setString(paramIndex, inValue.toString());
-        } else if (sqlType == Types.NVARCHAR || sqlType == Types.LONGNVARCHAR) {
-            ps.setNString(paramIndex, inValue.toString());
-        } else if ((sqlType == Types.CLOB || sqlType == Types.NCLOB) && isStringValue(inValue.getClass())) {
-            String strVal = inValue.toString();
-            if (strVal.length() > 4000) {
-                // Necessary for older Oracle drivers, in particular when running against an Oracle 10 database.
-                // Should also work fine against other drivers/databases since it uses standard JDBC 4.0 API.
-                if (sqlType == Types.NCLOB) {
-                    ps.setNClob(paramIndex, new StringReader(strVal), strVal.length());
-                } else {
-                    ps.setClob(paramIndex, new StringReader(strVal), strVal.length());
-                }
-            } else {
-                // Fallback: setString or setNString binding
-                if (sqlType == Types.NCLOB) {
-                    ps.setNString(paramIndex, strVal);
-                } else {
-                    ps.setString(paramIndex, strVal);
-                }
-            }
-        } else if (sqlType == Types.DECIMAL || sqlType == Types.NUMERIC) {
-            if (inValue instanceof BigDecimal) {
-                ps.setBigDecimal(paramIndex, (BigDecimal) inValue);
-            } else if (scale != null) {
-                ps.setObject(paramIndex, inValue, sqlType, scale);
-            } else {
-                ps.setObject(paramIndex, inValue, sqlType);
-            }
-        } else if (sqlType == Types.BOOLEAN) {
-            if (inValue instanceof Boolean) {
-                ps.setBoolean(paramIndex, (Boolean) inValue);
-            } else {
-                ps.setObject(paramIndex, inValue, Types.BOOLEAN);
-            }
-        } else if (sqlType == Types.DATE) {
-            if (inValue instanceof java.util.Date) {
-                if (inValue instanceof java.sql.Date) {
-                    ps.setDate(paramIndex, (java.sql.Date) inValue);
-                } else {
-                    ps.setDate(paramIndex, new java.sql.Date(((java.util.Date) inValue).getTime()));
-                }
-            } else if (inValue instanceof Calendar) {
-                Calendar cal = (Calendar) inValue;
-                ps.setDate(paramIndex, new java.sql.Date(cal.getTime().getTime()), cal);
-            } else {
-                ps.setObject(paramIndex, inValue, Types.DATE);
-            }
-        } else if (sqlType == Types.TIME) {
-            if (inValue instanceof java.util.Date) {
-                if (inValue instanceof java.sql.Time) {
-                    ps.setTime(paramIndex, (java.sql.Time) inValue);
-                } else {
-                    ps.setTime(paramIndex, new java.sql.Time(((java.util.Date) inValue).getTime()));
-                }
-            } else if (inValue instanceof Calendar) {
-                Calendar cal = (Calendar) inValue;
-                ps.setTime(paramIndex, new java.sql.Time(cal.getTime().getTime()), cal);
-            } else {
-                ps.setObject(paramIndex, inValue, Types.TIME);
-            }
-        } else if (sqlType == Types.TIMESTAMP) {
-            if (inValue instanceof java.util.Date) {
-                if (inValue instanceof java.sql.Timestamp) {
-                    ps.setTimestamp(paramIndex, (java.sql.Timestamp) inValue);
-                } else {
-                    ps.setTimestamp(paramIndex, new java.sql.Timestamp(((java.util.Date) inValue).getTime()));
-                }
-            } else if (inValue instanceof Calendar) {
-                Calendar cal = (Calendar) inValue;
-                ps.setTimestamp(paramIndex, new java.sql.Timestamp(cal.getTime().getTime()), cal);
-            } else {
-                ps.setObject(paramIndex, inValue, Types.TIMESTAMP);
-            }
-        } else if (sqlType == JdbcUtils.TYPE_UNKNOWN || (sqlType == Types.OTHER &&
-                "Oracle".equals(ps.getConnection().getMetaData().getDatabaseProductName()))) {
-            if (isStringValue(inValue.getClass())) {
-                ps.setString(paramIndex, inValue.toString());
-            } else if (isDateValue(inValue.getClass())) {
-                ps.setTimestamp(paramIndex, new java.sql.Timestamp(((java.util.Date) inValue).getTime()));
-            } else if (inValue instanceof Calendar) {
-                Calendar cal = (Calendar) inValue;
-                ps.setTimestamp(paramIndex, new java.sql.Timestamp(cal.getTime().getTime()), cal);
-            } else {
-                // Fall back to generic setObject call without SQL type specified.
-                ps.setObject(paramIndex, inValue);
-            }
-        } else {
-            // Fall back to generic setObject call with SQL type specified.
-            ps.setObject(paramIndex, inValue, sqlType);
-        }
-    }
-
-    /**
      * Check whether the given value can be treated as a String value.
      */
     private static boolean isStringValue(Class<?> inValueType) {
@@ -766,35 +516,5 @@ public final class SqlDataUtils {
                         java.sql.Time.class.isAssignableFrom(inValueType) ||
                         java.sql.Timestamp.class.isAssignableFrom(inValueType)));
     }
-
-    /**
-     * Clean up all resources held by parameter values which were passed to an
-     * execute method. This is for example important for closing LOB values.
-     *
-     * @param paramValues parameter values supplied. May be {@code null}.
-     */
-    public static void cleanupParameters(@Nullable Object... paramValues) {
-        if (paramValues != null) {
-            cleanupParameters(Arrays.asList(paramValues));
-        }
-    }
-
-    /**
-     * Clean up all resources held by parameter values which were passed to an
-     * execute method. This is for example important for closing LOB values.
-     *
-     * @param paramValues parameter values supplied. May be {@code null}.
-     */
-    public static void cleanupParameters(@Nullable Collection<?> paramValues) {
-        if (paramValues != null) {
-            for (Object inValue : paramValues) {
-                // Unwrap SqlParameterValue first...
-                if (inValue instanceof SqlParameterValue) {
-                    inValue = ((SqlParameterValue) inValue).getValue();
-                }
-            }
-        }
-    }
-
 
 }

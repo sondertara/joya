@@ -15,7 +15,7 @@ import java.util.List;
  * @date 2021/7/21 12:43
  */
 @Data
-public class PageResult<T> implements Page<T> {
+public class PageResult<T> {
 
     private int currentPage;
     private int pageSize;
@@ -41,12 +41,10 @@ public class PageResult<T> implements Page<T> {
         return new Builder<>(data);
     }
 
-    @Override
     public int getTotalPages() {
         return (int) Math.ceil(this.total * 1.0f / pageSize) - 1;
     }
 
-    @Override
     public long getTotalElements() {
         return total;
     }
@@ -92,7 +90,6 @@ public class PageResult<T> implements Page<T> {
 
     }
 
-    @Override
     public boolean isEmpty() {
         return this.data.isEmpty();
     }

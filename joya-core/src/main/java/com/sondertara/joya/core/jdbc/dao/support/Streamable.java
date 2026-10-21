@@ -15,7 +15,7 @@
  */
 package com.sondertara.joya.core.jdbc.dao.support;
 
-import com.sondertara.common.base.Assert;
+import com.sondertara.joya.utils.Assert;
 
 import java.util.Arrays;
 import java.util.Collections;

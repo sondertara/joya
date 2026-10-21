@@ -1,2 +1,2 @@
 org.springframework.boot.autoconfigure.EnableAutoConfiguration=\
-  com.sondertara.joya.spring.autoconfigure.JoyaJdbcAutoConfiguration
+com.sondertara.joya.spring.autoconfigure.JoyaAutoConfiguration

@@ -1,7 +1,7 @@
 package com.sondertara.joya.exceptions;
 
 
-import com.sondertara.common.base.StringUtils;
+import com.sondertara.joya.utils.Strings;
 
 import java.util.Arrays;
 
@@ -29,9 +29,9 @@ public class TaraException extends RuntimeException {
     static String arrayFormat(String format, Object[] argArray) {
         Throwable candidate = getThrowableCandidate(argArray);
         if (null == candidate) {
-            return StringUtils.format(format, argArray);
+            return Strings.format(format, argArray);
         }
-        return StringUtils.format(format, Arrays.copyOf(argArray, argArray.length - 1));
+        return Strings.format(format, Arrays.copyOf(argArray, argArray.length - 1));
     }
 
     static Throwable getThrowableCandidate(Object[] argArray) {

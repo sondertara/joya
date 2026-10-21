@@ -1,6 +1,5 @@
 package com.sondertara.joya.core.model;
 
-import javax.persistence.Transient;
 import java.io.Serializable;
 
 /**
@@ -9,8 +8,7 @@ import java.io.Serializable;
  * @author huangxiaohu
  */
 public class PersistEntity implements Serializable {
-    @Transient
-    private boolean isNew = true;
+    private transient boolean isNew = true;
 
     public boolean isNew() {
         return isNew;

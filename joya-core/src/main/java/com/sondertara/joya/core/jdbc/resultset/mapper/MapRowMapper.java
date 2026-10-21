@@ -1,12 +1,11 @@
 package com.sondertara.joya.core.jdbc.resultset.mapper;
 
-
-import com.sondertara.common.base.StringUtils;
-import com.sondertara.joya.utils.LinkedCaseInsensitiveMap;
+import com.sondertara.joya.utils.Strings;
+import com.sondertara.common.collection.LinkedCaseInsensitiveMap;
+import com.sondertara.joya.exceptions.DbException;
 import com.sondertara.joya.utils.SqlDataUtils;
 import lombok.extern.slf4j.Slf4j;
 
-import javax.xml.bind.DataBindingException;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
@@ -30,13 +29,13 @@ public class MapRowMapper implements RowMapper<Map<String, Object>> {
                 String key = SqlDataUtils.lookupColumnName(metaData, i);
                 //if the name has alias
                 if (key.contains(".")) {
-                    key = StringUtils.substringAfter(key, ".");
+                    key = Strings.subAfter(key, ".");
                 }
                 Object value = SqlDataUtils.getResultSetValue(row, i);
                 map.put(key, value);
             }
         } catch (SQLException e) {
-            throw new DataBindingException(e);
+            throw new DbException(e);
         }
         return map;
     }

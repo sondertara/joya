@@ -6,14 +6,13 @@
     <parent>
         <groupId>com.sondertara.joya</groupId>
         <artifactId>joya-parent</artifactId>
-        <version>1.0.4-SNAPSHOT</version>
+        <version>1.0.0</version>
     </parent>
 
     <artifactId>joya-core</artifactId>
 
     <properties>
-        <maven.compiler.source>8</maven.compiler.source>
-        <maven.compiler.target>8</maven.compiler.target>
+        <maven.compiler.release>17</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     </properties>
     <dependencies>
@@ -30,6 +29,15 @@
             <scope>test</scope>
         </dependency>
 
+        <!-- 测试地基：嵌入式数据库，覆盖事务语义与并发（阶段 0 引入）。
+             真实 MySQL/PG 方言差异验证在阶段 4 用 Testcontainers 补充。 -->
+        <dependency>
+            <groupId>com.h2database</groupId>
+            <artifactId>h2</artifactId>
+            <version>2.2.224</version>
+            <scope>test</scope>
+        </dependency>
+
         <dependency>
             <groupId>com.oracle.database.jdbc</groupId>
             <artifactId>ojdbc8</artifactId>
@@ -38,19 +46,16 @@
         </dependency>
 
         <dependency>
-            <groupId>com.guicedee.services</groupId>
-            <artifactId>javax.inject</artifactId>
-            <version>1.2.2.1</version>
-        </dependency>
-        <dependency>
             <groupId>jakarta.persistence</groupId>
             <artifactId>jakarta.persistence-api</artifactId>
-            <version>2.2.3</version>
+            <version>3.1.0</version>
+            <optional>true</optional>
         </dependency>
         <dependency>
-            <groupId>net.bytebuddy</groupId>
-            <artifactId>byte-buddy</artifactId>
-            <version>1.15.4</version>
+            <groupId>javax.persistence</groupId>
+            <artifactId>javax.persistence-api</artifactId>
+            <version>2.2</version>
+            <optional>true</optional>
         </dependency>
         <dependency>
             <groupId>com.github.vertical-blank</groupId>
@@ -62,11 +67,6 @@
             <artifactId>common-tara-core</artifactId>
         </dependency>
         <dependency>
-            <groupId>com.sondertara.joya</groupId>
-            <artifactId>joya-datasource</artifactId>
-            <version>1.0.4-SNAPSHOT</version>
-        </dependency>
-        <dependency>
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>
             <scope>provided</scope>
@@ -76,7 +76,6 @@
             <artifactId>slf4j-api</artifactId>
             <scope>provided</scope>
         </dependency>
-
     </dependencies>
 
 </project>

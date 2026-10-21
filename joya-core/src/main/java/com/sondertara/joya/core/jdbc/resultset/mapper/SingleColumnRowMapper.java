@@ -24,15 +24,14 @@ public class SingleColumnRowMapper<T> implements RowMapper<T> {
     @SuppressWarnings("unchecked")
     public T map(ResultSet row) {
         try {
-            if (Number.class.isAssignableFrom(this.clazz)) {
-                return clazz.getDeclaredConstructor(String.class).newInstance(row.getString(1));
-            } else if (this.clazz.equals(String.class)) {
-                return (T) row.getString(1);
-            } else if (Date.class.equals(this.clazz)) {
-                return (T) row.getDate(1);
-            } else {
-                return (T) SqlDataUtils.getResultSetValue(row, 1, clazz);
+            Object val = SqlDataUtils.getResultSetValue(row, 1, clazz);
+            if (val == null) {
+                return null;
             }
+            if (clazz != null && !clazz.isPrimitive() && !clazz.isInstance(val)) {
+                return com.sondertara.common.convert.ConvertUtils.convert(val, clazz);
+            }
+            return (T) val;
         } catch (Exception e) {
             log.error("get column error.", e);
             throw new DbException("Get column error.", e);

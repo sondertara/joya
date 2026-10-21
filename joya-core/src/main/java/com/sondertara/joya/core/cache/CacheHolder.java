@@ -1,7 +1,7 @@
 package com.sondertara.joya.core.cache;
 
 import com.sondertara.joya.core.jdbc.support.meta.DatabaseMetaProvider;
-import com.sondertara.joya.core.jdbc.support.meta.CacheableDatabaseMetaProvider;
+import com.sondertara.joya.core.cache.CacheableDatabaseMetaProvider;
 
 /**
  * 缓存托管对象，持有 LocalTableMetaCache 与 CacheableDatabaseMetaProvider 的全局单例。

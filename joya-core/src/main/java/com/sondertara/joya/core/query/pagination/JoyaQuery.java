@@ -1,6 +1,7 @@
 package com.sondertara.joya.core.query.pagination;
+import java.util.Arrays;
 
-import com.sondertara.common.collection.Lists;
+
 import lombok.Data;
 import lombok.Getter;
 
@@ -36,6 +37,6 @@ public abstract class JoyaQuery {
 
 
     public void alias(String... alias) {
-        this.alias = Lists.newArrayList(alias);
+        this.alias = new ArrayList<>(Arrays.asList(alias));
     }
 }

@@ -1,160 +1,99 @@
 package com.sondertara.joya.core.query.criterion;
 
-
-import com.sondertara.common.exception.TaraException;
 import com.sondertara.common.function.IGetter;
-import com.sondertara.joya.core.cache.AliasCacheHelper;
-import com.sondertara.joya.core.constant.JoyaConst;
-import com.sondertara.joya.core.model.ColumnAlias;
 import com.sondertara.joya.core.model.JoinPart;
+import com.sondertara.joya.core.query.ColumnMetaProvider;
+import com.sondertara.joya.exceptions.DbException;
 import lombok.Getter;
+import lombok.extern.slf4j.Slf4j;
 
-import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.LinkedList;
-import java.util.List;
-import java.util.Set;
-
-import static com.sondertara.joya.core.constant.JoyaConst.MAX_JOIN_COUNT;
+import java.util.Objects;
 
 /**
- * the form  part of query with join
- * <p>
- * only support join three maximum tables. if the query link more table maybe use more subQuery
+ * 表关联（JOIN）条件收集器。
+ *
+ * <p>在 API 调用期仅记录 {@link ColumnMetaProvider} 与 {@link JoinType}，并校验自关联与重复关联，
+ * 不预先分配表别名。
  *
  * @author huangxiaohu
+ * @date 2021/11/15 16:44
+ * @since 1.0.0
  */
+@Slf4j
 public class JoinCriterion {
 
-    /**
-     * from segments
-     */
     private final LinkedList<JoinPart> segments;
 
-    /**
-     * the join type {@link JoinType};
-     */
-    private final List<String> join;
-    /**
-     * the count tables maximum is three
-     */
-    private final Set<String> tableNames;
-
-    private final AliasCacheHelper aliasCacheHelper;
-
-
-    /**
-     *
-     */
-    public JoinCriterion(AliasCacheHelper aliasCacheHelper) {
-        this.aliasCacheHelper = aliasCacheHelper;
+    public JoinCriterion() {
         this.segments = new LinkedList<>();
-        join = new ArrayList<>(2);
-        tableNames = new HashSet<>();
+    }
+
+    public static JoinCriterion create() {
+        return new JoinCriterion();
     }
 
     public LinkedList<JoinPart> getJoinSegments() {
-
         return this.segments;
-
     }
 
     /**
-     * join
-     *
-     * @param left  first join part
-     * @param right second join part
-     * @param <T>   generic of entity
-     * @param <R>   generic
-     * @return this
+     * Join other table, default is {@link JoinType#INNER_JOIN}.
      */
-    public <T, R> JoinCriterion join(IGetter<T, ?> left, IGetter<R, ?> right) {
-        setSegments(JoinType.JOIN, left, right);
-        return this;
+    public <T1, T2> JoinCriterion join(IGetter<T1, ?> left, IGetter<T2, ?> right) {
+        return join(left, right, JoinType.INNER_JOIN);
     }
 
     /**
-     * left join
-     *
-     * @param left  first join part
-     * @param right second join part
-     * @param <T>   generic of entity
-     * @param <R>   generic
-     * @return this
+     * Left join table.
      */
-    public <T, R> JoinCriterion leftJoin(IGetter<T, ?> left, IGetter<R, ?> right) {
-        setSegments(JoinType.LEFT_JOIN, left, right);
-        return this;
+    public <T1, T2> JoinCriterion leftJoin(IGetter<T1, ?> left, IGetter<T2, ?> right) {
+        return join(left, right, JoinType.LEFT_JOIN);
     }
 
     /**
-     * right join
-     *
-     * @param left  first join part
-     * @param right second join part
-     * @param <T>   generic of entity
-     * @param <R>   generic
-     * @return this
+     * Right join table.
      */
-    public <T, R> JoinCriterion rightJoin(IGetter<T, ?> left, IGetter<R, ?> right) {
-        setSegments(JoinType.RIGHT_JOIN, left, right);
-
-        return this;
+    public <T1, T2> JoinCriterion rightJoin(IGetter<T1, ?> left, IGetter<T2, ?> right) {
+        return join(left, right, JoinType.RIGHT_JOIN);
     }
 
-    /**
-     * get the join fields with NodeList which is a list with head node
-     *
-     * @return node list for join field
-     */
     public LinkedList<JoinPart> getSegments() {
-        if (tableNames.size() > JoyaConst.MAX_JOIN_TABLE) {
-
-            throw new TaraException("Only support  three tables associated");
-
-        }
         return segments;
     }
 
     /**
-     * get join type
-     *
-     * @return array of join type
+     * Join table with explicit {@link JoinType}.
      */
-    public List<String> getJoinType() {
-        return join;
-    }
-
-    private <T, R> void setSegments(JoinType joinType, IGetter<T, ?> left, IGetter<R, ?> right) {
-        if (this.segments.size() > MAX_JOIN_COUNT) {
-            throw new TaraException("Only support  two join association ," + "if you use too complicated query why no try to optimize the code.");
+    public <T1, T2> JoinCriterion join(IGetter<T1, ?> left, IGetter<T2, ?> right, JoinType joinType) {
+        ColumnMetaProvider columnLeft = ColumnMetaProvider.fromGetter(left);
+        ColumnMetaProvider columnRight = ColumnMetaProvider.fromGetter(right);
+        if (columnLeft.entityClass() != null && Objects.equals(columnLeft.entityClass(), columnRight.entityClass())) {
+            throw new DbException(
+                    "The join tables are same; review your code: [" + columnLeft.entityClass().getName() + "]");
         }
-        final ColumnAlias columnLeft = this.aliasCacheHelper.getColumn(left);
-        ColumnAlias columnRight = this.aliasCacheHelper.getColumn(right);
-        setJoinStr(columnLeft, columnRight, joinType);
+        JoinPart joinPart = new JoinPart(columnLeft, columnRight, joinType);
+        if (this.segments.contains(joinPart)) {
+            throw new DbException("Duplicate join relation between ["
+                    + columnLeft.canonicalKey() + "] and [" + columnRight.canonicalKey() + "]");
+        }
+        this.segments.addLast(joinPart);
+        return this;
     }
 
-    /**
-     * set join segments
-     *
-     * @param left     first part
-     * @param right    second part
-     * @param joinType join type
-     */
-    private void setJoinStr(ColumnAlias left, ColumnAlias right, JoinType joinType) {
-        this.segments.addLast(new JoinPart(left, right, joinType));
-
-        tableNames.add(left.getTableName());
-        tableNames.add(right.getTableName());
-        this.join.add(joinType.code);
+    public boolean isEmpty() {
+        return this.segments.isEmpty();
     }
 
     @Getter
     public enum JoinType {
         /**
-         *
+         * Join type of two table
          */
-        JOIN("JOIN"), LEFT_JOIN("LEFT JOIN"), RIGHT_JOIN("RIGHT JOIN");
+        JOIN("JOIN"),
+        INNER_JOIN("JOIN"),
+        LEFT_JOIN("LEFT JOIN"),
+        RIGHT_JOIN("RIGHT JOIN");
 
         private final String code;
 

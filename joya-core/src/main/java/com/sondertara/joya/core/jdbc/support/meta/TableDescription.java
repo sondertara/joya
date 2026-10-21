@@ -2,7 +2,7 @@
 package com.sondertara.joya.core.jdbc.support.meta;
 
 
-import com.sondertara.common.json.JsonUtils;
+
 import com.sondertara.joya.core.jdbc.resultset.FieldAlias;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
@@ -118,7 +118,11 @@ public class TableDescription {
 
     @Override
     public String toString() {
-        return JsonUtils.toPrettyString(this);
+        try {
+            return new com.fasterxml.jackson.databind.ObjectMapper().writerWithDefaultPrettyPrinter().writeValueAsString(this);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            return super.toString();
+        }
     }
 
 

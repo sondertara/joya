@@ -1,20 +1,18 @@
 package com.sondertara.joya.core.jdbc.resultset.mapper;
 
-import com.fasterxml.jackson.annotation.JsonProperty;
-import com.sondertara.common.function.TypeConverter;
+import com.sondertara.common.convert.ConvertUtils;
 import com.sondertara.common.function.TypedConverter;
 import com.sondertara.common.reflect.ReflectUtils;
-import com.sondertara.common.text.CharUtils;
-import com.sondertara.common.base.StringUtils;
-import com.sondertara.common.collection.BiMap;
+
+import com.sondertara.joya.utils.Strings;
 import com.sondertara.common.collection.CollectionUtils;
 import com.sondertara.common.collection.LinkedCaseInsensitiveMap;
-import com.sondertara.common.reflect.ClassUtils;
-import com.sondertara.common.reflect.PropertyUtils;
+import com.sondertara.joya.utils.ClassUtils;
+import com.sondertara.joya.utils.PropertyUtils;
 import com.sondertara.common.text.VariableStyles;
-import com.sondertara.joya.core.JoyaJdbc;
 import com.sondertara.joya.core.jdbc.resultset.FieldAlias;
 import com.sondertara.joya.core.cache.CacheHolder;
+import com.sondertara.joya.core.metadata.PersistenceAnnotations;
 import com.sondertara.joya.core.model.EntityTableMetaDefinition;
 import com.sondertara.joya.exceptions.DbException;
 import com.sondertara.joya.utils.SqlDataUtils;
@@ -22,33 +20,30 @@ import com.sondertara.joya.utils.SqlFormatUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.jspecify.annotations.Nullable;
 
-import javax.persistence.Column;
-import javax.persistence.Entity;
-import javax.persistence.Table;
 import java.beans.PropertyDescriptor;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.lang.reflect.RecordComponent;
 import java.sql.Blob;
 import java.sql.Clob;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 
 /**
- * 将一行数据转换成JavaBean
+ * 将一行数据转换成 JavaBean 或 Java 17 Record。
  *
  * @author huangxiaohu
  */
-
 @Slf4j
 public class BeanRowMapper<T> implements RowMapper<T> {
     private final Class<T> type;
@@ -58,13 +53,22 @@ public class BeanRowMapper<T> implements RowMapper<T> {
     @Nullable
     private LinkedCaseInsensitiveMap<String> columnPropertyAlias = null;
 
-    private Map<String, TypeConverter> fieldTypeConverterMap;
+    private Map<String, TypedConverter> fieldTypeConverterMap;
 
     @Nullable
     private EntityTableMetaDefinition metaDefinition;
 
+    private final boolean isRecord;
+    @Nullable
+    private RecordComponent[] recordComponents;
+    @Nullable
+    private Constructor<T> recordConstructor;
+    @Nullable
+    private LinkedCaseInsensitiveMap<Integer> recordComponentIndex;
+
     public BeanRowMapper(Class<T> type) {
         this.type = type;
+        this.isRecord = type != null && type.isRecord();
         initialize();
     }
 
@@ -72,6 +76,10 @@ public class BeanRowMapper<T> implements RowMapper<T> {
     private void initialize() {
         this.mappedFields = new LinkedCaseInsensitiveMap<>();
         this.fieldTypeConverterMap = new HashMap<>();
+        if (this.isRecord) {
+            initializeRecord();
+            return;
+        }
         Collection<PropertyDescriptor> collection = PropertyUtils.getPropertyDescriptors(type);
         collection.forEach(pd -> {
             if (pd.getWriteMethod() != null) {
@@ -79,43 +87,85 @@ public class BeanRowMapper<T> implements RowMapper<T> {
             }
 
         });
-        if (type.isAnnotationPresent(Table.class) || type.isAnnotationPresent(Entity.class)) {
+        if (PersistenceAnnotations.isTableOrEntityPresent(type)) {
             metaDefinition = CacheHolder.tableMetaCache().findByEntityClass(type).orElseThrow(() -> new IllegalStateException("No table entity class found for class:" + type));
         } else if (!SqlFormatUtils.isPrimitive(type)) {
-            try {
-                LinkedCaseInsensitiveMap<String> tmp = new LinkedCaseInsensitiveMap<>();
-                LinkedCaseInsensitiveMap<String> aliasTmpMap = new LinkedCaseInsensitiveMap<>();
-                List<Field> fields = ClassUtils.getFieldsByCache(type);
-                for (Field field : fields) {
-                    JsonProperty annotation = field.getAnnotation(JsonProperty.class);
-                    if (null != annotation) {
-                        if (StringUtils.isNotBlank(annotation.value())) {
-                            tmp.put(annotation.value().toLowerCase(), field.getName());
-                        }
-                    } else if (field.isAnnotationPresent(FieldAlias.class)) {
-                        FieldAlias fieldAlias = field.getAnnotation(FieldAlias.class);
-                        TypedConverter typeConverter = ReflectUtils.newInstance(fieldAlias.converter());
-                        fieldTypeConverterMap.put(field.getName(), typeConverter);
-                        for (String s : fieldAlias.value()) {
-                            aliasTmpMap.put(s.trim(), field.getName());
-                        }
+            initColumnPropertyAliases();
+        }
+    }
 
-                    } else {
-                        Column column = field.getAnnotation(Column.class);
-                        if (null != column) {
-                            if (StringUtils.isNotBlank(column.name())) {
-                                tmp.put(column.name().toLowerCase(), field.getName());
-                            }
-                        }
-                    }
-                }
-                tmp.putAll(aliasTmpMap);
-                if (!tmp.isEmpty()) {
-                    this.columnPropertyAlias = tmp;
-                }
-            } catch (Exception e) {
-                log.error("Get fields for class[{}] error", type, e);
+    private void initializeRecord() {
+        try {
+            this.recordComponents = type.getRecordComponents();
+            this.recordComponentIndex = new LinkedCaseInsensitiveMap<>();
+            Class<?>[] paramTypes = new Class<?>[recordComponents.length];
+            for (int i = 0; i < recordComponents.length; i++) {
+                RecordComponent rc = recordComponents[i];
+                paramTypes[i] = rc.getType();
+                this.recordComponentIndex.put(rc.getName(), i);
             }
+            this.recordConstructor = type.getDeclaredConstructor(paramTypes);
+            this.recordConstructor.setAccessible(true);
+            initColumnPropertyAliases();
+        } catch (Exception e) {
+            throw new DbException("Failed to initialize record constructor for " + type.getName(), e);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static final Class<? extends java.lang.annotation.Annotation> JSON_PROPERTY_CLASS = resolveJsonPropertyClass();
+
+    @SuppressWarnings("unchecked")
+    private static Class<? extends java.lang.annotation.Annotation> resolveJsonPropertyClass() {
+        try {
+            return (Class<? extends java.lang.annotation.Annotation>) Class.forName("com.fasterxml.jackson.annotation.JsonProperty");
+        } catch (ClassNotFoundException e) {
+            return null;
+        }
+    }
+
+    private static String extractJsonPropertyValue(Field field) {
+        if (JSON_PROPERTY_CLASS == null || !field.isAnnotationPresent(JSON_PROPERTY_CLASS)) {
+            return null;
+        }
+        try {
+            java.lang.annotation.Annotation ann = field.getAnnotation(JSON_PROPERTY_CLASS);
+            Method valueMethod = JSON_PROPERTY_CLASS.getMethod("value");
+            Object val = valueMethod.invoke(ann);
+            return val instanceof String s ? s : null;
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private void initColumnPropertyAliases() {
+        try {
+            LinkedCaseInsensitiveMap<String> tmp = new LinkedCaseInsensitiveMap<>();
+            LinkedCaseInsensitiveMap<String> aliasTmpMap = new LinkedCaseInsensitiveMap<>();
+            List<Field> fields = ClassUtils.getFieldsByCache(type);
+            for (Field field : fields) {
+                String jsonProp = extractJsonPropertyValue(field);
+                if (Strings.isNotBlank(jsonProp)) {
+                    tmp.put(jsonProp.toLowerCase(), field.getName());
+                } else if (field.isAnnotationPresent(FieldAlias.class)) {
+                    FieldAlias fieldAlias = field.getAnnotation(FieldAlias.class);
+                    TypedConverter typeConverter = ReflectUtils.newInstance(fieldAlias.converter());
+                    fieldTypeConverterMap.put(field.getName(), typeConverter);
+                    for (String s : fieldAlias.value()) {
+                        aliasTmpMap.put(s.trim(), field.getName());
+                    }
+
+                } else {
+                    PersistenceAnnotations.findColumnName(field)
+                            .ifPresent(colName -> tmp.put(colName.toLowerCase(), field.getName()));
+                }
+            }
+            tmp.putAll(aliasTmpMap);
+            if (!tmp.isEmpty()) {
+                this.columnPropertyAlias = tmp;
+            }
+        } catch (Exception e) {
+            log.error("Get fields for class[{}] error", type, e);
         }
     }
 
@@ -140,6 +190,9 @@ public class BeanRowMapper<T> implements RowMapper<T> {
             if (Date.class.isAssignableFrom(type)) {
                 return (T) row.getDate(1);
             }
+            if (this.isRecord) {
+                return mapRecord(row, metaData, count);
+            }
             if (this.mappedFields.isEmpty()) {
                 return (T) setSingleField(row);
             }
@@ -147,8 +200,8 @@ public class BeanRowMapper<T> implements RowMapper<T> {
             for (int i = 1; i <= count; i++) {
                 String columnName = SqlDataUtils.lookupColumnName(metaData, i);
                 //if the name has alias
-                if (columnName.contains(StringUtils.DOT)) {
-                    columnName = StringUtils.subAfter(columnName, CharUtils.DOT, true);
+                if (columnName.contains(Strings.DOT)) {
+                    columnName = Strings.subAfter(columnName, '.', true);
                 }
 
                 //not property found for bean field
@@ -163,7 +216,7 @@ public class BeanRowMapper<T> implements RowMapper<T> {
                 Class<?> propertyType = pd.getPropertyType();
                 Object value = SqlDataUtils.getResultSetValue(row, i, propertyType);
                 if (fieldTypeConverterMap.containsKey(pd.getName())) {
-                    value = fieldTypeConverterMap.get(pd.getName()).apply(value);
+                    value = fieldTypeConverterMap.get(pd.getName()).convert(value);
                 }
                 Method setter = pd.getWriteMethod();
                 if (value != null && null != setter) {
@@ -184,41 +237,109 @@ public class BeanRowMapper<T> implements RowMapper<T> {
         }
     }
 
+    private T mapRecord(ResultSet row, ResultSetMetaData metaData, int count) throws Exception {
+        Objects.requireNonNull(recordComponents, "recordComponents must not be null");
+        Objects.requireNonNull(recordConstructor, "recordConstructor must not be null");
+        Objects.requireNonNull(recordComponentIndex, "recordComponentIndex must not be null");
+
+        Object[] args = new Object[recordComponents.length];
+        for (int i = 0; i < recordComponents.length; i++) {
+            args[i] = defaultPrimitiveValue(recordComponents[i].getType());
+        }
+
+        for (int i = 1; i <= count; i++) {
+            String columnName = SqlDataUtils.lookupColumnName(metaData, i);
+            if (columnName.contains(Strings.DOT)) {
+                columnName = Strings.subAfter(columnName, '.', true);
+            }
+            Integer compIdx = resolveRecordComponentIndex(columnName);
+            if (compIdx == null) {
+                continue;
+            }
+            RecordComponent rc = recordComponents[compIdx];
+            Class<?> compType = rc.getType();
+            Object value = SqlDataUtils.getResultSetValue(row, i, compType);
+            if (fieldTypeConverterMap.containsKey(rc.getName())) {
+                value = fieldTypeConverterMap.get(rc.getName()).convert(value);
+            } else if (value != null && ! wrapPrimitive(compType).isInstance(value)) {
+                value = ConvertUtils.convert(value, compType);
+            }
+            if (value != null || !compType.isPrimitive()) {
+                args[compIdx] = value;
+            }
+        }
+        return recordConstructor.newInstance(args);
+    }
+
+    private Integer resolveRecordComponentIndex(String columnName) {
+        if (recordComponentIndex == null) {
+            return null;
+        }
+        if (CollectionUtils.isNotEmpty(this.columnPropertyAlias)) {
+            String aliased = this.columnPropertyAlias.get(columnName);
+            if (aliased != null && recordComponentIndex.containsKey(aliased)) {
+                return recordComponentIndex.get(aliased);
+            }
+        }
+        if (recordComponentIndex.containsKey(columnName)) {
+            return recordComponentIndex.get(columnName);
+        }
+        if (columnName.contains("_")) {
+            String camel = VariableStyles.SNAKE.toCamelCase(columnName);
+            if (recordComponentIndex.containsKey(camel)) {
+                return recordComponentIndex.get(camel);
+            }
+        }
+        return null;
+    }
+
+    private static Class<?> wrapPrimitive(Class<?> type) {
+        if (!type.isPrimitive()) {
+            return type;
+        }
+        if (type == int.class) return Integer.class;
+        if (type == long.class) return Long.class;
+        if (type == boolean.class) return Boolean.class;
+        if (type == double.class) return Double.class;
+        if (type == float.class) return Float.class;
+        if (type == short.class) return Short.class;
+        if (type == byte.class) return Byte.class;
+        if (type == char.class) return Character.class;
+        return type;
+    }
+
+    private static Object defaultPrimitiveValue(Class<?> type) {
+        if (!type.isPrimitive()) {
+            return null;
+        }
+        if (type == int.class) return 0;
+        if (type == long.class) return 0L;
+        if (type == boolean.class) return false;
+        if (type == double.class) return 0.0d;
+        if (type == float.class) return 0.0f;
+        if (type == short.class) return (short) 0;
+        if (type == byte.class) return (byte) 0;
+        if (type == char.class) return '\0';
+        return null;
+    }
+
     private String bestGuessProperty(String aliasName) {
         String propertyName = null;
         //1.判断是否为entity
         if (null != metaDefinition) {
-            //如果是下划线
-            if (aliasName.contains(String.valueOf(CharUtils.UNDERLINE))) {
-                propertyName = metaDefinition.findFieldNameByColumn(aliasName);
-            } else {
-                //不是下划线，寻找属性名
+            propertyName = metaDefinition.findFieldNameByColumn(aliasName);
+            if (null == propertyName) {
                 if (metaDefinition.containFiled(aliasName)) {
                     propertyName = aliasName;
                 } else {
-                    propertyName = metaDefinition.getFieldNames().stream().filter(s -> s.equalsIgnoreCase(aliasName)).findFirst().orElse(null);
+                    propertyName = metaDefinition.getFieldNames().stream()
+                            .filter(s -> s.equalsIgnoreCase(aliasName))
+                            .findFirst()
+                            .orElse(null);
                 }
             }
         }
-        //2.普通pojo
-        if (null == propertyName) {
-            propertyName = aliasName;
-            if (aliasName.contains(String.valueOf(CharUtils.UNDERLINE))) {
-                propertyName = VariableStyles.SNAKE.toCamelCase(aliasName);
-            }
-        }
-        if (this.mappedFields.containsKey(propertyName)) {
-            return propertyName;
-        }
-        //2.1模糊匹配
-        for (Map.Entry<String, PropertyDescriptor> entry : this.mappedFields.entrySet()) {
-            if (propertyName.equalsIgnoreCase(entry.getKey())) {
-                propertyName = entry.getKey();
-                break;
-            }
-        }
-
-        //3.判断普通 pojo是否设置别名
+        //2.判断普通 pojo是否设置别名
         if (null == propertyName && CollectionUtils.isNotEmpty(this.columnPropertyAlias)) {
             propertyName = this.columnPropertyAlias.get(aliasName);
             if (null == propertyName) {
@@ -230,6 +351,23 @@ public class BeanRowMapper<T> implements RowMapper<T> {
                 }
             }
         }
+        //3.普通pojo按驼峰转换
+        if (null == propertyName) {
+            propertyName = aliasName;
+            if (aliasName.contains(String.valueOf("_"))) {
+                propertyName = VariableStyles.SNAKE.toCamelCase(aliasName);
+            }
+        }
+        if (this.mappedFields.containsKey(propertyName)) {
+            return propertyName;
+        }
+        //3.1模糊匹配
+        for (Map.Entry<String, PropertyDescriptor> entry : this.mappedFields.entrySet()) {
+            if (propertyName.equalsIgnoreCase(entry.getKey())) {
+                propertyName = entry.getKey();
+                break;
+            }
+        }
         return propertyName;
     }
 
@@ -239,39 +377,8 @@ public class BeanRowMapper<T> implements RowMapper<T> {
      * @param resultSet value
      * @return value after transformed
      */
-    private Object setSingleField(ResultSet resultSet) throws SQLException {
-
-        if (SqlFormatUtils.isPrimitive(type)) {
-            if (Character.class.isAssignableFrom(type)) {
-                throw new IllegalArgumentException("Not support Character!");
-            }
-            for (Constructor<?> constructor : type.getDeclaredConstructors()) {
-                try {
-                    int count = constructor.getParameterCount();
-                    if (count == 1) {
-                        if (String.class.isAssignableFrom(constructor.getParameterTypes()[0])) {
-
-                            if (Objects.isNull(resultSet.getObject(1))) {
-                                return null;
-                            } else {
-                                return constructor.newInstance(resultSet.getObject(1).toString());
-                            }
-                        }
-                    }
-                } catch (InstantiationException | IllegalAccessException | InvocationTargetException | SQLException e) {
-                    throw new DbException(e);
-                }
-            }
-        }
-        if (String.class.equals(type)) {
-            if (Objects.isNull(resultSet.getString(1))) {
-                return null;
-            } else {
-                return resultSet.getString(1);
-            }
-        }
-        return SqlDataUtils.getResultSetValue(resultSet, 1, type);
-
+    private Object setSingleField(ResultSet resultSet) {
+        return new SingleColumnRowMapper<>(type).map(resultSet);
     }
 
 

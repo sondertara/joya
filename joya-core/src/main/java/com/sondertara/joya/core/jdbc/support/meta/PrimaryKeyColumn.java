@@ -1,32 +1,31 @@
 package com.sondertara.joya.core.jdbc.support.meta;
 
+import com.sondertara.joya.core.jdbc.resultset.FieldAlias;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 
-import javax.persistence.Column;
-
 public class PrimaryKeyColumn {
     @Nullable
-    @Column(name = "TABLE_CAT,TABLE_CATALOG")
+    @FieldAlias({"TABLE_CAT", "TABLE_CATALOG"})
     private String catalog;
 
     @Nullable
-    @Column(name = "TABLE_SCHEM,TABLE_SCHEMA")
+    @FieldAlias({"TABLE_SCHEM", "TABLE_SCHEMA"})
     private String schema;
 
     @NonNull
-    @Column(name = "TABLE_NAME")
+    @FieldAlias("TABLE_NAME")
     private String tableName;
 
     @NonNull
-    @Column(name = "COLUMN_NAME")
+    @FieldAlias("COLUMN_NAME")
     private String columnName;
 
-    @Column(name = "KEY_SEQ")
+    @FieldAlias("KEY_SEQ")
     private Integer keySeq;
 
     @Nullable
-    @Column(name = "PK_NAME")
+    @FieldAlias("PK_NAME")
     private String name;
 
     public String getCatalog() {

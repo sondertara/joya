@@ -1,8 +1,7 @@
 package com.sondertara.joya.utils;
 
 
-import com.sondertara.common.exception.TaraException;
-import com.sondertara.common.function.IGetter;
+import com.sondertara.joya.exceptions.TaraException;
 import com.sondertara.common.function.IGetter;
 import lombok.extern.slf4j.Slf4j;
 
@@ -36,12 +35,14 @@ public final class LambdaUtils {
      */
     public static <T> SerializedLambda resolve(IGetter<T, ?> function) {
         Class<?> aClass = function.getClass();
-        String canonicalName = aClass.getCanonicalName();
-        return Optional.ofNullable(FUNCTION_CACHE.get(canonicalName))
+        // 方法引用/ lambda 生成的合成类 getCanonicalName() 返回 null，作为缓存 key 会致 Map.get(null) NPE；
+        // getName() 对任意 class 均非 null。
+        String cacheKey = aClass.getName();
+        return Optional.ofNullable(FUNCTION_CACHE.get(cacheKey))
                 .map(WeakReference::get)
                 .orElseGet(() -> {
                     SerializedLambda serializedLambda = startParse(function);
-                    FUNCTION_CACHE.put(canonicalName, new WeakReference<>(serializedLambda));
+                    FUNCTION_CACHE.put(cacheKey, new WeakReference<>(serializedLambda));
                     return serializedLambda;
                 });
     }
@@ -119,8 +120,100 @@ public final class LambdaUtils {
         return null;
     }
 
+    // ===== 方法引用元数据（基于 instantiatedMethodType，正确处理继承自父类的 getter） =====
 
+    /**
+     * 解析方法引用的接收者类型：{@code User::getId} 返回 {@code User.class}。
+     *
+     * <p>优先使用 {@code instantiatedMethodType}，因此 {@code User::getId} 即使 {@code getId} 声明在父类，
+     * 也返回 {@code User} 而不是父类；解析失败时回退到 {@code implClass}。
+     */
+    public static Class<?> getReceiverClass(IGetter<?, ?> function) {
+        SerializedLambda lambda = resolve(function);
+        String type = lambda.getInstantiatedMethodType();
+        if (type != null && type.startsWith("(L")) {
+            int end = type.indexOf(';');
+            if (end > 2) {
+                return loadClass(type.substring(2, end).replace('/', '.'));
+            }
+        }
+        return loadClass(lambda.getImplClass().replace('/', '.'));
+    }
 
+    /**
+     * 解析方法引用的返回值类型（基本类型自动装箱）：{@code User::getAge} 返回 {@code Integer.class}。
+     */
+    public static Class<?> getReturnType(IGetter<?, ?> function) {
+        SerializedLambda lambda = resolve(function);
+        String type = lambda.getInstantiatedMethodType();
+        if (type == null || type.indexOf(')') < 0) {
+            type = lambda.getImplMethodSignature();
+        }
+        return boxed(descriptorToClass(type.substring(type.indexOf(')') + 1)));
+    }
 
+    /**
+     * 解析方法引用对应的属性名：{@code getUserName} → {@code userName}，{@code isActive} → {@code active}，
+     * record 访问器 {@code name} → {@code name}。
+     */
+    public static String getPropertyName(IGetter<?, ?> function) {
+        String method = resolve(function).getImplMethodName();
+        if (method.length() > 3 && method.startsWith("get") && Character.isUpperCase(method.charAt(3))) {
+            return Strings.lowerFirst(method.substring(3));
+        }
+        if (method.length() > 2 && method.startsWith("is") && Character.isUpperCase(method.charAt(2))) {
+            return Strings.lowerFirst(method.substring(2));
+        }
+        return method;
+    }
 
+    /** 基本类型装箱；非基本类型原样返回。 */
+    public static Class<?> boxed(Class<?> type) {
+        if (type == null || !type.isPrimitive()) {
+            return type;
+        }
+        if (type == int.class) return Integer.class;
+        if (type == long.class) return Long.class;
+        if (type == boolean.class) return Boolean.class;
+        if (type == double.class) return Double.class;
+        if (type == float.class) return Float.class;
+        if (type == short.class) return Short.class;
+        if (type == byte.class) return Byte.class;
+        if (type == char.class) return Character.class;
+        return Void.class;
+    }
+
+    private static Class<?> descriptorToClass(String descriptor) {
+        switch (descriptor.charAt(0)) {
+            case 'I': return int.class;
+            case 'J': return long.class;
+            case 'Z': return boolean.class;
+            case 'D': return double.class;
+            case 'F': return float.class;
+            case 'S': return short.class;
+            case 'B': return byte.class;
+            case 'C': return char.class;
+            case 'V': return void.class;
+            case 'L': return loadClass(descriptor.substring(1, descriptor.length() - 1).replace('/', '.'));
+            case '[': return loadClass(descriptor.replace('/', '.'));
+            default: throw new TaraException("Unsupported type descriptor: " + descriptor);
+        }
+    }
+
+    /** 按线程上下文类加载器优先加载类。 */
+    public static Class<?> loadClass(String className) {
+        ClassLoader contextLoader = Thread.currentThread().getContextClassLoader();
+        if (contextLoader != null) {
+            try {
+                return Class.forName(className, false, contextLoader);
+            } catch (ClassNotFoundException ignored) {
+                // 回退到当前类加载器
+            }
+        }
+        try {
+            return Class.forName(className);
+        } catch (ClassNotFoundException e) {
+            throw new TaraException(e);
+        }
+    }
 }

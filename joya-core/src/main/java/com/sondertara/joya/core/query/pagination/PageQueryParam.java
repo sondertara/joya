@@ -1,6 +1,7 @@
 package com.sondertara.joya.core.query.pagination;
+import java.util.ArrayList;
 
-import com.sondertara.common.collection.Lists;
+
 import com.sondertara.joya.core.query.LinkType;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
@@ -44,7 +45,7 @@ public class PageQueryParam extends JoyaQuery implements Serializable, Cloneable
      */
     @Getter
     @Setter
-    private List<OrderParam> orderList = Lists.newArrayList();
+    private List<OrderParam> orderList = new ArrayList<>();
 
     /**
      * the param of where
@@ -52,7 +53,7 @@ public class PageQueryParam extends JoyaQuery implements Serializable, Cloneable
      */
     @Getter
     @Setter
-    private List<SearchParam> params = Lists.newArrayList();
+    private List<SearchParam> params = new ArrayList<>();
 
     @Getter
     @Setter
@@ -90,6 +91,13 @@ public class PageQueryParam extends JoyaQuery implements Serializable, Cloneable
         this.rootOperator = linkType;
     }
 
+    /**
+     * 提取纯分页坐标 {@link PageRequest}。
+     */
+    public PageRequest toPageRequest() {
+        return PageRequest.of(page == null ? 0 : page, pageSize == null ? 10 : pageSize);
+    }
+
     @Override
     public PageQueryParam clone() {
         PageQueryParam pageQueryParam = new PageQueryParam();
@@ -107,8 +115,8 @@ public class PageQueryParam extends JoyaQuery implements Serializable, Cloneable
 
     @Data
     public static class Nested {
-        private List<SearchParam> and = Lists.newArrayList();
-        private List<SearchParam> or = Lists.newArrayList();
+        private List<SearchParam> and = new ArrayList<>();
+        private List<SearchParam> or = new ArrayList<>();
 
         public void addAndParam(String filed, Object value, FieldParam.Operator operator) {
             this.and.add(new SearchParam(filed, value, operator));

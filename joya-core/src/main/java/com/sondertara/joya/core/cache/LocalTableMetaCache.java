@@ -1,87 +1,101 @@
 package com.sondertara.joya.core.cache;
 
-
 import com.sondertara.common.collection.LinkedCaseInsensitiveMap;
 import com.sondertara.common.collection.WeakConcurrentMap;
-import com.sondertara.common.lifecycle.Destroyable;
-import com.sondertara.common.reflect.ReflectUtils;
-import com.sondertara.common.base.StringUtils;
+import com.sondertara.joya.core.metadata.EntityMetadataContext;
+import com.sondertara.joya.core.metadata.PersistenceAnnotations;
 import com.sondertara.joya.core.model.EntityTableMetaDefinition;
 import com.sondertara.joya.exceptions.DbException;
+import com.sondertara.joya.utils.Strings;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.persistence.Column;
-import javax.persistence.Entity;
-import javax.persistence.Id;
-import javax.persistence.Table;
-import javax.persistence.Transient;
 import java.lang.reflect.Field;
+import java.lang.reflect.Modifier;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 
-
 /**
- * local cache for five min
- * <p>
- * key is class or table name lowercase
+ * local cache for entity table metadata
  *
  * @author huangxiaohu
  */
-public class LocalTableMetaCache implements Destroyable {
+public class LocalTableMetaCache {
 
     private static final Logger log = LoggerFactory.getLogger(LocalTableMetaCache.class);
 
-
     private final Map<Class<?>, Optional<EntityTableMetaDefinition>> cache;
+    private final Map<Class<?>, EntityMetadataContext> contextCache;
 
     public LocalTableMetaCache() {
         this.cache = new WeakConcurrentMap<>();
-
+        this.contextCache = new WeakConcurrentMap<>();
     }
 
     private Optional<EntityTableMetaDefinition> getDirect(Class<?> entityClass) {
-        Table table = entityClass.getAnnotation(Table.class);
+        Optional<PersistenceAnnotations.TableMeta> tableOpt = PersistenceAnnotations.findTable(entityClass);
         String tableName = null;
         String schemaName = null;
-        if (null != table) {
+        if (tableOpt.isPresent()) {
+            PersistenceAnnotations.TableMeta table = tableOpt.get();
             tableName = table.name();
-            schemaName = StringUtils.isBlank(table.schema()) ? table.catalog() : table.schema();
-
+            schemaName = Strings.isBlank(table.schema()) ? table.catalog() : table.schema();
         } else {
-            Entity entity = entityClass.getAnnotation(Entity.class);
-            if (null != entity) {
-                tableName = entity.name();
+            Optional<String> entityName = PersistenceAnnotations.findEntityName(entityClass);
+            if (entityName.isPresent()) {
+                tableName = entityName.get();
             }
         }
-        if (null == tableName) {
-            throw new DbException("No [@Table] or [@Entity] annotation found for class->" + entityClass.getName());
+        if (Strings.isBlank(tableName)) {
+            if (tableOpt.isPresent() || PersistenceAnnotations.isEntityPresent(entityClass)) {
+                tableName = Strings.toUnderlineCase(entityClass.getSimpleName());
+            } else {
+                throw new DbException("No [@Table] or [@Entity] annotation found for class->" + entityClass.getName());
+            }
         }
 
         tableName = tableName.toLowerCase(Locale.US);
         EntityTableMetaDefinition entityTableMetaDefinition = new EntityTableMetaDefinition();
         entityTableMetaDefinition.setTableName(tableName);
         entityTableMetaDefinition.setSchemaName(schemaName);
-        Map<String, Field> fieldMap = ReflectUtils.getFieldMap(entityClass);
+
+        // Scan superclass hierarchy from base class down to subclass so inherited @Id / fields are included
+        List<Class<?>> hierarchy = new ArrayList<>();
+        for (Class<?> cur = entityClass; cur != null && cur != Object.class; cur = cur.getSuperclass()) {
+            hierarchy.add(0, cur);
+        }
+        Map<String, Field> fieldMap = new LinkedHashMap<>();
+        for (Class<?> clazz : hierarchy) {
+            for (Field field : clazz.getDeclaredFields()) {
+                int modifiers = field.getModifiers();
+                if (Modifier.isStatic(modifiers) || Modifier.isTransient(modifiers)) {
+                    continue;
+                }
+                fieldMap.put(field.getName(), field);
+            }
+        }
+
         LinkedCaseInsensitiveMap<String> relation = new LinkedCaseInsensitiveMap<>();
         LinkedCaseInsensitiveMap<Field> columns = new LinkedCaseInsensitiveMap<>();
 
         for (Map.Entry<String, Field> entry : fieldMap.entrySet()) {
             Field field = entry.getValue();
-            if (field.isAnnotationPresent(Transient.class)) {
+            if (PersistenceAnnotations.isTransientPresent(field)) {
                 continue;
             }
             String name = field.getName();
-            name = StringUtils.toUnderlineCase(name);
-            Column column = field.getAnnotation(Column.class);
-            if (null != column && StringUtils.isNotBlank(column.name())) {
-                name = column.name();
+            name = Strings.toUnderlineCase(name);
+            Optional<String> colName = PersistenceAnnotations.findColumnName(field);
+            if (colName.isPresent()) {
+                name = colName.get();
             }
 
             name = name.toLowerCase(Locale.US);
-            Id id = field.getAnnotation(Id.class);
-            if (null != id) {
+            if (PersistenceAnnotations.isIdPresent(field)) {
                 entityTableMetaDefinition.setPrimaryKey(name);
                 entityTableMetaDefinition.setPrimaryKeyType(field.getType());
             }
@@ -99,9 +113,16 @@ public class LocalTableMetaCache implements Destroyable {
         return cache.computeIfAbsent(entityClass, this::getDirect).map(EntityTableMetaDefinition::clone);
     }
 
+    public EntityMetadataContext getMetadataContext(Class<?> entityClass) {
+        return contextCache.computeIfAbsent(entityClass, cls -> {
+            Optional<EntityTableMetaDefinition> def = cache.computeIfAbsent(cls, this::getDirect);
+            return EntityMetadataContext.from(def.orElseThrow(() ->
+                    new IllegalArgumentException("No table metadata registered for entity: " + cls.getName())));
+        });
+    }
 
-    @Override
     public void destroy() {
         this.cache.clear();
+        this.contextCache.clear();
     }
 }

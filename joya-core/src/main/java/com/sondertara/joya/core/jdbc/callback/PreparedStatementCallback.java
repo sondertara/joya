@@ -16,35 +16,18 @@
 
 package com.sondertara.joya.core.jdbc.callback;
 
-import com.sondertara.joya.core.JoyaJdbc;
-import com.sondertara.joya.core.jdbc.statment.PreparedStatementCreator;
 import com.sondertara.joya.exceptions.DbException;
 import org.jspecify.annotations.Nullable;
 
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 
-
-
 /**
  * Generic callback interface for code that operates on a PreparedStatement.
- * Allows to execute any number of operations on a single PreparedStatement,
- * for example a single {@code executeUpdate} call or repeated
- * {@code executeUpdate} calls with varying parameters.
- *
- * <p>Used internally by JdbcTemplate, but also useful for application code.
- * Note that the passed-in PreparedStatement can have been created by the
- * framework or by a custom PreparedStatementCreator. However, the latter is
- * hardly ever necessary, as most custom callback actions will perform updates
- * in which case a standard PreparedStatement is fine. Custom actions will
- * always set parameter values themselves, so that PreparedStatementCreator
- * capability is not needed either.
  *
  * @author Juergen Hoeller
  * @since 16.03.2004
  * @param <T> the result type
- * @see JoyaJdbc#execute(String, PreparedStatementCallback)
- * @see JoyaJdbc#execute(PreparedStatementCreator, PreparedStatementCallback, boolean) (PreparedStatementCreator, PreparedStatementCallback)
  */
 @FunctionalInterface
 public interface PreparedStatementCallback<T> {

@@ -1,6 +1,6 @@
 package com.sondertara.joya.exceptions;
 
-import com.sondertara.common.exception.TaraException;
+import com.sondertara.joya.exceptions.TaraException;
 
 public class SqlParseException extends TaraException {
     public SqlParseException(String format, Object... arguments) {

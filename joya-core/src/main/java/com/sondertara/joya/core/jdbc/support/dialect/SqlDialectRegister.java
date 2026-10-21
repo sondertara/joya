@@ -15,9 +15,9 @@
  */
 package com.sondertara.joya.core.jdbc.support.dialect;
 
-import com.sondertara.common.classpath.ClassLoaderUtils;
-import com.sondertara.common.collection.Maps;
-import com.sondertara.common.base.StringUtils;
+
+
+import com.sondertara.joya.utils.Strings;
 import com.sondertara.joya.core.jdbc.support.DbType;
 import com.sondertara.joya.core.jdbc.support.dialect.provider.Db2Dialect;
 import com.sondertara.joya.core.jdbc.support.dialect.provider.DerbyDialect;
@@ -38,8 +38,10 @@ import com.sondertara.joya.core.jdbc.support.dialect.provider.XuGuDialect;
 import com.sondertara.joya.utils.JdbcUtils;
 
 import java.sql.Connection;
+import java.sql.SQLException;
 import java.sql.DatabaseMetaData;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 方言管理器
@@ -48,8 +50,8 @@ import java.util.Map;
  * @version : 2020-10-31
  */
 public class SqlDialectRegister {
-    private static final Map<String, Class<?>> dialectAliasMap = Maps.newConcurrentMap();
-    private static final Map<String, SqlDialect> dialectCache = Maps.newConcurrentMap();
+    private static final Map<String, Class<?>> dialectAliasMap = new ConcurrentHashMap<>();
+    private static final Map<String, SqlDialect> dialectCache = new ConcurrentHashMap<>();
 
     static {
         registerDialectAlias(DbType.db2.name(), Db2Dialect.class);
@@ -96,15 +98,16 @@ public class SqlDialectRegister {
         DbType databaseType = JdbcUtils.getDatabaseType(connection);
         return (PageSqlDialect) SqlDialectRegister.findOrCreate(databaseType);
     }
-
     public static SqlDialect findOrCreate(DatabaseMetaData databaseMetaData) {
-
-        return findOrCreate(JdbcUtils.getDatabaseType(databaseMetaData));
-
+        try {
+            return findOrCreate(JdbcUtils.getDatabaseType(databaseMetaData.getConnection()));
+        } catch (SQLException e) {
+            throw new com.sondertara.joya.exceptions.DbException(e);
+        }
     }
 
     public static SqlDialect findOrCreate(String dialectName) {
-        if (StringUtils.isBlank(dialectName)) {
+        if (Strings.isBlank(dialectName)) {
             return DefaultSqlDialect.DEFAULT;
         }
         SqlDialect dialect = dialectCache.get(dialectName);
@@ -113,7 +116,11 @@ public class SqlDialectRegister {
         }
         Class<?> aClass = dialectAliasMap.get(dialectName);
         if (aClass == null) {
-            aClass = ClassLoaderUtils.loadClass(dialectName);
+            try {
+                aClass = Class.forName(dialectName);
+            } catch (ClassNotFoundException e) {
+                throw new IllegalStateException("Dialect class not found: " + dialectName, e);
+            }
         }
         if (aClass != null) {
             try {

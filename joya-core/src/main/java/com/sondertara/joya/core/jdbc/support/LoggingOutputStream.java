@@ -1,6 +1,6 @@
 package com.sondertara.joya.core.jdbc.support;
 
-import com.sondertara.common.text.CharUtils;
+
 import org.slf4j.Logger;
 import org.slf4j.event.Level;
 
@@ -27,7 +27,7 @@ public class LoggingOutputStream extends OutputStream {
 
     @Override
     public void write(int b) throws IOException {
-        if (b == CharUtils.LF) {
+        if (b == '\n') {
             String string = bao.toString(StandardCharsets.UTF_8.name());
             bao.reset();
             switch (level) {

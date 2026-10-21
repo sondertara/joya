@@ -1,15 +1,14 @@
 package com.sondertara.joya.core.jdbc.dao.support;
-
-import com.sondertara.common.regex.RegexUtils;
 import com.sondertara.joya.core.jdbc.dao.JoyaExecutorSupport;
 import com.sondertara.joya.core.jdbc.support.annotation.Query;
 
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
-
-import static com.sondertara.joya.utils.SqlFormatUtils.JDBC_STYLE_PARAM;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import static com.sondertara.joya.utils.SqlFormatUtils.NUMBERED_STYLE_PARAM;
+import static com.sondertara.joya.utils.SqlFormatUtils.JDBC_STYLE_PARAM;
 
 public class NativeQueryParser extends AbstractQueryParser {
 
@@ -28,16 +27,21 @@ public class NativeQueryParser extends AbstractQueryParser {
 
         boolean usesJpaStyleParameters = false;
         String value = annotation.value();
-        if (RegexUtils.contains(NUMBERED_STYLE_PARAM, value)) {
+        Matcher numberedMatcher = NUMBERED_STYLE_PARAM.matcher(value);
+        if (numberedMatcher.find()) {
             usesJpaStyleParameters = true;
         }
-        if (usesJpaStyleParameters && RegexUtils.contains(JDBC_STYLE_PARAM, value)) {
+        if (usesJpaStyleParameters && JDBC_STYLE_PARAM.matcher(value).find()) {
             throw new IllegalArgumentException("Mixing of ? parameters and other forms like ?1 is not supported!");
         }
         int bindIndex = 1;
         if (usesJpaStyleParameters) {
             int greatestParameterIndex = -1;
-            List<String> all = RegexUtils.findAll(NUMBERED_STYLE_PARAM, value, 0);
+            Matcher m = NUMBERED_STYLE_PARAM.matcher(value);
+            List<String> all = new ArrayList<>();
+            while (m.find()) {
+                all.add(m.group());
+            }
             for (String s : all) {
                 int index = Integer.parseInt(s.substring(1));
                 JoyaExecutorSupport.ParameterBinding binding = new JoyaExecutorSupport.ParameterBinding(index);
@@ -45,8 +49,12 @@ public class NativeQueryParser extends AbstractQueryParser {
                 greatestParameterIndex = Math.max(index, greatestParameterIndex);
             }
         } else {
-            List<String> all = RegexUtils.findAll(JDBC_STYLE_PARAM, value, 0);
-            for (int i = 0; i < all.size(); i++) {
+            Matcher m = JDBC_STYLE_PARAM.matcher(value);
+            int count = 0;
+            while (m.find()) {
+                count++;
+            }
+            for (int i = 0; i < count; i++) {
                 JoyaExecutorSupport.ParameterBinding binding = new JoyaExecutorSupport.ParameterBinding(i + 1);
                 bindings.add(binding);
             }

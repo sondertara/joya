@@ -10,7 +10,7 @@
     <modelVersion>4.0.0</modelVersion>
     <groupId>com.sondertara.joya</groupId>
     <artifactId>joya-parent</artifactId>
-    <version>1.0.4-SNAPSHOT</version>
+    <version>1.0.0</version>
     <packaging>pom</packaging>
     <name>joya</name>
     <description>JPA extensions and dynamic query feature.</description>
@@ -31,8 +31,6 @@
     <modules>
         <module>joya-core</module>
         <module>joya-spring-boot-starter</module>
-        <module>joya-migration</module>
-        <module>joya-datasource</module>
     </modules>
     <scm>
         <connection>scm:https://github.com/sondertara/joya.git</connection>
@@ -40,7 +38,7 @@
         <url>https://github.com/sondertara/joya</url>
     </scm>
     <properties>
-        <java.version>1.8</java.version>
+        <java.version>17</java.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
         <maven.compiler.encoding>UTF-8</maven.compiler.encoding>
@@ -51,22 +49,17 @@
             <dependency>
                 <groupId>org.projectlombok</groupId>
                 <artifactId>lombok</artifactId>
-                <version>1.18.24</version>
-            </dependency>
-            <dependency>
-                <groupId>com.sondertara</groupId>
-                <artifactId>common-tara</artifactId>
-                <version>1.1.3-SNAPSHOT</version>
-            </dependency>
-            <dependency>
-                <groupId>com.sondertara</groupId>
-                <artifactId>common-tara-core</artifactId>
-                <version>1.1.3-SNAPSHOT</version>
+                <version>1.18.30</version>
             </dependency>
             <dependency>
                 <groupId>org.slf4j</groupId>
                 <artifactId>slf4j-api</artifactId>
                 <version>1.7.36</version>
+            </dependency>
+            <dependency>
+                <groupId>com.sondertara</groupId>
+                <artifactId>common-tara-core</artifactId>
+                <version>1.1.5-SNAPSHOT</version>
             </dependency>
         </dependencies>
     </dependencyManagement>
@@ -76,10 +69,9 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
-                <version>3.8.1</version>
+                <version>3.11.0</version>
                 <configuration>
-                    <source>1.8</source>
-                    <target>1.8</target>
+                    <release>17</release>
                     <encoding>UTF-8</encoding>
                 </configuration>
             </plugin>
@@ -103,9 +95,11 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>2.22.1</version>
-                <configuration>
-                    <skipTests>true</skipTests>
-                </configuration>
+                <!--
+                  阶段 0 变更：移除全局 <skipTests>true</skipTests>。
+                  该配置是"全仓零测试"的根因 —— 测试被硬编码跳过，任何测试都不会执行。
+                  移除后：默认执行测试；需要跳过时用标准的 -DskipTests（surefire 内置支持）。
+                -->
             </plugin>
             <plugin>
                 <groupId>org.codehaus.mojo</groupId>
@@ -114,75 +108,11 @@
             </plugin>
         </plugins>
     </build>
-    <repositories>
-        <repository>
-            <id>itfb-release</id>
-            <name>itfb-release</name>
-            <url>http://128.192.116.77:8081/repository/maven-releases/</url>
-            <releases>
-                <enabled>true</enabled>
-            </releases>
-            <snapshots>
-                <enabled>true</enabled>
-            </snapshots>
-        </repository>
-        <repository>
-            <id>itfb-snapshots</id>
-            <name>itfb-snapshots</name>
-            <url>http://128.192.116.77:8081/repository/maven-snapshots/</url>
-            <releases>
-                <enabled>true</enabled>
-            </releases>
-            <snapshots>
-                <updatePolicy>always</updatePolicy>
-                <enabled>true</enabled>
-            </snapshots>
-        </repository>
-        <repository>
-            <id>itfb-3rd_party</id>
-            <name>itfb 3rd_party</name>
-            <url>http://128.192.116.77:8081/repository/3rd_party/</url>
-            <releases>
-                <enabled>true</enabled>
-            </releases>
-            <snapshots>
-                <enabled>true</enabled>
-            </snapshots>
-        </repository>
-        <repository>
-            <id>itfb-central</id>
-            <name>itfb central</name>
-            <url>http://128.192.116.77:8081/repository/maven-central/</url>
-            <releases>
-                <enabled>true</enabled>
-            </releases>
-            <snapshots>
-                <enabled>true</enabled>
-            </snapshots>
-        </repository>
-    </repositories>
-    <pluginRepositories>
-        <pluginRepository>
-            <id>itfb-central</id>
-            <url>http://128.192.116.77:8081/repository/maven-central/</url>
-            <releases>
-                <enabled>true</enabled>
-            </releases>
-            <snapshots>
-                <enabled>true</enabled>
-            </snapshots>
-        </pluginRepository>
-    </pluginRepositories>
     <distributionManagement>
         <repository>
-            <id>itfb-release</id>
-            <name>itfb-release</name>
-            <url>http://128.192.116.77:8081/repository/maven-releases/</url>
+            <id>github</id>
+            <name>GitHub Packages</name>
+            <url>https://maven.pkg.github.com/sondertara/joya</url>
         </repository>
-        <snapshotRepository>
-            <id>itfb-snapshots</id>
-            <name>itfb-snapshots</name>
-            <url>http://128.192.116.77:8081/repository/maven-snapshots/</url>
-        </snapshotRepository>
     </distributionManagement>
 </project>

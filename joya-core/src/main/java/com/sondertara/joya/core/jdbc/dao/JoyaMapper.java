@@ -2,7 +2,7 @@ package com.sondertara.joya.core.jdbc.dao;
 
 import com.sondertara.common.function.IGetter;
 import com.sondertara.joya.core.query.PageResult;
-import com.sondertara.joya.core.query.criterion.WhereCondition;
+import com.sondertara.joya.core.query.criterion.WhereCriterion;
 import com.sondertara.joya.core.query.pagination.OrderParam;
 import com.sondertara.joya.core.query.pagination.PageQueryParam;
 
@@ -67,11 +67,11 @@ public interface JoyaMapper<T> {
 
     List<T> findListByField(IGetter<T, ?> fn, Object value);
 
-    List<T> findListByCondition(UnaryOperator<WhereCondition<T>> func);
+    List<T> findListByCondition(UnaryOperator<WhereCriterion> func);
 
     T findByField(IGetter<T, ?> fn, Object value);
 
-    T findByCondition(UnaryOperator<WhereCondition<T>> func);
+    T findByCondition(UnaryOperator<WhereCriterion> func);
 
 
     PageResult<T> queryPage(PageQueryParam queryParam);

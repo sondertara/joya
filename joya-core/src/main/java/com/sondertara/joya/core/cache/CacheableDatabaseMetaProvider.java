@@ -1,7 +1,7 @@
 package com.sondertara.joya.core.cache;
 
-import com.sondertara.common.cache.Cache;
-import com.sondertara.common.cache.CacheBuilder;
+import com.sondertara.joya.utils.Cache;
+
 import com.sondertara.joya.core.jdbc.support.DbType;
 import com.sondertara.joya.core.jdbc.support.meta.BaseDatabaseMetaProvider;
 import com.sondertara.joya.core.jdbc.support.meta.SchemaTableDescription;
@@ -18,7 +18,7 @@ import java.util.StringJoiner;
  */
 public class CacheableDatabaseMetaProvider extends BaseDatabaseMetaProvider {
 
-    private final Cache<String, SchemaTableDescription> cache = CacheBuilder.newBuilder()
+    private final Cache<String, SchemaTableDescription> cache = Cache.<String, SchemaTableDescription>newBuilder()
             .expireAfterWrite(300)
             .build();
 

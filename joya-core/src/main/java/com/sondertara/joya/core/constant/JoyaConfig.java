@@ -33,6 +33,18 @@ public class JoyaConfig implements Serializable {
      */
     private int schemaCacheTtl = 300;
 
+    public JoyaConfig setColumnUppercase(boolean columnUppercase) {
+        this.columnUppercase = columnUppercase;
+        CacheHolder.clearAll();
+        return this;
+    }
+
+    public JoyaConfig setTableUppercase(boolean tableUppercase) {
+        this.tableUppercase = tableUppercase;
+        CacheHolder.clearAll();
+        return this;
+    }
+
     /**
      * clean cache by manual
      */
@@ -42,7 +54,7 @@ public class JoyaConfig implements Serializable {
 
     /**
      * JVM 级单例，用作过渡桥（阶段0引入，阶段6退役）。
-     * 消除 {@code JoyaJdbc.config()} 这条不存在的静态方法导致的编译错误。
+     * 消除 {@code JoyaClient.config()} 这条不存在的静态方法导致的编译错误。
      */
     private static final JoyaConfig INSTANCE = new JoyaConfig();
 

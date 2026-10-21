@@ -1,6 +1,6 @@
 package com.sondertara.joya.core.jdbc.dao.support;
 
-import com.sondertara.common.base.StringUtils;
+import com.sondertara.joya.utils.Strings;
 import lombok.Getter;
 
 
@@ -38,7 +38,7 @@ public class OrPart implements Streamable<PredicatePart> {
         this.source = source;
         String[] split = split(source, "And");
         this.children = Arrays.stream(split)
-                .filter(StringUtils::hasText)
+                .filter(Strings::hasText)
                 .map(part -> PredicatePart.from(part, domainClass))
                 .collect(Collectors.toList());
     }

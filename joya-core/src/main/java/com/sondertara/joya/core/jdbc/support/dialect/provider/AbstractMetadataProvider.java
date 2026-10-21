@@ -192,7 +192,7 @@ package com.sondertara.joya.core.jdbc.support.dialect.provider;//// Copyright ta
 //                Boolean isAscOrder = Objects.isNull(orderMethod) ? null
 //                        : ("A".equals(orderMethod) ? true : "D".equals(orderMethod) ? false : null);
 //                IndexFieldMeta indexFieldMeta = new IndexFieldMeta(columnName, ordinalPosition, isAscOrder);
-//                if (StringUtils.isNotBlank(indexName)) {
+//                if (Strings.isNotBlank(indexName)) {
 //                    indexTypesMap.putIfAbsent(indexName,
 //                            (null != nonUnique)
 //                                    ? (nonUnique ? TableIndexEnum.NORMAL : TableIndexEnum.UNIQUE)
@@ -239,9 +239,9 @@ package com.sondertara.joya.core.jdbc.support.dialect.provider;//// Copyright ta
 //    public String getPrimaryKeyAsString(List<String> pks) {
 //        if (!pks.isEmpty()) {
 //            ProductTypeEnum productType = getProductType();
-//            return productType.quoteName(StringUtils.join(pks, productType.quoteName(StrPool.COMMA)));
+//            return productType.quoteName(Strings.join(pks, productType.quoteName(StrPool.COMMA)));
 //        }
-//        return StringUtils.EMPTY;
+//        return Strings.EMPTY;
 //    }
 //
 //    @Override
@@ -268,7 +268,7 @@ package com.sondertara.joya.core.jdbc.support.dialect.provider;//// Copyright ta
 //    }
 //
 //    protected ColumnDescription buildColumnDescription(ResultSetMetaData m, int i) throws SQLException {
-//        String name = StringUtils.defaultString(m.getColumnLabel(i), m.getColumnName(i));
+//        String name = Strings.defaultString(m.getColumnLabel(i), m.getColumnName(i));
 //        ColumnDescription cd = new ColumnDescription();
 //        cd.setFieldName(name);
 //        cd.setLabelName(name);

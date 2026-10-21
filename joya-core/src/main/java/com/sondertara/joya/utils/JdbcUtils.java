@@ -16,7 +16,7 @@
 
 package com.sondertara.joya.utils;
 
-import com.sondertara.common.base.StringUtils;
+import com.sondertara.joya.utils.Strings;
 import com.sondertara.joya.core.jdbc.callback.DatabaseMetaDataCallback;
 import com.sondertara.joya.core.jdbc.support.DbType;
 import com.sondertara.joya.exceptions.DbException;
@@ -224,7 +224,7 @@ public abstract class JdbcUtils {
         } catch (SQLException e) {
             logger.warn("Exception thrown when getting database type", e);
         }
-        return DbType.unknown;
+        return DbType.other;
     }
 
     /**
@@ -241,7 +241,7 @@ public abstract class JdbcUtils {
      */
     public static String lookupColumnName(ResultSetMetaData resultSetMetaData, int columnIndex) throws SQLException {
         String name = resultSetMetaData.getColumnLabel(columnIndex);
-        if (StringUtils.isEmpty(name)) {
+        if (Strings.isEmpty(name)) {
             name = resultSetMetaData.getColumnName(columnIndex);
         }
         return name;

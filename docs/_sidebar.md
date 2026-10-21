@@ -2,4 +2,13 @@
 - [🍄快速开始](quick_usage)
   - [🧩服务接入](quick_start)
   - [🍱使用示例](example)
+- 🏗️架构设计
+  - [⚙️SQL 引擎重构](architecture/sql-engine-refactoring)
+  - [🔎SQL 引擎重构·评审](architecture/sql-engine-review)
+  - [💳事务模块重构](architecture/transaction/README)
+    - [🔍现状评估](architecture/transaction/01-assessment)
+    - [📐目标架构](architecture/transaction/02-design)
+    - [🔌API 契约](architecture/transaction/03-api)
+    - [🗄️多数据源](architecture/transaction/04-multi-datasource)
+    - [🛤️落地路线](architecture/transaction/05-migration)
 <!-- - [🍹版本更新记录](CHANGELOG) -->

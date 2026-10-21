@@ -1,6 +1,6 @@
 package com.sondertara.joya.core.proxy;
 
-import com.sondertara.joya.core.JoyaJdbc;
+import com.sondertara.joya.core.JoyaClient;
 import com.sondertara.joya.core.jdbc.dao.JoyaMapper;
 
 /**
@@ -11,18 +11,17 @@ import com.sondertara.joya.core.jdbc.dao.JoyaMapper;
 
 public class JoyaMapperProxyFactory {
 
-    private final JoyaJdbc joyaJdbc;
+    private final JoyaClient joyaClient;
 
-    public JoyaMapperProxyFactory(JoyaJdbc joyaJdbc) {
-        this.joyaJdbc = joyaJdbc;
+    public JoyaMapperProxyFactory(JoyaClient joyaClient) {
+        this.joyaClient = joyaClient;
     }
 
 
     public JoyaMapperProxy create() {
 
-        return new ByteBuddyMapperProxy(joyaJdbc);
+        return new JdkMapperProxy(joyaClient);
 
     }
-
 
 }

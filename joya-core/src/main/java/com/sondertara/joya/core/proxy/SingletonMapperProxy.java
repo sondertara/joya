@@ -1,6 +1,6 @@
 package com.sondertara.joya.core.proxy;
 
-import com.sondertara.joya.core.JoyaJdbc;
+import com.sondertara.joya.core.JoyaClient;
 import com.sondertara.joya.core.jdbc.dao.JoyaMapper;
 
 import javax.sql.DataSource;
@@ -12,11 +12,10 @@ public class SingletonMapperProxy implements JoyaMapperProxy {
 
     private static volatile SingletonMapperProxy INSTANCE = null;
 
-
     private final JoyaMapperProxy delegate;
 
     private SingletonMapperProxy(DataSource dataSource) {
-        this.delegate = new ByteBuddyMapperProxy(new JoyaJdbc(dataSource));
+        this.delegate = new JdkMapperProxy(new JoyaClient(dataSource));
     }
 
     public static SingletonMapperProxy getInstance() {
@@ -24,7 +23,6 @@ public class SingletonMapperProxy implements JoyaMapperProxy {
             throw new IllegalStateException("SingletonMapperFactory is not initialized,please init by call #init");
         }
         return INSTANCE;
-
     }
 
     public static SingletonMapperProxy init(DataSource dataSource) {

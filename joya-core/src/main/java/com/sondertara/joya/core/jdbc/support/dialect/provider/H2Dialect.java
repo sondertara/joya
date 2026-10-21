@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 package com.sondertara.joya.core.jdbc.support.dialect.provider;
-import com.sondertara.common.base.StringUtils;
+import com.sondertara.joya.utils.Strings;
 import com.sondertara.joya.core.jdbc.support.dialect.BoundSql;
 import com.sondertara.joya.core.jdbc.support.dialect.PageSqlDialect;
 import com.sondertara.joya.core.jdbc.support.dialect.SeqSqlDialect;
@@ -55,7 +55,7 @@ public class H2Dialect extends AbstractDialect implements PageSqlDialect, SeqSql
     @Override
     public String selectSeq(boolean useQualifier, String catalog, String schema, String seqName) {
         StringBuilder sqlBuilder = new StringBuilder("values next value for ");
-        if (StringUtils.isNotBlank(schema)) {
+        if (Strings.isNotBlank(schema)) {
             sqlBuilder.append(fmtName(useQualifier, schema)).append(".");
         }
         sqlBuilder.append(fmtName(useQualifier, seqName));

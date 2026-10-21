@@ -1,27 +1,30 @@
 package com.sondertara.joya.core.model;
 
-
-import com.sondertara.common.base.Assert;
+import com.sondertara.joya.core.query.ColumnMetaProvider;
 import com.sondertara.joya.core.query.criterion.JoinCriterion;
+import com.sondertara.joya.utils.Assert;
 import lombok.Getter;
 
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
 
 /**
+ * 关联查询（JOIN）关系描述单元。
+ *
+ * <p>持有左右关联列的 {@link ColumnMetaProvider}（惰性列元数据），在构造期不触发 {@code t0 / t1} 表别名分配，
+ * 直到查询渲染期由 {@link com.sondertara.joya.core.query.RenderContext} 统一解析。
+ *
  * @author huangxiaohu
  */
 @Getter
 public class JoinPart {
 
-    private final ColumnAlias leftColumn;
-    private final ColumnAlias rightColumn;
-
+    private final ColumnMetaProvider leftColumn;
+    private final ColumnMetaProvider rightColumn;
     private final JoinCriterion.JoinType joinType;
 
-    public JoinPart(ColumnAlias leftColumn, ColumnAlias rightColumn, JoinCriterion.JoinType joinType) {
+    public JoinPart(ColumnMetaProvider leftColumn, ColumnMetaProvider rightColumn, JoinCriterion.JoinType joinType) {
         Assert.notNull(leftColumn);
         Assert.notNull(rightColumn);
         Assert.notNull(joinType);
@@ -42,24 +45,24 @@ public class JoinPart {
         if (!part.getJoinType().equals(this.joinType)) {
             return false;
         }
-        List<ColumnAlias> current = new ArrayList<>();
-        current.add(leftColumn);
-        current.add(rightColumn);
-        current.sort(Comparator.comparing(ColumnAlias::identity));
-        List<ColumnAlias> other = new ArrayList<>();
-        other.add(part.getLeftColumn());
-        other.add(part.getRightColumn());
-        other.sort(Comparator.comparing(ColumnAlias::identity));
-        return Objects.equals(current.get(0), other.get(0)) && Objects.equals(current.get(1), other.get(1));
+        List<String> current = new ArrayList<>(2);
+        current.add(leftColumn.canonicalKey());
+        current.add(rightColumn.canonicalKey());
+        current.sort(String::compareTo);
 
+        List<String> other = new ArrayList<>(2);
+        other.add(part.getLeftColumn().canonicalKey());
+        other.add(part.getRightColumn().canonicalKey());
+        other.sort(String::compareTo);
+        return Objects.equals(current.get(0), other.get(0)) && Objects.equals(current.get(1), other.get(1));
     }
 
     @Override
     public int hashCode() {
-        List<ColumnAlias> list = new ArrayList<>();
-        list.add(leftColumn);
-        list.add(rightColumn);
-        list.sort(Comparator.comparing(ColumnAlias::identity));
+        List<String> list = new ArrayList<>(2);
+        list.add(leftColumn.canonicalKey());
+        list.add(rightColumn.canonicalKey());
+        list.sort(String::compareTo);
         return Objects.hash(list.get(0), list.get(1), joinType);
     }
 }

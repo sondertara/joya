@@ -19,43 +19,30 @@ Gradle Project
 implementation 'com.sondertara:joya:0.0.7.208'
 ```
 
-## 新项目集成 :id=new_project
+## Spring Boot 集成 :id=spring_boot
 
-对于`Spring boot` 新项目,可以使用`@EnableJpaRepositories`注解一键接入，所有方法都由`BaseRepository`提供
+引入 `joya-spring-boot-starter` 后，只要容器中存在 `DataSource` Bean，即自动装配 `JoyaJdbc` 与 `JoyaSession`，无需额外配置：
 
 ```java
-/**
- * @author SonderTara
- */
 @SpringBootApplication
-@EnableJpaRepositories(basePackages = {"com.sondertara.sql.dao"}, repositoryFactoryBeanClass = BaseRepositoryFactoryBean.class)
-public class SqlDemoApplication {
-
-    private static final Logger logger = LoggerFactory.getLogger(SqlDemoApplication.class);
-    
-    private static  ConfigurableApplicationContext context;
-
-    public static void main(String[] args) {
-        ConfigurableApplicationContext ctx = SpringApplication.run(SqlDemoApplication.class, args);
-
-    context=ctx;
-    }
-
+public class Application {
+    // 注入操作入口
+    @Autowired
+    private JoyaOperations joyaOperations;
 }
 ```
 
-## 老项目扩展 :id=old_project
-
-如果不想改变项目中已有的`Repository`,可以只注入`JoyaRepositoryFactoryBean`,使用`JoyaRepository`进行操作
+如需扫描 Mapper 接口（`JoyaMapper` 风格），使用 `@EnableJoyaJdbc` 指定包路径：
 
 ```java
-@Bean
-public JoyaRepositoryFactoryBean joyaRepositoryFactoryBean(){
-        return new JoyaRepositoryFactoryBean();
-        }
+@SpringBootApplication
+@EnableJoyaJdbc(basePackages = {"com.sondertara.sql.dao"})
+public class SqlDemoApplication {
+    public static void main(String[] args) {
+        SpringApplication.run(SqlDemoApplication.class, args);
+    }
+}
 ```
-
-> 通过 JoyaRepositoryFactoryBean 会注入 `JoyaRepository` 和`JoyaSpringContext`(一个Spring全局类)
 
 ## 可选配置 :id=config
 

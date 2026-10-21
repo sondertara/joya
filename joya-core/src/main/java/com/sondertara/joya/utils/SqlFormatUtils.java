@@ -1,17 +1,16 @@
 package com.sondertara.joya.utils;
 
 import com.github.vertical_blank.sqlformatter.SqlFormatter;
-import com.sondertara.common.reflect.ClassUtils;
+import com.sondertara.joya.utils.ClassUtils;
 import com.sondertara.common.regex.PatternPool;
-import com.sondertara.common.text.CharUtils;
-import com.sondertara.common.base.StringUtils;
-import com.sondertara.common.regex.RegexUtils;
-import com.sondertara.joya.core.JoyaJdbc;
+
+import com.sondertara.joya.utils.Strings;
+import com.sondertara.joya.core.JoyaClient;
 import com.sondertara.joya.core.query.ColumnPair;
-import com.sondertara.joya.core.query.NativeSqlQuery;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.HashMap;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.StringJoiner;
@@ -40,11 +39,11 @@ public class SqlFormatUtils {
     /**
      * 左边字段提取
      */
-    public static final Pattern LEFT_COLUMN_FORMAT = Pattern.compile("^[t|T][0-9]+(.)[A-Za-z0-9]+[\\s]*[=]?|[\\s][t|T][0-9]+(.)[A-Za-z0-9]+[\\s]*[=]?");
+    public static final Pattern LEFT_COLUMN_FORMAT = Pattern.compile("^[tT][0-9]+\\.[A-Za-z0-9_]+[\\s]*[=]?|[\\s][tT][0-9]+\\.[A-Za-z0-9_]+[\\s]*[=]?");
     /**
      * 带表别名的列
      */
-    public static final Pattern COLUMN_WITH_TABLE_ALIAS = Pattern.compile("(?![\"'])[t|T][0-9]+(.)[A-Za-z0-9]+[\\s]*(?![\"'])");
+    public static final Pattern COLUMN_WITH_TABLE_ALIAS = Pattern.compile("(?<![\\w\"'])[tT][0-9]+\\.[A-Za-z0-9_]+");
 
     public static final Pattern AS_PATTERN = PatternPool.get("\\s+[Aa][Ss]\\s+");
 
@@ -183,13 +182,13 @@ public class SqlFormatUtils {
      * @return underLine str
      */
     public static String formatColumn(String sql) {
-        if (StringUtils.isBlank(sql)) {
+        if (Strings.isBlank(sql)) {
             return "";
         }
 
-        return RegexUtils.replaceAll(sql, LEFT_COLUMN_FORMAT, m -> {
+        return LEFT_COLUMN_FORMAT.matcher(sql).replaceAll(m -> {
             String group = m.group();
-            return StringUtils.toUnderlineCase(group);
+            return Strings.toUnderlineCase(group);
         });
     }
 
@@ -200,13 +199,13 @@ public class SqlFormatUtils {
      * @return underLine str
      */
     public static String underlineColumn(String sql) {
-        if (StringUtils.isBlank(sql)) {
+        if (Strings.isBlank(sql)) {
             return "";
         }
 
-        return RegexUtils.replaceAll(sql, COLUMN_WITH_TABLE_ALIAS, m -> {
+        return COLUMN_WITH_TABLE_ALIAS.matcher(sql).replaceAll(m -> {
             String group = m.group();
-            return StringUtils.toUnderlineCase(group);
+            return Strings.toUnderlineCase(group);
         });
     }
 
@@ -217,13 +216,13 @@ public class SqlFormatUtils {
      * @return underLine str
      */
     public static String underlineColumn1(String sql) {
-        if (StringUtils.isBlank(sql)) {
+        if (Strings.isBlank(sql)) {
             return "";
         }
         StringBuilder sb = new StringBuilder();
         String trim = sql.trim();
         int index = trim.indexOf(" ");
-        int count = StringUtils.count(trim, StringUtils.SPACE);
+        int count = Strings.countMatches(trim, Strings.SPACE);
         if (count == 0) {
             sb.append(warpColumn(trim));
 
@@ -275,13 +274,6 @@ public class SqlFormatUtils {
         return SqlFormatter.format(sql);
     }
 
-    public static String formatSql(NativeSqlQuery sql) {
-        if (sql == null) {
-            return null;
-        }
-        return sql.toFormattedSql();
-    }
-
 
     /**
      * format column name
@@ -299,14 +291,18 @@ public class SqlFormatUtils {
 
         String columnName = columnStr.trim();
         //check if multiple sql str
-        String[] strings = columnName.split(StringUtils.COMMA);
+        String[] strings = columnName.split(Strings.COMMA);
         if (strings.length > 1) {
-            StringJoiner sj = new StringJoiner(StringUtils.COMMA + " ");
+            StringJoiner sj = new StringJoiner(Strings.COMMA + " ");
             for (String part : strings) {
                 String column = replaceAs(part);
                 StringBuilder sb = new StringBuilder();
                 //if complex sql
-                List<String> list = RegexUtils.findAllGroup0("^(t)[0-9]+\\.[a-zA-Z_]+", column);
+                List<String> list = new ArrayList<>();
+                Matcher fm = Pattern.compile("^(t)[0-9]+\\.[a-zA-Z_]+").matcher(column);
+                while (fm.find()) {
+                    list.add(fm.group());
+                }
                 //复杂sql直接拼接不处理
                 if (list.isEmpty()) {
                     return new ColumnPair(columnName, null, false);
@@ -319,8 +315,8 @@ public class SqlFormatUtils {
                             sb.append(string);
                         } else {
                             // came case to underline
-                            String underlineCase = StringUtils.toUnderlineCase(string);
-                            underlineCase = JoyaJdbc.config().isColumnUppercase() ? underlineCase.toUpperCase() : underlineCase.toLowerCase();
+                            String underlineCase = Strings.toUnderlineCase(string);
+                            underlineCase = JoyaClient.config().isColumnUppercase() ? underlineCase.toUpperCase() : underlineCase.toLowerCase();
                             sb.append(underlineCase);
                         }
                         //append the remaining part.
@@ -338,13 +334,13 @@ public class SqlFormatUtils {
 
         String asPart = null;
         if (asIndex > 1) {
-            asPart = StringUtils.trim(column.substring(asIndex + 4));
-            column = StringUtils.trim(column.substring(0, asIndex));
+            asPart = Strings.trim(column.substring(asIndex + 4));
+            column = Strings.trim(column.substring(0, asIndex));
         } else {
             String[] split = column.split(" ");
             if (split.length > 1) {
-                asPart = StringUtils.trim(split[1]);
-                column = StringUtils.trim(split[0]);
+                asPart = Strings.trim(split[1]);
+                column = Strings.trim(split[0]);
             }
         }
         // 有别名
@@ -354,16 +350,16 @@ public class SqlFormatUtils {
             sb = new StringBuilder(column.substring(0, index));
             sb.append(".");
             String col = column.substring(index + 1);
-            if (!col.contains(String.valueOf(CharUtils.UNDERLINE))) {
-                col = StringUtils.toUnderlineCase(col);
+            if (!col.contains(String.valueOf("_"))) {
+                col = Strings.toUnderlineCase(col);
             }
-            col = JoyaJdbc.config().isColumnUppercase() ? col.toUpperCase() : col.toLowerCase();
+            col = JoyaClient.config().isColumnUppercase() ? col.toUpperCase() : col.toLowerCase();
             sb.append(col);
         } else {
-            if (!column.contains(String.valueOf(CharUtils.UNDERLINE))) {
-                column = StringUtils.toUnderlineCase(column);
+            if (!column.contains(String.valueOf("_"))) {
+                column = Strings.toUnderlineCase(column);
             }
-            column = JoyaJdbc.config().isColumnUppercase() ? column.toUpperCase() : column.toLowerCase();
+            column = JoyaClient.config().isColumnUppercase() ? column.toUpperCase() : column.toLowerCase();
             sb = new StringBuilder(column);
         }
         String string = sb.toString();
@@ -375,11 +371,31 @@ public class SqlFormatUtils {
     }
 
     public static String getJdbcStyleSql(String sql) {
-        if (RegexUtils.contains(NUMBERED_STYLE_PARAM, sql)) {
+        if (NUMBERED_STYLE_PARAM.matcher(sql).find()) {
             return sql.replaceAll(POSITIONAL_OR_INDEXED_PARAMETER, "?");
         } else {
             return sql;
         }
+    }
+
+    /**
+     * 剥离条件 SQL 中的表别名前缀（{@code t0.column} → {@code column}）。
+     *
+     * <p>UPDATE / DELETE 为严格单表语句（{@code UPDATE t_user ...} / {@code DELETE FROM t_user ...}），
+     * FROM 未声明表别名；而 {@code WhereCriterion} 经 Lambda 字段引用生成的列名带表别名前缀
+     * （{@code t0.age}），直接拼进 WHERE 会导致数据库报 "column not found"。
+     *
+     * <p>查询（SELECT）路径保留别名（FROM 声明了 {@code t0}），故仅 UPDATE/DELETE 渲染调用本方法。
+     */
+    public static String stripTableAlias(String sql) {
+        if (Strings.isBlank(sql)) {
+            return sql;
+        }
+        return COLUMN_WITH_TABLE_ALIAS.matcher(sql).replaceAll(m -> {
+            String group = m.group();
+            int dot = group.indexOf('.');
+            return dot >= 0 ? group.substring(dot + 1) : group;
+        });
     }
 
     public static <K, V> Map<V, K> invertMap(final Map<K, V> map) {

@@ -2,10 +2,10 @@ package com.sondertara.joya.core.model;
 
 
 import com.sondertara.common.collection.LinkedCaseInsensitiveMap;
-import com.sondertara.common.collection.Maps;
+
 import com.sondertara.common.struct.Pair;
-import com.sondertara.common.base.StringUtils;
-import com.sondertara.joya.core.JoyaJdbc;
+import com.sondertara.joya.utils.Strings;
+import com.sondertara.joya.core.JoyaClient;
 import com.sondertara.joya.core.jdbc.support.meta.TableDescription;
 import lombok.Setter;
 import org.jspecify.annotations.NonNull;
@@ -72,14 +72,14 @@ public class EntityTableMetaDefinition implements Serializable, Cloneable {
     private LinkedCaseInsensitiveMap<Field> columnFieldRelation;
 
     @Setter
-    private boolean columnUppercase = JoyaJdbc.config().isColumnUppercase();
+    private boolean columnUppercase = JoyaClient.config().isColumnUppercase();
 
     public TableDescription getTableDescription() {
         return tableDescription;
     }
 
     public String getTableName() {
-        if (JoyaJdbc.config().isColumnUppercase()) {
+        if (JoyaClient.config().isTableUppercase()) {
             return tableName.toUpperCase();
         } else {
             return tableName.toLowerCase();
@@ -87,12 +87,12 @@ public class EntityTableMetaDefinition implements Serializable, Cloneable {
     }
 
     public String getPrimaryKey() {
-        if (StringUtils.isBlank(primaryKey)) {
+        if (Strings.isBlank(primaryKey)) {
             return null;
         }
-        if (columnUppercase){
+        if (columnUppercase) {
             return primaryKey.toUpperCase();
-        }else {
+        } else {
             return primaryKey.toLowerCase();
         }
     }
@@ -104,14 +104,16 @@ public class EntityTableMetaDefinition implements Serializable, Cloneable {
 
     public void setColumnFieldNameRelation(LinkedCaseInsensitiveMap<String> relation) {
         this.columnFieldNameRelation = relation;
-        this.fieldNameColumnNameRelation = Maps.inverse(relation);
+        this.fieldNameColumnNameRelation = new LinkedHashMap<>();
+        for (Map.Entry<String, String> entry : relation.entrySet()) {
+            this.fieldNameColumnNameRelation.put(entry.getValue(), entry.getKey());
+        }
     }
 
     public Set<String> getColumnNames() {
         Set<String> list = new LinkedHashSet<>();
-        boolean uppercase = JoyaJdbc.config().isColumnUppercase();
         for (Map.Entry<String, String> entry : this.columnFieldNameRelation.entrySet()) {
-            list.add(uppercase ? entry.getKey().toUpperCase() : entry.getKey().toLowerCase());
+            list.add(columnUppercase ? entry.getKey().toUpperCase() : entry.getKey().toLowerCase());
         }
         return list;
     }
@@ -156,7 +158,7 @@ public class EntityTableMetaDefinition implements Serializable, Cloneable {
 
 
     private String formatColumnName(String columnName) {
-        if (StringUtils.isBlank(columnName)) {
+        if (Strings.isBlank(columnName)) {
             return null;
         }
         if (columnUppercase) {
@@ -197,7 +199,7 @@ public class EntityTableMetaDefinition implements Serializable, Cloneable {
     }
 
     public String getSchemaName() {
-        if (StringUtils.isBlank(schemaName)) {
+        if (Strings.isBlank(schemaName)) {
             return null;
         }
         if (columnUppercase) {

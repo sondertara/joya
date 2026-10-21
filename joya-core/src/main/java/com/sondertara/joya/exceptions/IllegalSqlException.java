@@ -1,6 +1,6 @@
 package com.sondertara.joya.exceptions;
 
-import com.sondertara.common.exception.TaraException;
+import com.sondertara.joya.exceptions.TaraException;
 
 /**
  * @author huangxiaohu

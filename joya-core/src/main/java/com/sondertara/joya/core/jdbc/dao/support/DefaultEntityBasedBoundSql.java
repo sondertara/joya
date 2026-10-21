@@ -22,11 +22,11 @@ public class DefaultEntityBasedBoundSql implements EntityBasedBoundSql {
     @Override
     public boolean isQuery() {
         String sql = this.preparedSql.toLowerCase().trim();
-        if (sql.toLowerCase().startsWith("update") || sql.startsWith("delete")) {
+        if (sql.startsWith("update") || sql.startsWith("delete") || sql.startsWith("insert")) {
             return false;
         }
 
-        if (sql.startsWith("truncate") || sql.startsWith("drop")) {
+        if (sql.startsWith("truncate") || sql.startsWith("drop") || sql.startsWith("alter") || sql.startsWith("create")) {
             return false;
         }
         return true;

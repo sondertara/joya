@@ -1,9 +1,9 @@
 package com.sondertara.joya.core.jdbc.support.meta;
 
-import com.sondertara.common.cache.Cache;
-import com.sondertara.common.cache.CacheBuilder;
+import com.sondertara.joya.utils.Cache;
+
 import com.sondertara.common.collection.LinkedCaseInsensitiveMap;
-import com.sondertara.common.base.StringUtils;
+import com.sondertara.joya.utils.Strings;
 import com.sondertara.joya.core.jdbc.resultset.mapper.BeanRowMapper;
 import com.sondertara.joya.core.jdbc.resultset.mapper.ListRecordExtractor;
 import com.sondertara.joya.core.jdbc.resultset.mapper.TableMetaExtractor;
@@ -34,7 +34,7 @@ import java.util.stream.Collectors;
 public class BaseDatabaseMetaProvider implements DatabaseMetaProvider {
 
 
-    private final Cache<String, Map<String, TableDescription>> ALL_TABLE_CACHE = CacheBuilder.newBuilder()
+    private final Cache<String, Map<String, TableDescription>> ALL_TABLE_CACHE = Cache.<String, Map<String, TableDescription>>newBuilder()
             .expireAfterWrite(600)
             .build();
 
@@ -58,7 +58,7 @@ public class BaseDatabaseMetaProvider implements DatabaseMetaProvider {
             TableDescription tableDescription = allTables.get(table);
 
             if (null == tableDescription) {
-                throw new DbException(StringUtils.format("Cannot find table at {}.{} by name:{}", catalog, schema, table));
+                throw new DbException(Strings.format("Cannot find table at {}.{} by name:{}", catalog, schema, table));
             }
 
             final String tableName = tableDescription.getTableName();

@@ -15,7 +15,7 @@
  */
 package com.sondertara.joya.core.jdbc.support.dialect;
 
-import com.sondertara.common.base.StringUtils;
+import com.sondertara.joya.utils.Strings;
 
 import java.util.Collections;
 import java.util.List;
@@ -46,7 +46,7 @@ public class DefaultSqlDialect implements ConditionSqlDialect, PageSqlDialect, I
 
     @Override
     public String tableName(boolean useQualifier, String catalog, String schema, String table) {
-        if (StringUtils.isBlank(schema)) {
+        if (Strings.isBlank(schema)) {
             return table;
         } else {
             return schema + "." + table;
