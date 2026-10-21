@@ -1,53 +1,75 @@
-
 # 🧩 服务接入 :id=import
 
 ## 引入依赖 :id=dependency
 
-Maven Project
+Maven Project（Spring Boot 3）
 
 ```xml
 <dependency>
-    <groupId>com.sondertara</groupId>
-    <artifactId>joya</artifactId>
-    <version>0.0.7.208</version>
+    <groupId>com.sondertara.joya</groupId>
+    <artifactId>joya-spring-boot-starter</artifactId>
+    <version>1.0.0</version>
 </dependency>
 ```
 
-Gradle Project
+Maven Project（纯 Java）
 
-```groovy
-implementation 'com.sondertara:joya:0.0.7.208'
+```xml
+<dependency>
+    <groupId>com.sondertara.joya</groupId>
+    <artifactId>joya-core</artifactId>
+    <version>1.0.0</version>
+</dependency>
 ```
 
-## Spring Boot 集成 :id=spring_boot
+## Spring Boot 3 集成 :id=spring_boot
 
-引入 `joya-spring-boot-starter` 后，只要容器中存在 `DataSource` Bean，即自动装配 `JoyaJdbc` 与 `JoyaSession`，无需额外配置：
+引入 `joya-spring-boot-starter` 后，默认自动复用 Spring 容器原生的 `spring.datasource` 并装配 `JoyaClient` 与 `JoyaClientRegistry`：
 
 ```java
-@SpringBootApplication
-public class Application {
-    // 注入操作入口
+@Service
+public class UserService {
+
     @Autowired
-    private JoyaOperations joyaOperations;
-}
-```
+    private JoyaClient joya;
 
-如需扫描 Mapper 接口（`JoyaMapper` 风格），使用 `@EnableJoyaJdbc` 指定包路径：
+    @Autowired
+    private JoyaClientRegistry joyaRegistry;
 
-```java
-@SpringBootApplication
-@EnableJoyaJdbc(basePackages = {"com.sondertara.sql.dao"})
-public class SqlDemoApplication {
-    public static void main(String[] args) {
-        SpringApplication.run(SqlDemoApplication.class, args);
+    public Optional<UserAccount> findUser(String name) {
+        // 使用流式 DSL
+        return joya.from(UserAccount.class)
+            .where(w -> w.eq(UserAccount::getUserName, name))
+            .one();
+    }
+
+    public Optional<UserAccount> findFromOrderDb(String name) {
+        // 使用免扫描 JoyaMapper 跨库查询
+        return joyaRegistry.get("order")
+            .mapper(UserAccountMapper.class)
+            .findByUserName(name);
     }
 }
 ```
 
-## 可选配置 :id=config
+## 配置说明（主库与多数据源） :id=config
 
 ```yaml
+spring:
+  datasource:
+    url: jdbc:mysql://localhost:3306/main_db
+    username: root
+    password: secret
+
 joya:
-  # 是否打印sql日志
-  sql-view: true
+  sql-log: true
+  primary:
+    use-spring: true       # 默认 true：复用 spring.datasource；设为 false 时在当前节点下配置独立 url/username/password
+    batch-size: 2048
+  datasources:
+    - name: order
+      url: jdbc:mysql://localhost:3306/order_db
+      username: root
+      password: secret
+      batch-size: 512
 ```
