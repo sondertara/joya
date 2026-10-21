@@ -1,135 +1,116 @@
 package com.sondertara.joya.utils;
 
-
-import com.sondertara.joya.exceptions.TaraException;
 import com.sondertara.common.function.IGetter;
-import lombok.extern.slf4j.Slf4j;
+import com.sondertara.joya.exceptions.TaraException;
 
 import java.lang.invoke.SerializedLambda;
-import java.lang.ref.WeakReference;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
-import java.util.Map;
 import java.util.Objects;
-import java.util.Optional;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * @author Xiao-Bai
- * @date 2022/8/26 23:58
- * @desc lambda 表达式解析
+ * Lambda 方法引用元数据解析与 {@link ClassValue} 强缓存工具：
+ * <ul>
+ *   <li>使用 JDK {@link ClassValue} 将解析出的不可变 {@link LambdaMeta} 直接关联在 Lambda 合成 {@link Class} 上；</li>
+ *   <li>避免 {@code WeakReference<SerializedLambda>} 在每次 Young GC 后被清空导致的重复反射开销；</li>
+ *   <li>同时在首次解析时一次性计算好 {@code receiverClass}、{@code returnType} 与 {@code propertyName}，后续查询调用均为 O(1) 字段直读。</li>
+ * </ul>
  */
-@Slf4j
 public final class LambdaUtils {
 
-    /**
-     * FUNCTION 函数的缓存
-     */
-    private final static Map<String, WeakReference<SerializedLambda>> FUNCTION_CACHE = new ConcurrentHashMap<>();
+    private record LambdaMeta(
+            SerializedLambda serializedLambda,
+            Class<?> receiverClass,
+            Class<?> returnType,
+            String propertyName
+    ) {
+    }
+
+    private static final class Holder {
+        volatile LambdaMeta meta;
+    }
+
+    private static final ClassValue<Holder> LAMBDA_CACHE = new ClassValue<>() {
+        @Override
+        protected Holder computeValue(Class<?> type) {
+            return new Holder();
+        }
+    };
+
+    private LambdaUtils() {
+    }
 
     /**
-     * 解析 Lambda 表达式, 从SFunction中获取序列化的信息
-     * @param function 表达式
-     * @param <T> 对象类型
-     * @return {@link SerializedLambda}
+     * 解析 Lambda 表达式获取 {@link SerializedLambda}。
      */
     public static <T> SerializedLambda resolve(IGetter<T, ?> function) {
-        Class<?> aClass = function.getClass();
-        // 方法引用/ lambda 生成的合成类 getCanonicalName() 返回 null，作为缓存 key 会致 Map.get(null) NPE；
-        // getName() 对任意 class 均非 null。
-        String cacheKey = aClass.getName();
-        return Optional.ofNullable(FUNCTION_CACHE.get(cacheKey))
-                .map(WeakReference::get)
-                .orElseGet(() -> {
-                    SerializedLambda serializedLambda = startParse(function);
-                    FUNCTION_CACHE.put(cacheKey, new WeakReference<>(serializedLambda));
-                    return serializedLambda;
-                });
+        return resolveMeta(function).serializedLambda();
     }
 
     /**
-     * 解析函数
-     */
-    private static <T> SerializedLambda startParse(IGetter<T, ?> function) {
-        SerializedLambda serializedLambda = null;
-        Method writeMethod;
-        try {
-            // 从function中取出序列化方法
-            writeMethod = function.getClass().getDeclaredMethod("writeReplace");
-            writeMethod.setAccessible(true);
-            serializedLambda = (SerializedLambda) writeMethod.invoke(function);
-            writeMethod.setAccessible(false);
-        }
-        catch (NoSuchMethodException | IllegalAccessException | InvocationTargetException e) {
-            throw new RuntimeException(e);
-        }
-
-        if (Objects.isNull(serializedLambda)) {
-            throw new TaraException("Unable to parse：" + function);
-        }
-        return serializedLambda;
-    }
-
-    /**
-     * 解析 Lambda 表达式
-     * @param function 表达式
-     * @param <T> 对象类型
-     * @return 对象class类
-     */
-    @SuppressWarnings("unchecked")
-    public static <T> Class<T> getImplClass(IGetter<T, ?> function) {
-        SerializedLambda serializedLambda = resolve(function);
-        try {
-            return (Class<T>) Class.forName(serializedLambda.getImplClass().replace('/', '.'));
-        } catch (ClassNotFoundException e) {
-            log.error(e.getMessage(), e);
-        }
-        return null;
-    }
-
-    /**
-     * 获取lambda表达式函数的引用方法名
-     * @param function 函数表达式
-     * @param <T>
-     * @return 方法名称
+     * 获取方法引用的底层方法名（如 {@code getUserName}）。
      */
     public static <T> String getImplMethodName(IGetter<T, ?> function) {
-        SerializedLambda serializedLambda = resolve(function);
-        return serializedLambda.getImplMethodName();
+        return resolveMeta(function).serializedLambda().getImplMethodName();
     }
-
-    /**
-     * 获取lambda表达式函数的引用方法返回类型
-     * @param function 函数表达式
-     * @param <T>
-     * @return 方法返回类型:?
-     */
-    public static <T> Class<?> getImplFuncType(IGetter<T, ?> function) {
-        SerializedLambda serializedLambda = resolve(function);
-        String implMethodSignature = serializedLambda.getImplMethodSignature();
-        if (implMethodSignature.length() <= 5 && !implMethodSignature.contains("/")) {
-            String implMethodName = serializedLambda.getImplMethodName();
-            log.error(implMethodName + " ==> 该方法或方法对应的属性使用了基础类型，会造成无法解析，请将属性或方法的返回值换成基础类型对应的包装类");
-        }
-        implMethodSignature = implMethodSignature.substring(3, implMethodSignature.indexOf(";"));
-        try {
-            return Class.forName(implMethodSignature.replace('/', '.'));
-        } catch (ClassNotFoundException e) {
-            log.error(e.getMessage(), e);
-        }
-        return null;
-    }
-
-    // ===== 方法引用元数据（基于 instantiatedMethodType，正确处理继承自父类的 getter） =====
 
     /**
      * 解析方法引用的接收者类型：{@code User::getId} 返回 {@code User.class}。
-     *
-     * <p>优先使用 {@code instantiatedMethodType}，因此 {@code User::getId} 即使 {@code getId} 声明在父类，
-     * 也返回 {@code User} 而不是父类；解析失败时回退到 {@code implClass}。
+     * <p>优先使用 {@code instantiatedMethodType}，即使 getter 声明在父类也返回子类接收者类型。
      */
     public static Class<?> getReceiverClass(IGetter<?, ?> function) {
-        SerializedLambda lambda = resolve(function);
+        return resolveMeta(function).receiverClass();
+    }
+
+    /**
+     * 解析方法引用的返回值类型（基本类型自动装箱）：{@code User::getAge} 返回 {@code Integer.class}。
+     */
+    public static Class<?> getReturnType(IGetter<?, ?> function) {
+        return resolveMeta(function).returnType();
+    }
+
+    /**
+     * 解析方法引用对应的属性名：{@code getUserName} → {@code userName}，{@code isActive} → {@code active}，
+     * record 访问器 {@code name} → {@code name}。
+     */
+    public static String getPropertyName(IGetter<?, ?> function) {
+        return resolveMeta(function).propertyName();
+    }
+
+    private static LambdaMeta resolveMeta(IGetter<?, ?> function) {
+        Objects.requireNonNull(function, "Lambda function must not be null");
+        Holder holder = LAMBDA_CACHE.get(function.getClass());
+        LambdaMeta meta = holder.meta;
+        if (meta == null) {
+            meta = parseMeta(function);
+            holder.meta = meta;
+        }
+        return meta;
+    }
+
+    private static LambdaMeta parseMeta(IGetter<?, ?> function) {
+        SerializedLambda lambda = extractSerializedLambda(function);
+        Class<?> receiverClass = parseReceiverClass(lambda);
+        Class<?> returnType = parseReturnType(lambda);
+        String propertyName = parsePropertyName(lambda.getImplMethodName());
+        return new LambdaMeta(lambda, receiverClass, returnType, propertyName);
+    }
+
+    private static SerializedLambda extractSerializedLambda(IGetter<?, ?> function) {
+        try {
+            Method writeMethod = function.getClass().getDeclaredMethod("writeReplace");
+            writeMethod.setAccessible(true);
+            SerializedLambda serializedLambda = (SerializedLambda) writeMethod.invoke(function);
+            if (serializedLambda == null) {
+                throw new TaraException("Unable to parse lambda: " + function);
+            }
+            return serializedLambda;
+        } catch (NoSuchMethodException | IllegalAccessException | InvocationTargetException e) {
+            throw new TaraException("Failed to extract SerializedLambda from " + function, e);
+        }
+    }
+
+    private static Class<?> parseReceiverClass(SerializedLambda lambda) {
         String type = lambda.getInstantiatedMethodType();
         if (type != null && type.startsWith("(L")) {
             int end = type.indexOf(';');
@@ -140,11 +121,7 @@ public final class LambdaUtils {
         return loadClass(lambda.getImplClass().replace('/', '.'));
     }
 
-    /**
-     * 解析方法引用的返回值类型（基本类型自动装箱）：{@code User::getAge} 返回 {@code Integer.class}。
-     */
-    public static Class<?> getReturnType(IGetter<?, ?> function) {
-        SerializedLambda lambda = resolve(function);
+    private static Class<?> parseReturnType(SerializedLambda lambda) {
         String type = lambda.getInstantiatedMethodType();
         if (type == null || type.indexOf(')') < 0) {
             type = lambda.getImplMethodSignature();
@@ -152,12 +129,7 @@ public final class LambdaUtils {
         return boxed(descriptorToClass(type.substring(type.indexOf(')') + 1)));
     }
 
-    /**
-     * 解析方法引用对应的属性名：{@code getUserName} → {@code userName}，{@code isActive} → {@code active}，
-     * record 访问器 {@code name} → {@code name}。
-     */
-    public static String getPropertyName(IGetter<?, ?> function) {
-        String method = resolve(function).getImplMethodName();
+    private static String parsePropertyName(String method) {
         if (method.length() > 3 && method.startsWith("get") && Character.isUpperCase(method.charAt(3))) {
             return Strings.lowerFirst(method.substring(3));
         }
@@ -184,20 +156,20 @@ public final class LambdaUtils {
     }
 
     private static Class<?> descriptorToClass(String descriptor) {
-        switch (descriptor.charAt(0)) {
-            case 'I': return int.class;
-            case 'J': return long.class;
-            case 'Z': return boolean.class;
-            case 'D': return double.class;
-            case 'F': return float.class;
-            case 'S': return short.class;
-            case 'B': return byte.class;
-            case 'C': return char.class;
-            case 'V': return void.class;
-            case 'L': return loadClass(descriptor.substring(1, descriptor.length() - 1).replace('/', '.'));
-            case '[': return loadClass(descriptor.replace('/', '.'));
-            default: throw new TaraException("Unsupported type descriptor: " + descriptor);
-        }
+        return switch (descriptor.charAt(0)) {
+            case 'I' -> int.class;
+            case 'J' -> long.class;
+            case 'Z' -> boolean.class;
+            case 'D' -> double.class;
+            case 'F' -> float.class;
+            case 'S' -> short.class;
+            case 'B' -> byte.class;
+            case 'C' -> char.class;
+            case 'V' -> void.class;
+            case 'L' -> loadClass(descriptor.substring(1, descriptor.length() - 1).replace('/', '.'));
+            case '[' -> loadClass(descriptor.replace('/', '.'));
+            default -> throw new TaraException("Unsupported type descriptor: " + descriptor);
+        };
     }
 
     /** 按线程上下文类加载器优先加载类。 */

@@ -15,23 +15,8 @@
  */
 package com.sondertara.joya.core.jdbc.support.dialect;
 
-import java.util.Set;
-
 /**
- * SQL 方言
- * @version : 2020-10-31
- * @author 赵永春 (zyc@hasor.net)
+ * SQL 方言标记接口（核心能力由 {@link PageSqlDialect} 承载）。
  */
 public interface SqlDialect {
-    /** Cannot be used as a key for column names. when column name is key words, Generate SQL using Qualifier warp it. */
-    Set<String> keywords();
-
-    String leftQualifier();
-
-    String rightQualifier();
-
-    /** 生成 form 后面的表名 */
-    String tableName(boolean useQualifier, String catalog, String schema, String table);
-
-    String fmtName(boolean useQualifier, String name);
 }

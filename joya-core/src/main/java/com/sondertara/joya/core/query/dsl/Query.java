@@ -70,7 +70,11 @@ public final class Query<T> implements QueryScope {
     }
 
     RenderContext renderContext() {
-        return RenderContext.forQuery(rootType, joinCriterion.getJoinSegments());
+        return RenderContext.forQuery(
+                rootType,
+                joinCriterion.getJoinSegments(),
+                template != null ? template.settings() : com.sondertara.joya.core.JoyaSettings.DEFAULT
+        );
     }
 
     // ===== 1. 行级子句（全部返回 Query<T>，可任意顺序组合） =====

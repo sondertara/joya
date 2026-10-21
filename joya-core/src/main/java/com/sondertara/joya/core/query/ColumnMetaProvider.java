@@ -223,7 +223,7 @@ public sealed interface ColumnMetaProvider
         @Override
         public ColumnAlias resolveAlias(RenderContext ctx) {
             Object val = fn.apply(null);
-            ColumnPair pair = SqlFormatUtils.warpColumn(Objects.toString(val, ""));
+            ColumnPair pair = SqlFormatUtils.warpColumn(Objects.toString(val, ""), ctx.settings().columnUppercase());
             ColumnAlias alias = new ColumnAlias();
             if (pair != null) {
                 alias.setColumnName(pair.getKey());

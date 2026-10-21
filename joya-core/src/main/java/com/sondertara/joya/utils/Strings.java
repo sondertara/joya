@@ -3,7 +3,7 @@ package com.sondertara.joya.utils;
 import java.util.StringJoiner;
 
 /**
- * 字符串工具，提供 joay-core 所需的全部字符串操作。
+ * 字符串工具，提供 joya-core 所需的全部字符串操作。
  *
  * @author huangxiaohu
  */
@@ -117,12 +117,20 @@ public final class Strings {
         if (str == null || str.isEmpty()) {
             return str;
         }
-        StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < str.length(); i++) {
+        int len = str.length();
+        StringBuilder sb = new StringBuilder(len + 4);
+        for (int i = 0; i < len; i++) {
             char c = str.charAt(i);
             if (Character.isUpperCase(c)) {
                 if (i > 0) {
-                    sb.append('_');
+                    char prev = str.charAt(i - 1);
+                    if (prev != '_' && prev != '.' && !Character.isWhitespace(prev)) {
+                        boolean prevLowerOrDigit = Character.isLowerCase(prev) || Character.isDigit(prev);
+                        boolean nextLower = (i + 1 < len) && Character.isLowerCase(str.charAt(i + 1));
+                        if (prevLowerOrDigit || (Character.isUpperCase(prev) && nextLower)) {
+                            sb.append('_');
+                        }
+                    }
                 }
                 sb.append(Character.toLowerCase(c));
             } else {

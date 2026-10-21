@@ -1,8 +1,10 @@
 package com.sondertara.joya.utils;
 
+import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -44,7 +46,7 @@ public final class ClassUtils {
                 }
                 current = current.getSuperclass();
             }
-            return fields;
+            return Collections.unmodifiableList(fields);
         });
     }
 
@@ -56,32 +58,38 @@ public final class ClassUtils {
     public static <T> T newInstance(Class<T> clazz, Object... args) {
         try {
             if (args == null || args.length == 0) {
-                return clazz.getDeclaredConstructor().newInstance();
+                Constructor<T> ctor = clazz.getDeclaredConstructor();
+                ctor.setAccessible(true);
+                return ctor.newInstance();
             }
-            Class<?>[] paramTypes = new Class<?>[args.length];
-            for (int i = 0; i < args.length; i++) {
-                paramTypes[i] = args[i].getClass();
-            }
-            try {
-                return (T) clazz.getDeclaredConstructor(paramTypes).newInstance(args);
-            } catch (NoSuchMethodException e) {
-                for (java.lang.reflect.Constructor<?> constructor : clazz.getDeclaredConstructors()) {
-                    Class<?>[] ctorParamTypes = constructor.getParameterTypes();
-                    if (ctorParamTypes.length == args.length) {
-                        boolean match = true;
-                        for (int i = 0; i < args.length; i++) {
-                            if (!ctorParamTypes[i].isAssignableFrom(args[i].getClass())) {
-                                match = false;
-                                break;
-                            }
+            for (Constructor<?> constructor : clazz.getDeclaredConstructors()) {
+                Class<?>[] ctorParamTypes = constructor.getParameterTypes();
+                if (ctorParamTypes.length != args.length) {
+                    continue;
+                }
+                boolean match = true;
+                for (int i = 0; i < args.length; i++) {
+                    Object arg = args[i];
+                    if (arg == null) {
+                        if (ctorParamTypes[i].isPrimitive()) {
+                            match = false;
+                            break;
                         }
-                        if (match) {
-                            return (T) constructor.newInstance(args);
+                    } else {
+                        Class<?> targetType = TypeUtils.getWrapClass(ctorParamTypes[i]);
+                        Class<?> actualType = TypeUtils.getWrapClass(arg.getClass());
+                        if (!targetType.isAssignableFrom(actualType)) {
+                            match = false;
+                            break;
                         }
                     }
                 }
-                throw new RuntimeException("No matching constructor found for " + clazz.getName(), e);
+                if (match) {
+                    constructor.setAccessible(true);
+                    return (T) constructor.newInstance(args);
+                }
             }
+            throw new NoSuchMethodException("No matching constructor found for " + clazz.getName());
         } catch (Exception e) {
             throw new RuntimeException("Failed to instantiate " + clazz.getName(), e);
         }

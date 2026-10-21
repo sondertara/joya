@@ -121,40 +121,27 @@ public class WhereCriterion {
         return this;
     }
 
-    // ==================== 比较条件 ====================
+    // ==================== 比较条件（严格非空：传 null 立即抛 IllegalArgumentException） ====================
 
-    public <T> WhereCriterion eq(IGetter<T, ?> fn, @Nullable Object value) {
-        if (Objects.isNull(value)) {
-            return this;
-        }
-        return addBinaryComparison(ColumnMetaProvider.fromGetter(fn), " = ?", value);
+    public <T> WhereCriterion eq(IGetter<T, ?> fn, Object value) {
+        return addBinaryComparison(ColumnMetaProvider.fromGetter(fn), " = ?", requireValue("eq", value));
     }
 
-    public WhereCriterion eq(String columnName, @Nullable Object value) {
-        if (Objects.isNull(value)) {
-            return this;
-        }
-        return addBinaryComparison(ColumnMetaProvider.fromName(columnName), " = ?", value);
+    public WhereCriterion eq(String columnName, Object value) {
+        return addBinaryComparison(ColumnMetaProvider.fromName(columnName), " = ?", requireValue("eq", value));
     }
 
-    public <T> WhereCriterion ne(IGetter<T, ?> fn, @Nullable Object value) {
-        if (Objects.isNull(value)) {
-            return this;
-        }
-        return addBinaryComparison(ColumnMetaProvider.fromGetter(fn), " <> ?", value);
+    public <T> WhereCriterion ne(IGetter<T, ?> fn, Object value) {
+        return addBinaryComparison(ColumnMetaProvider.fromGetter(fn), " <> ?", requireValue("ne", value));
     }
 
-    public WhereCriterion ne(String columnName, @Nullable Object value) {
-        if (Objects.isNull(value)) {
-            return this;
-        }
-        return addBinaryComparison(ColumnMetaProvider.fromName(columnName), " <> ?", value);
+    public WhereCriterion ne(String columnName, Object value) {
+        return addBinaryComparison(ColumnMetaProvider.fromName(columnName), " <> ?", requireValue("ne", value));
     }
 
     public <T, R> WhereCriterion ne(IGetter<T, ?> left, IGetter<R, ?> right) {
-        if (Objects.isNull(left) || Objects.isNull(right)) {
-            return this;
-        }
+        Objects.requireNonNull(left, "left getter must not be null");
+        Objects.requireNonNull(right, "right getter must not be null");
         ColumnMetaProvider leftProvider = ColumnMetaProvider.fromGetter(left);
         ColumnMetaProvider rightProvider = ColumnMetaProvider.fromGetter(right);
         predicates.add((ctx, sql, params, source) ->
@@ -164,246 +151,362 @@ public class WhereCriterion {
         return this;
     }
 
-    public <T> WhereCriterion gt(IGetter<T, ?> fn, @Nullable Object value) {
-        if (Objects.isNull(value)) {
-            return this;
-        }
-        return addBinaryComparison(ColumnMetaProvider.fromGetter(fn), " > ?", value);
+    public <T> WhereCriterion gt(IGetter<T, ?> fn, Object value) {
+        return addBinaryComparison(ColumnMetaProvider.fromGetter(fn), " > ?", requireValue("gt", value));
     }
 
-    public WhereCriterion gt(String columnName, @Nullable Object value) {
-        if (Objects.isNull(value)) {
-            return this;
-        }
-        return addBinaryComparison(ColumnMetaProvider.fromName(columnName), " > ?", value);
+    public WhereCriterion gt(String columnName, Object value) {
+        return addBinaryComparison(ColumnMetaProvider.fromName(columnName), " > ?", requireValue("gt", value));
     }
 
-    public <T> WhereCriterion gte(IGetter<T, ?> fn, @Nullable Object value) {
-        if (Objects.isNull(value)) {
-            return this;
-        }
-        return addBinaryComparison(ColumnMetaProvider.fromGetter(fn), " >= ?", value);
+    public <T> WhereCriterion gte(IGetter<T, ?> fn, Object value) {
+        return addBinaryComparison(ColumnMetaProvider.fromGetter(fn), " >= ?", requireValue("gte", value));
     }
 
-    public WhereCriterion gte(String columnName, @Nullable Object value) {
-        if (Objects.isNull(value)) {
-            return this;
-        }
-        return addBinaryComparison(ColumnMetaProvider.fromName(columnName), " >= ?", value);
+    public WhereCriterion gte(String columnName, Object value) {
+        return addBinaryComparison(ColumnMetaProvider.fromName(columnName), " >= ?", requireValue("gte", value));
     }
 
-    public <T> WhereCriterion lt(IGetter<T, ?> fn, @Nullable Object value) {
-        if (Objects.isNull(value)) {
-            return this;
-        }
-        return addBinaryComparison(ColumnMetaProvider.fromGetter(fn), " < ?", value);
+    public <T> WhereCriterion lt(IGetter<T, ?> fn, Object value) {
+        return addBinaryComparison(ColumnMetaProvider.fromGetter(fn), " < ?", requireValue("lt", value));
     }
 
-    public WhereCriterion lt(String columnName, @Nullable Object value) {
-        if (Objects.isNull(value)) {
-            return this;
-        }
-        return addBinaryComparison(ColumnMetaProvider.fromName(columnName), " < ?", value);
+    public WhereCriterion lt(String columnName, Object value) {
+        return addBinaryComparison(ColumnMetaProvider.fromName(columnName), " < ?", requireValue("lt", value));
     }
 
-    public <T> WhereCriterion lte(IGetter<T, ?> fn, @Nullable Object value) {
-        if (Objects.isNull(value)) {
-            return this;
-        }
-        return addBinaryComparison(ColumnMetaProvider.fromGetter(fn), " <= ?", value);
+    public <T> WhereCriterion lte(IGetter<T, ?> fn, Object value) {
+        return addBinaryComparison(ColumnMetaProvider.fromGetter(fn), " <= ?", requireValue("lte", value));
     }
 
-    public WhereCriterion lte(String columnName, @Nullable Object value) {
-        if (Objects.isNull(value)) {
-            return this;
+    public WhereCriterion lte(String columnName, Object value) {
+        return addBinaryComparison(ColumnMetaProvider.fromName(columnName), " <= ?", requireValue("lte", value));
+    }
+
+    // ==================== 动态可选比较条件（值为 null / 空白 / 空集合时显式跳过） ====================
+
+    public WhereCriterion when(boolean condition, UnaryOperator<WhereCriterion> block) {
+        Objects.requireNonNull(block, "block must not be null");
+        if (condition) {
+            block.apply(this);
         }
-        return addBinaryComparison(ColumnMetaProvider.fromName(columnName), " <= ?", value);
+        return this;
+    }
+
+    public <T> WhereCriterion eqIfPresent(IGetter<T, ?> fn, @Nullable Object value) {
+        return value == null ? this : eq(fn, value);
+    }
+
+    public WhereCriterion eqIfPresent(String columnName, @Nullable Object value) {
+        return value == null ? this : eq(columnName, value);
+    }
+
+    public <T> WhereCriterion neIfPresent(IGetter<T, ?> fn, @Nullable Object value) {
+        return value == null ? this : ne(fn, value);
+    }
+
+    public WhereCriterion neIfPresent(String columnName, @Nullable Object value) {
+        return value == null ? this : ne(columnName, value);
+    }
+
+    public <T> WhereCriterion gtIfPresent(IGetter<T, ?> fn, @Nullable Object value) {
+        return value == null ? this : gt(fn, value);
+    }
+
+    public WhereCriterion gtIfPresent(String columnName, @Nullable Object value) {
+        return value == null ? this : gt(columnName, value);
+    }
+
+    public <T> WhereCriterion gteIfPresent(IGetter<T, ?> fn, @Nullable Object value) {
+        return value == null ? this : gte(fn, value);
+    }
+
+    public WhereCriterion gteIfPresent(String columnName, @Nullable Object value) {
+        return value == null ? this : gte(columnName, value);
+    }
+
+    public <T> WhereCriterion ltIfPresent(IGetter<T, ?> fn, @Nullable Object value) {
+        return value == null ? this : lt(fn, value);
+    }
+
+    public WhereCriterion ltIfPresent(String columnName, @Nullable Object value) {
+        return value == null ? this : lt(columnName, value);
+    }
+
+    public <T> WhereCriterion lteIfPresent(IGetter<T, ?> fn, @Nullable Object value) {
+        return value == null ? this : lte(fn, value);
+    }
+
+    public WhereCriterion lteIfPresent(String columnName, @Nullable Object value) {
+        return value == null ? this : lte(columnName, value);
     }
 
     // ==================== BETWEEN / NOT BETWEEN ====================
 
-    public <T> WhereCriterion between(IGetter<T, ?> fn, @Nullable Object leftValue, @Nullable Object rightValue) {
-        if (Objects.isNull(leftValue) || Objects.isNull(rightValue)) {
-            return this;
-        }
-        return addBetween(ColumnMetaProvider.fromGetter(fn), leftValue, rightValue, false);
+    public <T> WhereCriterion between(IGetter<T, ?> fn, Object leftValue, Object rightValue) {
+        return addBetween(
+                ColumnMetaProvider.fromGetter(fn),
+                requireValue("between(leftValue)", leftValue),
+                requireValue("between(rightValue)", rightValue),
+                false);
     }
 
-    public WhereCriterion between(String columnName, @Nullable Object leftValue, @Nullable Object rightValue) {
-        if (Objects.isNull(leftValue) || Objects.isNull(rightValue)) {
-            return this;
-        }
-        return addBetween(ColumnMetaProvider.fromName(columnName), leftValue, rightValue, false);
+    public WhereCriterion between(String columnName, Object leftValue, Object rightValue) {
+        return addBetween(
+                ColumnMetaProvider.fromName(columnName),
+                requireValue("between(leftValue)", leftValue),
+                requireValue("between(rightValue)", rightValue),
+                false);
     }
 
-    public WhereCriterion between(String columnName, @Nullable Collection<?> values) {
+    public WhereCriterion between(String columnName, Collection<?> values) {
         if (CollectionUtils.isEmpty(values)) {
-            return this;
+            throw new IllegalArgumentException("WhereCriterion.between values must not be null or empty");
         }
         if (values.size() != 2) {
             throw new DbException("The size of between params must be 2");
         }
         List<Object> list = new ArrayList<>(values);
-        return addBetween(ColumnMetaProvider.fromName(columnName), list.get(0), list.get(1), false);
+        return between(columnName, list.get(0), list.get(1));
     }
 
-    public <T> WhereCriterion between(IGetter<T, ?> fn, @Nullable Collection<?> values) {
+    public <T> WhereCriterion between(IGetter<T, ?> fn, Collection<?> values) {
         if (CollectionUtils.isEmpty(values)) {
-            return this;
+            throw new IllegalArgumentException("WhereCriterion.between values must not be null or empty");
         }
         if (values.size() != 2) {
             throw new DbException("The size of between params must be 2");
         }
         List<Object> list = new ArrayList<>(values);
-        return addBetween(ColumnMetaProvider.fromGetter(fn), list.get(0), list.get(1), false);
+        return between(fn, list.get(0), list.get(1));
     }
 
-    public <T> WhereCriterion notBetween(IGetter<T, ?> fn, @Nullable Object leftValue, @Nullable Object rightValue) {
-        if (Objects.isNull(leftValue) || Objects.isNull(rightValue)) {
+    public <T> WhereCriterion betweenIfPresent(IGetter<T, ?> fn, @Nullable Object leftValue, @Nullable Object rightValue) {
+        if (leftValue == null || rightValue == null) {
             return this;
         }
-        return addBetween(ColumnMetaProvider.fromGetter(fn), leftValue, rightValue, true);
+        return between(fn, leftValue, rightValue);
     }
 
-    public WhereCriterion notBetween(String columnName, @Nullable Object leftValue, @Nullable Object rightValue) {
-        if (Objects.isNull(leftValue) || Objects.isNull(rightValue)) {
+    public WhereCriterion betweenIfPresent(String columnName, @Nullable Object leftValue, @Nullable Object rightValue) {
+        if (leftValue == null || rightValue == null) {
             return this;
         }
-        return addBetween(ColumnMetaProvider.fromName(columnName), leftValue, rightValue, true);
+        return between(columnName, leftValue, rightValue);
     }
 
-    public WhereCriterion notBetween(String columnName, @Nullable Collection<?> values) {
+    public <T> WhereCriterion notBetween(IGetter<T, ?> fn, Object leftValue, Object rightValue) {
+        return addBetween(
+                ColumnMetaProvider.fromGetter(fn),
+                requireValue("notBetween(leftValue)", leftValue),
+                requireValue("notBetween(rightValue)", rightValue),
+                true);
+    }
+
+    public WhereCriterion notBetween(String columnName, Object leftValue, Object rightValue) {
+        return addBetween(
+                ColumnMetaProvider.fromName(columnName),
+                requireValue("notBetween(leftValue)", leftValue),
+                requireValue("notBetween(rightValue)", rightValue),
+                true);
+    }
+
+    public WhereCriterion notBetween(String columnName, Collection<?> values) {
         if (CollectionUtils.isEmpty(values)) {
-            return this;
+            throw new IllegalArgumentException("WhereCriterion.notBetween values must not be null or empty");
         }
         if (values.size() != 2) {
             throw new DbException("The size of between params must be 2");
         }
         List<Object> list = new ArrayList<>(values);
-        return addBetween(ColumnMetaProvider.fromName(columnName), list.get(0), list.get(1), true);
+        return notBetween(columnName, list.get(0), list.get(1));
     }
 
-    public <T> WhereCriterion notBetween(IGetter<T, ?> fn, @Nullable Collection<?> values) {
+    public <T> WhereCriterion notBetween(IGetter<T, ?> fn, Collection<?> values) {
         if (CollectionUtils.isEmpty(values)) {
-            return this;
+            throw new IllegalArgumentException("WhereCriterion.notBetween values must not be null or empty");
         }
         if (values.size() != 2) {
             throw new DbException("The size of between params must be 2");
         }
         List<Object> list = new ArrayList<>(values);
-        return addBetween(ColumnMetaProvider.fromGetter(fn), list.get(0), list.get(1), true);
+        return notBetween(fn, list.get(0), list.get(1));
     }
 
     // ==================== LIKE / NOT LIKE ====================
 
-    public <T> WhereCriterion contains(IGetter<T, ?> fn, @Nullable Object value) {
-        if (Objects.isNull(value) || Strings.isBlank(value.toString())) {
-            return this;
-        }
-        return addBinaryComparison(ColumnMetaProvider.fromGetter(fn), " LIKE ?", "%" + value + "%");
+    public <T> WhereCriterion contains(IGetter<T, ?> fn, Object value) {
+        Object v = requireValue("contains", value);
+        return addBinaryComparison(ColumnMetaProvider.fromGetter(fn), " LIKE ?", "%" + v + "%");
     }
 
-    public WhereCriterion contains(String columnName, @Nullable Object value) {
-        if (Objects.isNull(value) || Strings.isBlank(value.toString())) {
-            return this;
-        }
-        return addBinaryComparison(ColumnMetaProvider.fromName(columnName), " LIKE ?", "%" + value + "%");
+    public WhereCriterion contains(String columnName, Object value) {
+        Object v = requireValue("contains", value);
+        return addBinaryComparison(ColumnMetaProvider.fromName(columnName), " LIKE ?", "%" + v + "%");
     }
 
-    public <T> WhereCriterion startsWith(IGetter<T, ?> fn, @Nullable Object value) {
-        if (Objects.isNull(value) || Strings.isBlank(value.toString())) {
-            return this;
-        }
-        return addBinaryComparison(ColumnMetaProvider.fromGetter(fn), " LIKE ?", value + "%");
+    public <T> WhereCriterion startsWith(IGetter<T, ?> fn, Object value) {
+        Object v = requireValue("startsWith", value);
+        return addBinaryComparison(ColumnMetaProvider.fromGetter(fn), " LIKE ?", v + "%");
     }
 
-    public WhereCriterion startsWith(String columnName, @Nullable Object value) {
-        if (Objects.isNull(value) || Strings.isBlank(value.toString())) {
-            return this;
-        }
-        return addBinaryComparison(ColumnMetaProvider.fromName(columnName), " LIKE ?", value + "%");
+    public WhereCriterion startsWith(String columnName, Object value) {
+        Object v = requireValue("startsWith", value);
+        return addBinaryComparison(ColumnMetaProvider.fromName(columnName), " LIKE ?", v + "%");
     }
 
-    public <T> WhereCriterion endsWith(IGetter<T, ?> fn, @Nullable Object value) {
-        if (Objects.isNull(value) || Strings.isBlank(value.toString())) {
-            return this;
-        }
-        return addBinaryComparison(ColumnMetaProvider.fromGetter(fn), " LIKE ?", "%" + value);
+    public <T> WhereCriterion endsWith(IGetter<T, ?> fn, Object value) {
+        Object v = requireValue("endsWith", value);
+        return addBinaryComparison(ColumnMetaProvider.fromGetter(fn), " LIKE ?", "%" + v);
     }
 
-    public WhereCriterion endsWith(String columnName, @Nullable Object value) {
-        if (Objects.isNull(value) || Strings.isBlank(value.toString())) {
-            return this;
-        }
-        return addBinaryComparison(ColumnMetaProvider.fromName(columnName), " LIKE ?", "%" + value);
+    public WhereCriterion endsWith(String columnName, Object value) {
+        Object v = requireValue("endsWith", value);
+        return addBinaryComparison(ColumnMetaProvider.fromName(columnName), " LIKE ?", "%" + v);
     }
 
-    public <T> WhereCriterion notContains(IGetter<T, ?> fn, @Nullable Object value) {
-        if (Objects.isNull(value) || Strings.isBlank(value.toString())) {
-            return this;
-        }
-        return addBinaryComparison(ColumnMetaProvider.fromGetter(fn), " NOT LIKE ?", "%" + value + "%");
+    public <T> WhereCriterion notContains(IGetter<T, ?> fn, Object value) {
+        Object v = requireValue("notContains", value);
+        return addBinaryComparison(ColumnMetaProvider.fromGetter(fn), " NOT LIKE ?", "%" + v + "%");
     }
 
-    public WhereCriterion notContains(String columnName, @Nullable Object value) {
-        if (Objects.isNull(value) || Strings.isBlank(value.toString())) {
-            return this;
-        }
-        return addBinaryComparison(ColumnMetaProvider.fromName(columnName), " NOT LIKE ?", "%" + value + "%");
+    public WhereCriterion notContains(String columnName, Object value) {
+        Object v = requireValue("notContains", value);
+        return addBinaryComparison(ColumnMetaProvider.fromName(columnName), " NOT LIKE ?", "%" + v + "%");
     }
 
-    public <T> WhereCriterion notStartsWith(IGetter<T, ?> fn, @Nullable Object value) {
-        if (Objects.isNull(value) || Strings.isBlank(value.toString())) {
-            return this;
-        }
-        return addBinaryComparison(ColumnMetaProvider.fromGetter(fn), " NOT LIKE ?", value + "%");
+    public <T> WhereCriterion notStartsWith(IGetter<T, ?> fn, Object value) {
+        Object v = requireValue("notStartsWith", value);
+        return addBinaryComparison(ColumnMetaProvider.fromGetter(fn), " NOT LIKE ?", v + "%");
     }
 
-    public WhereCriterion notStartsWith(String columnName, @Nullable Object value) {
-        if (Objects.isNull(value) || Strings.isBlank(value.toString())) {
-            return this;
-        }
-        return addBinaryComparison(ColumnMetaProvider.fromName(columnName), " NOT LIKE ?", value + "%");
+    public WhereCriterion notStartsWith(String columnName, Object value) {
+        Object v = requireValue("notStartsWith", value);
+        return addBinaryComparison(ColumnMetaProvider.fromName(columnName), " NOT LIKE ?", v + "%");
     }
 
-    public <T> WhereCriterion notEndsWith(IGetter<T, ?> fn, @Nullable Object value) {
-        if (Objects.isNull(value) || Strings.isBlank(value.toString())) {
-            return this;
-        }
-        return addBinaryComparison(ColumnMetaProvider.fromGetter(fn), " NOT LIKE ?", "%" + value);
+    public <T> WhereCriterion notEndsWith(IGetter<T, ?> fn, Object value) {
+        Object v = requireValue("notEndsWith", value);
+        return addBinaryComparison(ColumnMetaProvider.fromGetter(fn), " NOT LIKE ?", "%" + v);
     }
 
-    public WhereCriterion notEndsWith(String columnName, @Nullable Object value) {
-        if (Objects.isNull(value) || Strings.isBlank(value.toString())) {
+    public WhereCriterion notEndsWith(String columnName, Object value) {
+        Object v = requireValue("notEndsWith", value);
+        return addBinaryComparison(ColumnMetaProvider.fromName(columnName), " NOT LIKE ?", "%" + v);
+    }
+
+    public <T> WhereCriterion containsIfNotBlank(IGetter<T, ?> fn, @Nullable Object value) {
+        if (value == null || Strings.isBlank(value.toString())) {
             return this;
         }
-        return addBinaryComparison(ColumnMetaProvider.fromName(columnName), " NOT LIKE ?", "%" + value);
+        return contains(fn, value);
+    }
+
+    public WhereCriterion containsIfNotBlank(String columnName, @Nullable Object value) {
+        if (value == null || Strings.isBlank(value.toString())) {
+            return this;
+        }
+        return contains(columnName, value);
+    }
+
+    public <T> WhereCriterion startsWithIfNotBlank(IGetter<T, ?> fn, @Nullable Object value) {
+        if (value == null || Strings.isBlank(value.toString())) {
+            return this;
+        }
+        return startsWith(fn, value);
+    }
+
+    public WhereCriterion startsWithIfNotBlank(String columnName, @Nullable Object value) {
+        if (value == null || Strings.isBlank(value.toString())) {
+            return this;
+        }
+        return startsWith(columnName, value);
+    }
+
+    public <T> WhereCriterion endsWithIfNotBlank(IGetter<T, ?> fn, @Nullable Object value) {
+        if (value == null || Strings.isBlank(value.toString())) {
+            return this;
+        }
+        return endsWith(fn, value);
+    }
+
+    public WhereCriterion endsWithIfNotBlank(String columnName, @Nullable Object value) {
+        if (value == null || Strings.isBlank(value.toString())) {
+            return this;
+        }
+        return endsWith(columnName, value);
+    }
+
+    public <T> WhereCriterion notContainsIfNotBlank(IGetter<T, ?> fn, @Nullable Object value) {
+        if (value == null || Strings.isBlank(value.toString())) {
+            return this;
+        }
+        return notContains(fn, value);
+    }
+
+    public WhereCriterion notContainsIfNotBlank(String columnName, @Nullable Object value) {
+        if (value == null || Strings.isBlank(value.toString())) {
+            return this;
+        }
+        return notContains(columnName, value);
     }
 
     // ==================== IN / NOT IN ====================
 
-    public WhereCriterion in(String columnName, @Nullable Collection<?> values) {
+    public WhereCriterion in(String columnName, Collection<?> values) {
+        if (CollectionUtils.isEmpty(values)) {
+            throw new IllegalArgumentException(
+                    "WhereCriterion.in values must not be null or empty (use inIfNotEmpty for optional filtering)");
+        }
+        return addInCondition(ColumnMetaProvider.fromName(columnName), values, false);
+    }
+
+    public <T> WhereCriterion in(IGetter<T, ?> fn, Collection<?> values) {
+        if (CollectionUtils.isEmpty(values)) {
+            throw new IllegalArgumentException(
+                    "WhereCriterion.in values must not be null or empty (use inIfNotEmpty for optional filtering)");
+        }
+        return addInCondition(ColumnMetaProvider.fromGetter(fn), values, false);
+    }
+
+    public WhereCriterion notIn(String columnName, Collection<?> values) {
+        if (CollectionUtils.isEmpty(values)) {
+            throw new IllegalArgumentException(
+                    "WhereCriterion.notIn values must not be null or empty (use notInIfNotEmpty for optional filtering)");
+        }
+        return addInCondition(ColumnMetaProvider.fromName(columnName), values, true);
+    }
+
+    public <T> WhereCriterion notIn(IGetter<T, ?> fn, Collection<?> values) {
+        if (CollectionUtils.isEmpty(values)) {
+            throw new IllegalArgumentException(
+                    "WhereCriterion.notIn values must not be null or empty (use notInIfNotEmpty for optional filtering)");
+        }
+        return addInCondition(ColumnMetaProvider.fromGetter(fn), values, true);
+    }
+
+    public WhereCriterion inIfNotEmpty(String columnName, @Nullable Collection<?> values) {
         if (CollectionUtils.isEmpty(values)) {
             return this;
         }
         return addInCondition(ColumnMetaProvider.fromName(columnName), values, false);
     }
 
-    public <T> WhereCriterion in(IGetter<T, ?> fn, @Nullable Collection<?> values) {
+    public <T> WhereCriterion inIfNotEmpty(IGetter<T, ?> fn, @Nullable Collection<?> values) {
         if (CollectionUtils.isEmpty(values)) {
             return this;
         }
         return addInCondition(ColumnMetaProvider.fromGetter(fn), values, false);
     }
 
-    public WhereCriterion notIn(String columnName, @Nullable Collection<?> values) {
+    public WhereCriterion notInIfNotEmpty(String columnName, @Nullable Collection<?> values) {
         if (CollectionUtils.isEmpty(values)) {
             return this;
         }
         return addInCondition(ColumnMetaProvider.fromName(columnName), values, true);
     }
 
-    public <T> WhereCriterion notIn(IGetter<T, ?> fn, @Nullable Collection<?> values) {
+    public <T> WhereCriterion notInIfNotEmpty(IGetter<T, ?> fn, @Nullable Collection<?> values) {
         if (CollectionUtils.isEmpty(values)) {
             return this;
         }
@@ -465,6 +568,14 @@ public class WhereCriterion {
     }
 
     // ==================== 内部辅助 ====================
+
+    private static Object requireValue(String method, @Nullable Object value) {
+        if (value == null) {
+            throw new IllegalArgumentException(
+                    "WhereCriterion." + method + " value must not be null (use isNull or " + method + "IfPresent)");
+        }
+        return value;
+    }
 
     private WhereCriterion addBinaryComparison(ColumnMetaProvider provider, String operatorWithPlaceholder, Object value) {
         predicates.add((ctx, sql, params, source) -> {

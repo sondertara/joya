@@ -14,7 +14,7 @@ import java.util.stream.Collectors;
  * @author huangxiaohu
  */
 @Getter
-public class OrPart implements Streamable<PredicatePart> {
+public class OrPart implements Iterable<PredicatePart> {
     private static final String KEYWORD_TEMPLATE = "(%s)(?=(\\p{Lu}|\\P{InBASIC_LATIN}))";
 
     private static String[] split(String text, String keyword) {

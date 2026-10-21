@@ -30,6 +30,7 @@ public final class DeleteStatementFactory {
     public static SqlStatement create(MutationContext ctx) {
         EntityMetadataContext meta = ctx.metadata();
         WhereCriterion where = ctx.where();
+        var settings = ctx.settings();
 
         if ((where == null || where.isEmpty()) && !ctx.allowAll()) {
             throw new IllegalStateException("DELETE without WHERE is not allowed; use allowAll() explicitly");
@@ -38,15 +39,16 @@ public final class DeleteStatementFactory {
         SqlParameterList params = new SqlParameterList();
         StringBuilder whereSql = new StringBuilder();
         if (where != null && !where.isEmpty()) {
-            RenderContext renderContext = RenderContext.forSingleTable(meta);
+            RenderContext renderContext = RenderContext.forSingleTable(meta, settings);
             where.render(renderContext, whereSql, params, ParameterSource.WHERE);
         }
 
-        String sql = "DELETE FROM " + meta.qualifiedTableName()
+        String tableName = meta.qualifiedTableName(settings);
+        String sql = "DELETE FROM " + tableName
                 + (whereSql.isEmpty() ? "" : " WHERE " + whereSql);
 
         Set<TableRef> tables = new LinkedHashSet<>();
-        tables.add(TableRef.of(meta.qualifiedTableName()));
+        tables.add(TableRef.of(tableName));
         StatementMetadata metadata = StatementMetadata.builder(Operation.DELETE)
                 .tables(tables)
                 .entityType(meta.entityType())

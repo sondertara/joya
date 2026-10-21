@@ -316,25 +316,34 @@ public final class SqlDataUtils {
         } else if (Clob.class == requiredType) {
             return rs.getClob(index);
         } else if (requiredType.isEnum()) {
-            // Enums can either be represented through a String or an enum index value:
-            // leave enum type conversion up to the caller (e.g. a ConversionService)
-            // but make sure that we return nothing other than a String or an Integer.
             Object obj = rs.getObject(index);
-            if (obj instanceof String) {
-                return obj;
-            } else if (obj instanceof Number) {
-                // Defensively convert any Number to an Integer (as needed by our
-                // ConversionService's IntegerToEnumConverterFactory) for use as index
-                try {
-                    return obj.getClass().getConstructor(String.class).newInstance(obj.toString());
-                } catch (InstantiationException | IllegalAccessException | InvocationTargetException |
-                         NoSuchMethodException e) {
-                    throw new RuntimeException(e);
-                }
-            } else {
-                // e.g. on Postgres: getObject returns a PGObject but we need a String
-                return rs.getString(index);
+            if (obj == null) {
+                return null;
             }
+            if (requiredType.isInstance(obj)) {
+                return obj;
+            }
+            Object[] constants = requiredType.getEnumConstants();
+            if (obj instanceof Number num) {
+                int ordinal = num.intValue();
+                if (constants != null && ordinal >= 0 && ordinal < constants.length) {
+                    return constants[ordinal];
+                }
+                return ConvertUtils.convert(ordinal, requiredType);
+            }
+            String text = (obj instanceof String s) ? s : rs.getString(index);
+            if (text == null) {
+                return null;
+            }
+            if (constants != null) {
+                for (Object constant : constants) {
+                    Enum<?> e = (Enum<?>) constant;
+                    if (e.name().equals(text) || e.name().equalsIgnoreCase(text)) {
+                        return e;
+                    }
+                }
+            }
+            return ConvertUtils.convert(text, requiredType);
         } else {
 
             String columnClassName = rs.getMetaData().getColumnClassName(index);

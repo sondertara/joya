@@ -1,6 +1,6 @@
 package com.sondertara.joya.core.query;
 
-import com.sondertara.joya.core.JoyaClient;
+import com.sondertara.joya.core.JoyaSettings;
 import com.sondertara.joya.core.cache.CacheHolder;
 import com.sondertara.joya.core.kernel.statement.TableRef;
 import com.sondertara.joya.core.metadata.EntityMetadataContext;
@@ -17,6 +17,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -38,27 +39,35 @@ import java.util.StringJoiner;
 public final class RenderContext {
 
     private static final String ALIAS_PREFIX = "t";
-    private static final int MAX_JOINED_TABLES = 3;
 
     private final Class<?> rootType;
     private final boolean aliased;
     private final List<JoinPart> joins;
+    private final JoyaSettings settings;
     private final Map<Class<?>, TableBinding> tableBindings = new LinkedHashMap<>();
 
     private record TableBinding(Class<?> entityClass, EntityMetadataContext meta, @Nullable String alias) {
     }
 
-    private RenderContext(Class<?> rootType, boolean aliased, List<JoinPart> joins) {
+    private RenderContext(Class<?> rootType, boolean aliased, List<JoinPart> joins, JoyaSettings settings) {
         this.rootType = Objects.requireNonNull(rootType, "rootType must not be null");
         this.aliased = aliased;
         this.joins = joins == null ? List.of() : List.copyOf(joins);
+        this.settings = Objects.requireNonNullElse(settings, JoyaSettings.DEFAULT);
     }
 
     /**
      * 构造多表查询渲染上下文（带表别名 {@code t0, t1...}，严格按 {@code rootType + joins} 顺序绑定）。
      */
     public static RenderContext forQuery(Class<?> rootType, List<JoinPart> joins) {
-        RenderContext ctx = new RenderContext(rootType, true, joins);
+        return forQuery(rootType, joins, JoyaSettings.DEFAULT);
+    }
+
+    /**
+     * 构造多表查询渲染上下文（支持传入实例级 {@link JoyaSettings} 控制最大联表数与大小写策略）。
+     */
+    public static RenderContext forQuery(Class<?> rootType, List<JoinPart> joins, JoyaSettings settings) {
+        RenderContext ctx = new RenderContext(rootType, true, joins, settings);
         ctx.registerQueryTable(rootType);
         if (joins != null) {
             for (JoinPart join : joins) {
@@ -72,8 +81,9 @@ public final class RenderContext {
                 }
             }
         }
-        if (ctx.tableBindings.size() > MAX_JOINED_TABLES) {
-            throw new DbException("The maximum number of tables that can be joined is " + MAX_JOINED_TABLES);
+        int maxJoinedTables = ctx.settings.maxJoinTable();
+        if (ctx.tableBindings.size() > maxJoinedTables) {
+            throw new DbException("The maximum number of tables that can be joined is " + maxJoinedTables);
         }
         return ctx;
     }
@@ -82,9 +92,16 @@ public final class RenderContext {
      * 构造单表语句渲染上下文（无表别名，直接输出列名，适用于单表 UPDATE / DELETE / SELECT）。
      */
     public static RenderContext forSingleTable(EntityMetadataContext meta) {
+        return forSingleTable(meta, JoyaSettings.DEFAULT);
+    }
+
+    /**
+     * 构造单表语句渲染上下文（支持传入实例级 {@link JoyaSettings}）。
+     */
+    public static RenderContext forSingleTable(EntityMetadataContext meta, JoyaSettings settings) {
         Objects.requireNonNull(meta, "meta must not be null");
         Class<?> entityType = meta.entityType() != null ? meta.entityType() : Object.class;
-        RenderContext ctx = new RenderContext(entityType, false, List.of());
+        RenderContext ctx = new RenderContext(entityType, false, List.of(), settings);
         ctx.tableBindings.put(entityType, new TableBinding(entityType, meta, null));
         return ctx;
     }
@@ -95,7 +112,11 @@ public final class RenderContext {
     public static RenderContext forSingleTable(Class<?> entityClass) {
         Objects.requireNonNull(entityClass, "entityClass must not be null");
         EntityMetadataContext meta = CacheHolder.tableMetaCache().getMetadataContext(entityClass);
-        return forSingleTable(meta);
+        return forSingleTable(meta, JoyaSettings.DEFAULT);
+    }
+
+    public JoyaSettings settings() {
+        return settings;
     }
 
     private void registerQueryTable(Class<?> entityClass) {
@@ -216,23 +237,24 @@ public final class RenderContext {
      */
     public String renderFromClause() {
         TableBinding root = tableBindings.get(rootType);
+        String rootTableName = root.meta().tableName(settings);
         if (joins.isEmpty()) {
             return root.alias() == null
-                    ? root.meta().tableName()
-                    : root.meta().tableName() + " " + root.alias();
+                    ? rootTableName
+                    : rootTableName + " " + root.alias();
         }
         StringJoiner sj = new StringJoiner(" ");
         Set<String> joinedTables = new HashSet<>();
-        sj.add(root.meta().tableName() + " " + root.alias());
-        joinedTables.add(root.meta().tableName().toLowerCase());
+        sj.add(rootTableName + " " + root.alias());
+        joinedTables.add(rootTableName.toLowerCase(Locale.ROOT));
 
         StringBuilder sb = new StringBuilder();
         for (JoinPart segment : joins) {
             ColumnAlias first = segment.getLeftColumn().resolveAlias(this);
             ColumnAlias last = segment.getRightColumn().resolveAlias(this);
             String code = segment.getJoinType().getCode();
-            String firstTableKey = first.getTableName().toLowerCase();
-            String lastTableKey = last.getTableName().toLowerCase();
+            String firstTableKey = first.getTableName().toLowerCase(Locale.ROOT);
+            String lastTableKey = last.getTableName().toLowerCase(Locale.ROOT);
 
             if (joinedTables.contains(firstTableKey)) {
                 sb.append(code).append(' ')
@@ -262,7 +284,7 @@ public final class RenderContext {
     public Set<TableRef> extractTables() {
         Set<TableRef> result = new LinkedHashSet<>();
         for (TableBinding binding : tableBindings.values()) {
-            result.add(TableRef.of(binding.meta().tableName(), binding.alias()));
+            result.add(TableRef.of(binding.meta().tableName(settings), binding.alias()));
         }
         return result;
     }
@@ -301,12 +323,12 @@ public final class RenderContext {
         return null;
     }
 
-    private static ColumnAlias buildColumnAlias(TableBinding binding, String columnName, @Nullable String fieldName) {
-        String formattedCol = JoyaClient.config().isColumnUppercase()
-                ? columnName.toUpperCase()
-                : columnName.toLowerCase();
+    private ColumnAlias buildColumnAlias(TableBinding binding, String columnName, @Nullable String fieldName) {
+        String formattedCol = settings.columnUppercase()
+                ? columnName.toUpperCase(Locale.ROOT)
+                : columnName.toLowerCase(Locale.ROOT);
         ColumnAlias alias = new ColumnAlias();
-        alias.setTableName(binding.meta().tableName());
+        alias.setTableName(binding.meta().tableName(settings));
         alias.setTableAlias(binding.alias());
         alias.setColumnName(formattedCol);
         alias.setColumnAlias(fieldName);

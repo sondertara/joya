@@ -12,8 +12,8 @@ import com.sondertara.joya.utils.PropertyUtils;
 import com.sondertara.common.text.VariableStyles;
 import com.sondertara.joya.core.jdbc.resultset.FieldAlias;
 import com.sondertara.joya.core.cache.CacheHolder;
+import com.sondertara.joya.core.metadata.EntityMetadataContext;
 import com.sondertara.joya.core.metadata.PersistenceAnnotations;
-import com.sondertara.joya.core.model.EntityTableMetaDefinition;
 import com.sondertara.joya.exceptions.DbException;
 import com.sondertara.joya.utils.SqlDataUtils;
 import com.sondertara.joya.utils.SqlFormatUtils;
@@ -23,15 +23,12 @@ import org.jspecify.annotations.Nullable;
 import java.beans.PropertyDescriptor;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
-import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.RecordComponent;
 import java.sql.Blob;
 import java.sql.Clob;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
-import java.sql.SQLException;
-import java.util.Arrays;
 import java.util.Collection;
 import java.util.Date;
 import java.util.HashMap;
@@ -46,6 +43,23 @@ import java.util.Objects;
  */
 @Slf4j
 public class BeanRowMapper<T> implements RowMapper<T> {
+
+    private static final ClassValue<BeanRowMapper<?>> CACHE = new ClassValue<>() {
+        @Override
+        protected BeanRowMapper<?> computeValue(Class<?> type) {
+            return new BeanRowMapper<>(type);
+        }
+    };
+
+    /**
+     * 获取指定类型的缓存级不可变 {@link BeanRowMapper} 实例（基于 {@link ClassValue} 零锁争用复用反射元数据）。
+     */
+    @SuppressWarnings("unchecked")
+    public static <T> BeanRowMapper<T> of(Class<T> type) {
+        Objects.requireNonNull(type, "type must not be null");
+        return (BeanRowMapper<T>) CACHE.get(type);
+    }
+
     private final Class<T> type;
 
     private LinkedCaseInsensitiveMap<PropertyDescriptor> mappedFields;
@@ -56,7 +70,10 @@ public class BeanRowMapper<T> implements RowMapper<T> {
     private Map<String, TypedConverter> fieldTypeConverterMap;
 
     @Nullable
-    private EntityTableMetaDefinition metaDefinition;
+    private EntityMetadataContext metadataContext;
+
+    @Nullable
+    private Constructor<T> defaultConstructor;
 
     private final boolean isRecord;
     @Nullable
@@ -80,6 +97,13 @@ public class BeanRowMapper<T> implements RowMapper<T> {
             initializeRecord();
             return;
         }
+        try {
+            if (type != null && !type.isInterface() && !type.isPrimitive()) {
+                this.defaultConstructor = type.getDeclaredConstructor();
+                this.defaultConstructor.setAccessible(true);
+            }
+        } catch (NoSuchMethodException ignored) {
+        }
         Collection<PropertyDescriptor> collection = PropertyUtils.getPropertyDescriptors(type);
         collection.forEach(pd -> {
             if (pd.getWriteMethod() != null) {
@@ -88,7 +112,7 @@ public class BeanRowMapper<T> implements RowMapper<T> {
 
         });
         if (PersistenceAnnotations.isTableOrEntityPresent(type)) {
-            metaDefinition = CacheHolder.tableMetaCache().findByEntityClass(type).orElseThrow(() -> new IllegalStateException("No table entity class found for class:" + type));
+            metadataContext = CacheHolder.tableMetaCache().getMetadataContext(type);
         } else if (!SqlFormatUtils.isPrimitive(type)) {
             initColumnPropertyAliases();
         }
@@ -196,7 +220,7 @@ public class BeanRowMapper<T> implements RowMapper<T> {
             if (this.mappedFields.isEmpty()) {
                 return (T) setSingleField(row);
             }
-            T bean = type.getDeclaredConstructor().newInstance();
+            T bean = (defaultConstructor != null ? defaultConstructor : type.getDeclaredConstructor()).newInstance();
             for (int i = 1; i <= count; i++) {
                 String columnName = SqlDataUtils.lookupColumnName(metaData, i);
                 //if the name has alias
@@ -325,18 +349,11 @@ public class BeanRowMapper<T> implements RowMapper<T> {
 
     private String bestGuessProperty(String aliasName) {
         String propertyName = null;
-        //1.判断是否为entity
-        if (null != metaDefinition) {
-            propertyName = metaDefinition.findFieldNameByColumn(aliasName);
+        // 1. 判断是否为 entity（O(1) 大小写无关查找）
+        if (null != metadataContext) {
+            propertyName = metadataContext.fieldByColumn(aliasName);
             if (null == propertyName) {
-                if (metaDefinition.containFiled(aliasName)) {
-                    propertyName = aliasName;
-                } else {
-                    propertyName = metaDefinition.getFieldNames().stream()
-                            .filter(s -> s.equalsIgnoreCase(aliasName))
-                            .findFirst()
-                            .orElse(null);
-                }
+                propertyName = metadataContext.findFieldIgnoreCase(aliasName);
             }
         }
         //2.判断普通 pojo是否设置别名

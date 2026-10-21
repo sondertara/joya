@@ -30,11 +30,6 @@ import java.util.List;
 public class DerbyDialect extends AbstractDialect implements PageSqlDialect {
 
     @Override
-    protected String defaultQualifier() {
-        return "\"";
-    }
-
-    @Override
     public BoundSql pageSql(BoundSql boundSql, long start, long limit) {
         StringBuilder sqlBuilder = new StringBuilder(boundSql.getSqlString());
         List<Object> paramArrays = new ArrayList<>(Arrays.asList(boundSql.getArgs()));

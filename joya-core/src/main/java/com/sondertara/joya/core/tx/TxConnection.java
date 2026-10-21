@@ -23,7 +23,7 @@ import java.util.OptionalInt;
  *   <li><b>I9 所有者线程独占</b>：跨线程使用抛异常，而非静默错乱。</li>
  * </ul>
  */
-public final class TxConnection implements ConnectionProvider, AutoCloseable {
+public final class TxConnection implements TxSession {
 
     /** final —— 结构上保证事务期内连接不可替换（I5）。 */
     private final Connection connection;
@@ -175,10 +175,21 @@ public final class TxConnection implements ConnectionProvider, AutoCloseable {
         return status;
     }
 
+    @Override
+    public boolean isRollbackOnly() {
+        return status.globalRollbackOnly();
+    }
+
+    @Override
+    public boolean isActive() {
+        return status.isActive();
+    }
+
     public Connection connection() {
         return connection;
     }
 
+    @Override
     public boolean isClosed() {
         return closed;
     }

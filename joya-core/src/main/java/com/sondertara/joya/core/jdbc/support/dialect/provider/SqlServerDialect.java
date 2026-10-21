@@ -15,9 +15,9 @@
  */
 package com.sondertara.joya.core.jdbc.support.dialect.provider;
 
-import com.sondertara.joya.utils.Strings;
 import com.sondertara.joya.core.jdbc.support.dialect.BoundSql;
 import com.sondertara.joya.core.jdbc.support.dialect.PageSqlDialect;
+import com.sondertara.joya.utils.Strings;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -39,50 +39,6 @@ public class SqlServerDialect extends AbstractDialect implements PageSqlDialect 
         } else {
             return "";
         }
-    }
-
-    @Override
-    public String leftQualifier() {
-        return "[";
-    }
-
-    @Override
-    public String rightQualifier() {
-        return "]";
-    }
-
-    @Override
-    public String fmtName(boolean useQualifier, String name) {
-        if (Strings.isBlank(name)) {
-            return name;
-        }
-        if (this.keywords().contains(name.toUpperCase()) || name.contains(" ")) {
-            useQualifier = true;
-        }
-
-        if (useQualifier) {
-            return leftQualifier() + name.replace("]", "]]") + rightQualifier();
-        } else {
-            return name;
-        }
-    }
-
-    @Override
-    public String tableName(boolean useQualifier, String catalog, String schema, String table) {
-        StringBuilder strBuilder = new StringBuilder();
-        if (Strings.isNotBlank(catalog)) {
-            strBuilder.append(fmtName(useQualifier, catalog));
-            strBuilder.append(".");
-        }
-        if (Strings.isNotBlank(schema)) {
-            strBuilder.append(fmtName(useQualifier, schema));
-            strBuilder.append(".");
-        } else if (Strings.isNotBlank(catalog)) {
-            strBuilder.append("dbo.");
-        }
-
-        strBuilder.append(fmtName(useQualifier, table));
-        return strBuilder.toString();
     }
 
     @Override
@@ -118,24 +74,5 @@ public class SqlServerDialect extends AbstractDialect implements PageSqlDialect 
         paramArrays.add(firstParam);
         paramArrays.add(secondParam);
         return new BoundSql.BoundSqlObj(sqlString, paramArrays.toArray());
-    }
-
-    @Override
-    public String randomQuery(boolean useQualifier, String catalog, String schema, String table, List<String> selectColumns, int recordSize) {
-        String tableName = this.tableName(useQualifier, catalog, schema, table);
-        StringBuilder select = new StringBuilder();
-
-        if (selectColumns == null || selectColumns.isEmpty()) {
-            select.append("*");
-        } else {
-            for (String col : selectColumns) {
-                if (select.length() > 0) {
-                    select.append(", ");
-                }
-                select.append(this.fmtName(useQualifier, col));
-            }
-        }
-
-        return "select top " + recordSize + " " + select + " from " + tableName + " order by newid()";
     }
 }

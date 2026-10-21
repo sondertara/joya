@@ -88,7 +88,7 @@ public final class EntityUpdate<T> {
         }
         WhereCriterion where = buildWhere();
         Set<String> declared = new LinkedHashSet<>(values.keySet());
-        MutationContext ctx = new MutationContext(meta, values, where, declared, false, allowAll);
+        MutationContext ctx = new MutationContext(meta, values, where, declared, false, allowAll, template.settings());
         return UpdateStatementFactory.create(ctx);
     }
 

@@ -57,7 +57,7 @@ public final class EntityDelete<T> {
     /** 渲染为不可变 {@link SqlStatement}。 */
     public SqlStatement toSqlStatement() {
         WhereCriterion where = buildWhere();
-        MutationContext ctx = new MutationContext(meta, Map.of(), where, Set.of(), false, allowAll);
+        MutationContext ctx = new MutationContext(meta, Map.of(), where, Set.of(), false, allowAll, template.settings());
         return DeleteStatementFactory.create(ctx);
     }
 

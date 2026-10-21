@@ -195,7 +195,7 @@ public final class SqlOps {
         if (isScalarType(type)) {
             return new SingleColumnRowMapper<>(type);
         }
-        return new BeanRowMapper<>(type);
+        return BeanRowMapper.of(type);
     }
 
     public static boolean isScalarType(Class<?> type) {

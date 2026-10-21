@@ -1,6 +1,7 @@
 package com.sondertara.joya.core.tx;
 
 import com.sondertara.joya.core.EntityOps;
+import com.sondertara.joya.core.JoyaSettings;
 import com.sondertara.joya.core.SqlOps;
 import com.sondertara.joya.core.jdbc.dao.JoyaMapper;
 import com.sondertara.joya.core.kernel.JoyaTemplate;
@@ -17,21 +18,23 @@ import java.util.Objects;
 import java.util.function.Consumer;
 
 /**
- * {@link Tx} 的单连接实现：直接绑定一条 {@link TxConnection} 与一份事务态 {@link JoyaTemplate}。
+ * {@link Tx} 的统一实现：绑定一个底层 {@link TxSession}（纯 JDBC {@link TxConnection} 或 Spring 事务会话）
+ * 与一份事务态 {@link JoyaTemplate}。
  */
-final class TxImpl implements Tx {
+public final class TxImpl implements Tx {
 
     private static final Logger log = LoggerFactory.getLogger(TxImpl.class);
 
-    private final TxConnection txConnection;
+    private final TxSession session;
     private final JoyaTemplate template;
     private final List<Runnable> afterCommit = new ArrayList<>();
     private final List<Consumer<TxOutcome>> afterCompletion = new ArrayList<>();
+    private java.util.Map<Class<?>, Object> mapperCache;
     private boolean completed;
 
-    TxImpl(JoyaTemplate rootTemplate, TxConnection txConnection) {
-        this.txConnection = Objects.requireNonNull(txConnection, "txConnection must not be null");
-        this.template = Objects.requireNonNull(rootTemplate, "rootTemplate must not be null").bind(txConnection);
+    public TxImpl(JoyaTemplate rootTemplate, TxSession session) {
+        this.session = Objects.requireNonNull(session, "session must not be null");
+        this.template = Objects.requireNonNull(rootTemplate, "rootTemplate must not be null").bind(session);
     }
 
     // ===== DataOps：事务视图 =====
@@ -57,13 +60,21 @@ final class TxImpl implements Tx {
     }
 
     @Override
-    @SuppressWarnings("rawtypes")
+    @SuppressWarnings({"unchecked", "rawtypes"})
     public <M extends JoyaMapper> M mapper(Class<M> mapperType) {
         Objects.requireNonNull(mapperType, "mapperType must not be null");
         if (!mapperType.isInterface()) {
             throw new UnsupportedOperationException("mapperType " + mapperType.getName() + " is not interface.");
         }
-        return new JdkMapperProxy(this).create(mapperType);
+        if (mapperCache == null) {
+            mapperCache = new java.util.HashMap<>(4);
+        }
+        return (M) mapperCache.computeIfAbsent(mapperType, cls -> new JdkMapperProxy(this).create((Class) cls));
+    }
+
+    @Override
+    public JoyaSettings settings() {
+        return template.settings();
     }
 
     // ===== 保存点（Savepoint） =====
@@ -81,7 +92,7 @@ final class TxImpl implements Tx {
     public <R> R savepointCall(TxCallback<R> body) {
         Objects.requireNonNull(body, "savepointCall body must not be null");
         try {
-            txConnection.enterSavepoint();
+            session.enterSavepoint();
         } catch (SQLException e) {
             throw new TxException("Failed to create savepoint", e);
         }
@@ -90,14 +101,14 @@ final class TxImpl implements Tx {
             result = body.apply(this);
         } catch (Throwable t) {
             try {
-                txConnection.exitSavepointRollback();
-            } catch (SQLException rollbackFailure) {
+                session.exitSavepointRollback();
+            } catch (Throwable rollbackFailure) {
                 t.addSuppressed(rollbackFailure);
             }
             throw rethrow(t);
         }
         try {
-            txConnection.exitSavepointCommit();
+            session.exitSavepointCommit();
         } catch (SQLException e) {
             throw new TxException("Failed to release savepoint", e);
         }
@@ -108,12 +119,18 @@ final class TxImpl implements Tx {
 
     @Override
     public void afterCommit(Runnable callback) {
-        afterCommit.add(Objects.requireNonNull(callback, "callback must not be null"));
+        Objects.requireNonNull(callback, "callback must not be null");
+        if (!session.registerExternalAfterCommit(() -> runQuietly(callback, "afterCommit"))) {
+            afterCommit.add(callback);
+        }
     }
 
     @Override
     public void afterCompletion(Consumer<TxOutcome> callback) {
-        afterCompletion.add(Objects.requireNonNull(callback, "callback must not be null"));
+        Objects.requireNonNull(callback, "callback must not be null");
+        if (!session.registerExternalAfterCompletion(outcome -> runQuietly(() -> callback.accept(outcome), "afterCompletion"))) {
+            afterCompletion.add(callback);
+        }
     }
 
     // ===== 生命周期 =====
@@ -125,7 +142,7 @@ final class TxImpl implements Tx {
                     new IllegalStateException("transaction already completed"));
         }
         try {
-            txConnection.exitCommit();
+            session.exitCommit();
         } catch (SQLException e) {
             complete(TxOutcome.ROLLED_BACK);
             throw new TxException("Commit failed.", e);
@@ -139,33 +156,39 @@ final class TxImpl implements Tx {
     @Override
     public void rollback() {
         try {
-            if (!txConnection.isClosed() && txConnection.status().isActive()) {
-                txConnection.exitRollback();
+            if (!session.isClosed() && session.isActive()) {
+                session.exitRollback();
             }
         } catch (SQLException e) {
             complete(TxOutcome.ROLLED_BACK);
             throw new TxException("Rollback failed.", e);
+        } catch (RuntimeException e) {
+            complete(TxOutcome.ROLLED_BACK);
+            throw e;
         }
         complete(TxOutcome.ROLLED_BACK);
     }
 
     @Override
     public void setRollbackOnly() {
-        txConnection.markRollbackOnly();
+        session.markRollbackOnly();
     }
 
     @Override
     public boolean isRollbackOnly() {
-        return txConnection.status().globalRollbackOnly();
+        return session.isRollbackOnly();
     }
 
     @Override
     public void close() {
         try {
-            txConnection.close();
+            session.close();
         } catch (SQLException e) {
             complete(TxOutcome.ROLLED_BACK);
             throw new TxException("Failed to close transaction connection.", e);
+        } catch (RuntimeException e) {
+            complete(TxOutcome.ROLLED_BACK);
+            throw e;
         }
         complete(TxOutcome.ROLLED_BACK);   // 已完成时为空操作
     }

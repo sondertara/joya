@@ -33,6 +33,7 @@ public final class InsertStatementFactory {
 
     public static SqlStatement create(MutationContext ctx) {
         EntityMetadataContext meta = ctx.metadata();
+        var settings = ctx.settings();
 
         // 1. 确定最终列
         List<String> columns = ctx.declaredColumns().isEmpty()
@@ -47,16 +48,18 @@ public final class InsertStatementFactory {
             if (ctx.ignoreNull() && value == null) {
                 continue;
             }
-            finalColumns.add(col);
+            String formattedCol = meta.formatColumn(col, settings);
+            finalColumns.add(formattedCol);
             params.add(col, value, ParameterSource.INSERT);
         }
 
         // 3. 生成 SQL
-        String sql = buildSql(meta.qualifiedTableName(), finalColumns);
+        String tableName = meta.qualifiedTableName(settings);
+        String sql = buildSql(tableName, finalColumns);
 
         // 4. 元数据：表引用 + 实体类型
         Set<TableRef> tables = new LinkedHashSet<>();
-        tables.add(TableRef.of(meta.qualifiedTableName()));
+        tables.add(TableRef.of(tableName));
         StatementMetadata metadata = StatementMetadata.builder(Operation.INSERT)
                 .tables(tables)
                 .entityType(meta.entityType())

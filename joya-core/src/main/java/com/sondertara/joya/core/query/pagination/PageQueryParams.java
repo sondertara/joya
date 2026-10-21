@@ -75,24 +75,24 @@ public final class PageQueryParams {
             Object val = sp.getFieldValue();
             FieldParam.Operator op = sp.getOperator() == null ? FieldParam.Operator.EQ : sp.getOperator();
             switch (op) {
-                case EQ -> w.eq(fieldName, val);
-                case NEQ -> w.ne(fieldName, val);
-                case GT -> w.gt(fieldName, val);
-                case GTE -> w.gte(fieldName, val);
-                case LT -> w.lt(fieldName, val);
-                case LTE -> w.lte(fieldName, val);
+                case EQ -> w.eqIfPresent(fieldName, val);
+                case NEQ -> w.neIfPresent(fieldName, val);
+                case GT -> w.gtIfPresent(fieldName, val);
+                case GTE -> w.gteIfPresent(fieldName, val);
+                case LT -> w.ltIfPresent(fieldName, val);
+                case LTE -> w.lteIfPresent(fieldName, val);
                 case IN -> {
                     if (val != null && val.getClass().isArray()) {
-                        w.in(fieldName, Arrays.asList((Object[]) val));
+                        w.inIfNotEmpty(fieldName, Arrays.asList((Object[]) val));
                     } else if (val instanceof Collection<?> col) {
-                        w.in(fieldName, (Collection<Object>) col);
+                        w.inIfNotEmpty(fieldName, (Collection<Object>) col);
                     } else if (val != null) {
                         throw new TaraException("The value of operator [IN] must be collection");
                     }
                 }
-                case LIKE -> w.contains(fieldName, val);
-                case LIKE_L -> w.endsWith(fieldName, val);
-                case LIKE_R -> w.startsWith(fieldName, val);
+                case LIKE -> w.containsIfNotBlank(fieldName, val);
+                case LIKE_L -> w.endsWithIfNotBlank(fieldName, val);
+                case LIKE_R -> w.startsWithIfNotBlank(fieldName, val);
             }
         }
         return w;

@@ -1,7 +1,6 @@
 package com.sondertara.joya.spring.autoconfigure;
 
 import com.sondertara.joya.core.JoyaSettings;
-import com.sondertara.joya.core.constant.SchemaValidation;
 import com.sondertara.joya.core.jdbc.support.DbType;
 import com.sondertara.joya.core.kernel.dialect.DialectStrategy;
 import org.springframework.boot.autoconfigure.jdbc.DataSourceProperties;
@@ -43,9 +42,6 @@ public class JoyaProperties {
     /** 表名大写开关。 */
     private boolean tableUppercase = false;
 
-    /** Schema 校验策略（默认 NONE）。 */
-    private SchemaValidation schemaValidation = SchemaValidation.NONE;
-
     /** 显式指定固定数据库方言（为空时按 DataSource 惰性探测并缓存）。 */
     private DbType dialect;
 
@@ -75,16 +71,12 @@ public class JoyaProperties {
         boolean tblUpper = (override != null && override.getTableUppercase() != null)
                 ? override.getTableUppercase()
                 : this.tableUppercase;
-        SchemaValidation validation = (override != null && override.getSchemaValidation() != null)
-                ? override.getSchemaValidation()
-                : this.schemaValidation;
         return JoyaSettings.builder()
                 .queryTimeoutSeconds(timeout)
                 .batchSize(batch)
                 .maxJoinTable(maxJoin)
                 .columnUppercase(colUpper)
                 .tableUppercase(tblUpper)
-                .schemaValidation(validation)
                 .build();
     }
 
@@ -162,14 +154,6 @@ public class JoyaProperties {
         this.tableUppercase = tableUppercase;
     }
 
-    public SchemaValidation getSchemaValidation() {
-        return schemaValidation;
-    }
-
-    public void setSchemaValidation(SchemaValidation schemaValidation) {
-        this.schemaValidation = schemaValidation;
-    }
-
     public DbType getDialect() {
         return dialect;
     }
@@ -226,9 +210,6 @@ public class JoyaProperties {
         /** 单库表名大写开关覆写。 */
         private Boolean tableUppercase;
 
-        /** 单库 Schema 校验策略覆写。 */
-        private SchemaValidation schemaValidation;
-
         /** 单库显式固定数据库方言覆写。 */
         private DbType dialect;
 
@@ -283,14 +264,6 @@ public class JoyaProperties {
 
         public void setTableUppercase(Boolean tableUppercase) {
             this.tableUppercase = tableUppercase;
-        }
-
-        public SchemaValidation getSchemaValidation() {
-            return schemaValidation;
-        }
-
-        public void setSchemaValidation(SchemaValidation schemaValidation) {
-            this.schemaValidation = schemaValidation;
         }
 
         public DbType getDialect() {

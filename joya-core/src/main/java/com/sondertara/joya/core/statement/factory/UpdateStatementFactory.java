@@ -34,6 +34,7 @@ public final class UpdateStatementFactory {
     public static SqlStatement create(MutationContext ctx) {
         EntityMetadataContext meta = ctx.metadata();
         WhereCriterion where = ctx.where();
+        var settings = ctx.settings();
 
         if ((where == null || where.isEmpty()) && !ctx.allowAll()) {
             throw new IllegalStateException("UPDATE without WHERE is not allowed; use allowAll() explicitly");
@@ -53,7 +54,7 @@ public final class UpdateStatementFactory {
             if (ctx.ignoreNull() && value == null) {
                 continue;
             }
-            finalSetColumns.add(col);
+            finalSetColumns.add(meta.formatColumn(col, settings));
             params.add(col, value, ParameterSource.SET);
         }
         if (finalSetColumns.isEmpty()) {
@@ -63,16 +64,17 @@ public final class UpdateStatementFactory {
         // 3. 再通过单表 RenderContext 直接渲染 WHERE 与 WHERE 参数（排在 SET 之后）
         StringBuilder whereSql = new StringBuilder();
         if (where != null && !where.isEmpty()) {
-            RenderContext renderContext = RenderContext.forSingleTable(meta);
+            RenderContext renderContext = RenderContext.forSingleTable(meta, settings);
             where.render(renderContext, whereSql, params, ParameterSource.WHERE);
         }
 
         // 4. 生成 SQL
-        String sql = buildSql(meta.qualifiedTableName(), finalSetColumns, whereSql.toString());
+        String tableName = meta.qualifiedTableName(settings);
+        String sql = buildSql(tableName, finalSetColumns, whereSql.toString());
 
         // 5. 元数据
         Set<TableRef> tables = new LinkedHashSet<>();
-        tables.add(TableRef.of(meta.qualifiedTableName()));
+        tables.add(TableRef.of(tableName));
         StatementMetadata metadata = StatementMetadata.builder(Operation.UPDATE)
                 .tables(tables)
                 .entityType(meta.entityType())

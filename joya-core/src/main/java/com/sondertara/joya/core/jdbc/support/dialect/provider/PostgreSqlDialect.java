@@ -23,21 +23,12 @@ import java.util.Arrays;
 import java.util.List;
 
 /**
- * PostgreSQL 对象名有大小写敏感不敏感的问题
+ * PostgreSQL 的 SqlDialect 实现
  *
  * @author 赵永春 (zyc@hasor.net)
  * @version : 2020-10-31
  */
 public class PostgreSqlDialect extends AbstractDialect implements PageSqlDialect {
-    @Override
-    protected String keyWordsResource() {
-        return "META-INF/db-keywords/postgresql.keywords";
-    }
-
-    @Override
-    protected String defaultQualifier() {
-        return "\"";
-    }
 
     @Override
     public BoundSql pageSql(BoundSql boundSql, long start, long limit) {
@@ -54,24 +45,5 @@ public class PostgreSqlDialect extends AbstractDialect implements PageSqlDialect
         }
 
         return new BoundSql.BoundSqlObj(sqlBuilder.toString(), paramArrays.toArray());
-    }
-
-    @Override
-    public String randomQuery(boolean useQualifier, String catalog, String schema, String table, List<String> selectColumns, int recordSize) {
-        String tableName = this.tableName(useQualifier, catalog, schema, table);
-        StringBuilder select = new StringBuilder();
-
-        if (selectColumns == null || selectColumns.isEmpty()) {
-            select.append("*");
-        } else {
-            for (String col : selectColumns) {
-                if (select.length() > 0) {
-                    select.append(", ");
-                }
-                select.append(this.fmtName(useQualifier, col));
-            }
-        }
-
-        return "select " + select + " from " + tableName + " order by random() limit " + recordSize;
     }
 }

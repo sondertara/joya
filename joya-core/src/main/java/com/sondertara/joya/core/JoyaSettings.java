@@ -1,9 +1,5 @@
 package com.sondertara.joya.core;
 
-import com.sondertara.joya.core.constant.SchemaValidation;
-
-import java.util.Objects;
-
 /**
  * 实例级客户端配置（1 {@link JoyaClient} = 1 {@code JoyaSettings}），多数据源下各客户端互不干扰。
  *
@@ -12,15 +8,13 @@ import java.util.Objects;
  * @param maxJoinTable        联表最大表数限制（默认 10）
  * @param columnUppercase     列名大写开关
  * @param tableUppercase      表名大写开关
- * @param schemaValidation    Schema 校验策略（默认 {@link SchemaValidation#NONE}）
  */
 public record JoyaSettings(
         int queryTimeoutSeconds,
         int batchSize,
         int maxJoinTable,
         boolean columnUppercase,
-        boolean tableUppercase,
-        SchemaValidation schemaValidation
+        boolean tableUppercase
 ) {
 
     public static final int DEFAULT_BATCH_SIZE = 8000;
@@ -31,8 +25,7 @@ public record JoyaSettings(
             DEFAULT_BATCH_SIZE,
             DEFAULT_MAX_JOIN_TABLE,
             false,
-            false,
-            SchemaValidation.NONE
+            false
     );
 
     public JoyaSettings {
@@ -42,11 +35,10 @@ public record JoyaSettings(
         if (maxJoinTable <= 0) {
             maxJoinTable = DEFAULT_MAX_JOIN_TABLE;
         }
-        schemaValidation = Objects.requireNonNullElse(schemaValidation, SchemaValidation.NONE);
     }
 
     public JoyaSettings withQueryTimeoutSeconds(int queryTimeoutSeconds) {
-        return new JoyaSettings(queryTimeoutSeconds, batchSize, maxJoinTable, columnUppercase, tableUppercase, schemaValidation);
+        return new JoyaSettings(queryTimeoutSeconds, batchSize, maxJoinTable, columnUppercase, tableUppercase);
     }
 
     public static Builder builder() {
@@ -59,7 +51,6 @@ public record JoyaSettings(
         private int maxJoinTable = DEFAULT_MAX_JOIN_TABLE;
         private boolean columnUppercase = false;
         private boolean tableUppercase = false;
-        private SchemaValidation schemaValidation = SchemaValidation.NONE;
 
         private Builder() {
         }
@@ -89,19 +80,13 @@ public record JoyaSettings(
             return this;
         }
 
-        public Builder schemaValidation(SchemaValidation schemaValidation) {
-            this.schemaValidation = Objects.requireNonNullElse(schemaValidation, SchemaValidation.NONE);
-            return this;
-        }
-
         public JoyaSettings build() {
             return new JoyaSettings(
                     queryTimeoutSeconds,
                     batchSize,
                     maxJoinTable,
                     columnUppercase,
-                    tableUppercase,
-                    schemaValidation
+                    tableUppercase
             );
         }
     }

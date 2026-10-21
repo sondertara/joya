@@ -15,9 +15,7 @@
  */
 package com.sondertara.joya.core.jdbc.support.dialect.provider;
 
-
 import com.sondertara.joya.core.jdbc.support.dialect.BoundSql;
-import com.sondertara.joya.core.jdbc.support.dialect.InsertSqlDialect;
 import com.sondertara.joya.core.jdbc.support.dialect.PageSqlDialect;
 
 import java.util.ArrayList;
@@ -30,16 +28,7 @@ import java.util.List;
  * @author 赵永春 (zyc@hasor.net)
  * @version : 2020-10-31
  */
-public class OracleDialect extends AbstractDialect implements PageSqlDialect, InsertSqlDialect {
-    @Override
-    protected String keyWordsResource() {
-        return "META-INF/db-keywords/oracle.keywords";
-    }
-
-    @Override
-    protected String defaultQualifier() {
-        return "\"";
-    }
+public class OracleDialect extends AbstractDialect implements PageSqlDialect {
 
     @Override
     public BoundSql countSql(BoundSql boundSql) {
@@ -60,144 +49,5 @@ public class OracleDialect extends AbstractDialect implements PageSqlDialect, In
         paramArrays.add(start + limit);
         paramArrays.add(start);
         return new BoundSql.BoundSqlObj(sqlBuilder.toString(), paramArrays.toArray());
-    }
-
-    @Override
-    public boolean supportInsertInto(List<String> primaryKey, List<String> columns) {
-        return true;
-    }
-
-    @Override
-    public String insertWithInto(boolean useQualifier, String catalog, String schema, String table, List<String> primaryKey, List<String> columns) {
-        StringBuilder strBuilder = new StringBuilder();
-        strBuilder.append("INSERT INTO ");
-        strBuilder.append(tableName(useQualifier, catalog, schema, table));
-        strBuilder.append(" (");
-
-        StringBuilder argBuilder = new StringBuilder();
-        for (int i = 0; i < columns.size(); i++) {
-            if (i > 0) {
-                strBuilder.append(", ");
-                argBuilder.append(", ");
-            }
-            strBuilder.append(fmtName(useQualifier, columns.get(i)));
-            argBuilder.append("?");
-        }
-
-        strBuilder.append(") VALUES (");
-        strBuilder.append(argBuilder);
-        strBuilder.append(")");
-        return strBuilder.toString();
-    }
-
-    @Override
-    public boolean supportInsertIgnore(List<String> primaryKey, List<String> columns) {
-        return !primaryKey.isEmpty();
-    }
-
-    @Override
-    public String insertWithIgnore(boolean useQualifier, String catalog, String schema, String table, List<String> primaryKey, List<String> columns) {
-        StringBuilder mergeBuilder = new StringBuilder();
-
-        buildMergeInfoBasic(useQualifier, catalog, schema, table, primaryKey, columns, mergeBuilder);
-
-        buildMergeInfoWhenNotMatched(useQualifier, catalog, schema, table, columns, mergeBuilder);
-
-        return mergeBuilder.toString();
-    }
-
-    @Override
-    public boolean supportUpsert(List<String> primaryKey, List<String> columns) {
-        return !primaryKey.isEmpty();
-    }
-
-    @Override
-    public String insertWithUpsert(boolean useQualifier, String catalog, String schema, String table, List<String> primaryKey, List<String> columns) {
-        StringBuilder mergeBuilder = new StringBuilder();
-
-        buildMergeInfoBasic(useQualifier, catalog, schema, table, primaryKey, columns, mergeBuilder);
-
-        buildMergeInfoWhenMatched(useQualifier, catalog, schema, table, columns, mergeBuilder);
-        buildMergeInfoWhenNotMatched(useQualifier, catalog, schema, table, columns, mergeBuilder);
-
-        return mergeBuilder.toString();
-    }
-
-    private void buildMergeInfoBasic(boolean useQualifier, String catalog, String schema, String table, List<String> primaryKey, List<String> columns, StringBuilder mergeBuilder) {
-        mergeBuilder.append("MERGE INTO ");
-        mergeBuilder.append(tableName(useQualifier, catalog, schema, table));
-        mergeBuilder.append(" TMP USING (SELECT ");
-
-        for (int i = 0; i < columns.size(); i++) {
-            if (i > 0) {
-                mergeBuilder.append(", ");
-            }
-
-            mergeBuilder.append("? ");
-            mergeBuilder.append(fmtName(useQualifier, columns.get(i)));
-        }
-
-        mergeBuilder.append(" FROM dual ) SRC ON (");
-        for (int i = 0; i < primaryKey.size(); i++) {
-            if (i != 0) {
-                mergeBuilder.append(" AND ");
-            }
-            String pkColumn = fmtName(useQualifier, primaryKey.get(i));
-            mergeBuilder.append("TMP." + pkColumn + " = SRC." + pkColumn);
-        }
-        mergeBuilder.append(") ");
-    }
-
-    private void buildMergeInfoWhenNotMatched(boolean useQualifier, String catalog, String schema, String table, List<String> allColumns, StringBuilder mergeBuilder) {
-        mergeBuilder.append("WHEN NOT MATCHED THEN ");
-        mergeBuilder.append("INSERT (");
-
-        StringBuilder argBuilder = new StringBuilder();
-        for (int i = 0; i < allColumns.size(); i++) {
-            if (i > 0) {
-                mergeBuilder.append(", ");
-                argBuilder.append(", ");
-            }
-            mergeBuilder.append(fmtName(useQualifier, allColumns.get(i)));
-            argBuilder.append("SRC.").append(fmtName(useQualifier, allColumns.get(i)));
-        }
-
-        mergeBuilder.append(") VALUES( ");
-        mergeBuilder.append(argBuilder);
-        mergeBuilder.append(") ");
-    }
-
-    private void buildMergeInfoWhenMatched(boolean useQualifier, String catalog, String schema, String table, List<String> allColumns, StringBuilder mergeBuilder) {
-        mergeBuilder.append("WHEN MATCHED THEN ");
-        mergeBuilder.append("UPDATE SET ");
-        for (int i = 0; i < allColumns.size(); i++) {
-            String column = allColumns.get(i);
-            if (i != 0) {
-                mergeBuilder.append(", ");
-            }
-            mergeBuilder.append(fmtName(useQualifier, column));
-            mergeBuilder.append(" = SRC.");
-            mergeBuilder.append(fmtName(useQualifier, column));
-        }
-        mergeBuilder.append(" ");
-    }
-
-    @Override
-    public String randomQuery(boolean useQualifier, String catalog, String schema, String table, List<String> selectColumns, int recordSize) {
-        String tableName = this.tableName(useQualifier, catalog, schema, table);
-        StringBuilder select = new StringBuilder();
-
-        if (selectColumns == null || selectColumns.isEmpty()) {
-            select.append("*");
-        } else {
-            for (String col : selectColumns) {
-                if (select.length() > 0) {
-                    select.append(", ");
-                }
-                select.append(this.fmtName(useQualifier, col));
-            }
-        }
-
-        return "select " + select + " from (select " + select + " from " + tableName + " order by sys_guid()) where rownum <= " + recordSize;
     }
 }

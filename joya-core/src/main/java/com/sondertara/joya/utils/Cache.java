@@ -1,30 +1,36 @@
 package com.sondertara.joya.utils;
 
-import java.util.*;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
 /**
- * 简单本地缓存，带过期时间。
+ * 简单本地缓存，支持基于单调时钟（{@link System#nanoTime()}）的过期时间控制。
  *
  * @author huangxiaohu
  */
 public class Cache<K, V> {
 
-    private final long expireAfterWriteMillis;
+    private final long expireAfterWriteNanos;
     private final Map<K, Value<V>> cache = new ConcurrentHashMap<>();
 
     Cache(long expireAfterWriteMillis) {
-        this.expireAfterWriteMillis = expireAfterWriteMillis;
+        this.expireAfterWriteNanos = expireAfterWriteMillis > 0
+                ? TimeUnit.MILLISECONDS.toNanos(expireAfterWriteMillis)
+                : 0L;
     }
 
     public V get(K key) {
+        if (key == null) {
+            return null;
+        }
         Value<V> value = cache.get(key);
         if (value == null) {
             return null;
         }
-        if (expireAfterWriteMillis > 0 && System.currentTimeMillis() - value.timestamp > expireAfterWriteMillis) {
-            cache.remove(key);
+        if (expireAfterWriteNanos > 0 && System.nanoTime() - value.createdNanos > expireAfterWriteNanos) {
+            cache.remove(key, value);
             return null;
         }
         return value.value;
@@ -34,13 +40,17 @@ public class Cache<K, V> {
         V value = get(key);
         if (value == null) {
             value = loader.get();
-            put(key, value);
+            if (value != null) {
+                put(key, value);
+            }
         }
         return value;
     }
 
     public void put(K key, V value) {
-        cache.put(key, new Value<>(value));
+        if (key != null && value != null) {
+            cache.put(key, new Value<>(value));
+        }
     }
 
     public void clear() {
@@ -72,13 +82,13 @@ public class Cache<K, V> {
         }
     }
 
-    private static class Value<V> {
+    private static final class Value<V> {
         final V value;
-        final long timestamp;
+        final long createdNanos;
 
         Value(V value) {
             this.value = value;
-            this.timestamp = System.currentTimeMillis();
+            this.createdNanos = System.nanoTime();
         }
     }
 }

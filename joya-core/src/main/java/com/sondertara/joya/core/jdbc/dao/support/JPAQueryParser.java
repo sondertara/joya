@@ -1,10 +1,12 @@
 package com.sondertara.joya.core.jdbc.dao.support;
 
+import com.sondertara.joya.core.JoyaSettings;
 import com.sondertara.joya.core.cache.CacheHolder;
 import com.sondertara.joya.core.jdbc.dao.JoyaExecutorSupport;
+import com.sondertara.joya.core.jdbc.support.listener.EntityListener;
 import com.sondertara.joya.core.metadata.EntityMetadataContext;
+import com.sondertara.joya.core.metadata.EntitySnapshot;
 import com.sondertara.joya.core.metadata.MutationContext;
-import com.sondertara.joya.core.model.EntityTableMetaDefinition;
 import com.sondertara.joya.core.query.LinkType;
 import com.sondertara.joya.core.query.criterion.WhereCriterion;
 import com.sondertara.joya.core.statement.factory.DeleteStatementFactory;
@@ -22,6 +24,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -44,18 +47,26 @@ public class JPAQueryParser<T> extends AbstractQueryParser {
     private static final String DELETE_PATTERN = "delete|remove";
     private static final Pattern PREFIX_TEMPLATE = Pattern.compile(
             "^(" + QUERY_PATTERN + "|" + COUNT_PATTERN + "|" + UPDATE_PATTERN + "|" + EXISTS_PATTERN + "|" + DELETE_PATTERN + ")((\\p{Lu}.*?))??By");
+    private static final Pattern ORDER_BY_SPLIT_PATTERN = Pattern.compile("OrderBy(?=\\p{Lu})");
+    private static final Pattern ORDER_DIR_PATTERN = Pattern.compile("(Asc|Desc)(?=$|\\p{Lu})");
 
     private final @Nullable Object[] runtimeArgs;
+    private final JoyaSettings settings;
     private Subject subject;
     private Predicate predicate;
 
     public JPAQueryParser(Class<T> domainClass, Method method) {
-        this(domainClass, method, null);
+        this(domainClass, method, null, JoyaSettings.DEFAULT);
     }
 
     public JPAQueryParser(Class<T> domainClass, Method method, @Nullable Object[] runtimeArgs) {
+        this(domainClass, method, runtimeArgs, JoyaSettings.DEFAULT);
+    }
+
+    public JPAQueryParser(Class<T> domainClass, Method method, @Nullable Object[] runtimeArgs, @Nullable JoyaSettings settings) {
         super(domainClass, method);
         this.runtimeArgs = runtimeArgs;
+        this.settings = settings == null ? JoyaSettings.DEFAULT : settings;
     }
 
     @Override
@@ -63,19 +74,30 @@ public class JPAQueryParser<T> extends AbstractQueryParser {
         String methodName = statementMethod.getName();
         Matcher matcher = PREFIX_TEMPLATE.matcher(methodName);
 
+        String remainder;
         if (!matcher.find()) {
             this.subject = new Subject(Optional.empty());
-            this.predicate = new Predicate(methodName, domainClass);
+            remainder = methodName;
         } else {
             this.subject = new Subject(Optional.of(matcher.group(0)));
-            this.predicate = new Predicate(methodName.substring(matcher.group().length()), domainClass);
+            remainder = methodName.substring(matcher.group().length());
         }
+
+        String predicateSource = remainder;
+        String orderBySource = null;
+        Matcher orderMatcher = ORDER_BY_SPLIT_PATTERN.matcher(remainder);
+        if (orderMatcher.find()) {
+            predicateSource = remainder.substring(0, orderMatcher.start());
+            orderBySource = remainder.substring(orderMatcher.end());
+        }
+
+        this.predicate = new Predicate(predicateSource, domainClass);
 
         StringBuilder candidate = new StringBuilder();
         AtomicInteger loop = new AtomicInteger(0);
         List<PredicatePart> parts = new ArrayList<>();
 
-        List<OrPart> list = this.predicate.toList();
+        List<OrPart> list = this.predicate.nodes();
         for (int j = 0; j < list.size(); j++) {
             OrPart part = list.get(j);
             boolean needVisitNext = false;
@@ -121,8 +143,55 @@ public class JPAQueryParser<T> extends AbstractQueryParser {
             orGroups.add(currentAndGroup);
         }
 
+        EntityMetadataContext meta = CacheHolder.tableMetaCache().getMetadataContext(domainClass);
         List<JoyaExecutorSupport.ParameterBinding> bindings = new ArrayList<>();
         AtomicInteger argPosition = new AtomicInteger(0);
+        boolean cacheable = parts.stream().noneMatch(p ->
+                p.getMethodPredicateType() == MethodPredicateType.IN
+                        || p.getMethodPredicateType() == MethodPredicateType.NOT_IN);
+
+        List<String> updateSetColumns = new ArrayList<>();
+        Map<String, Object> updateSetValues = new LinkedHashMap<>();
+        boolean updateIgnoreNull = false;
+
+        if (subject.isUpdate()) {
+            String updateBody = subject.getUpdateBody();
+            boolean isIgnoreNullKeyword = "IgnoreNull".equals(updateBody) && resolveColumn(meta, "ignoreNull") == null;
+            boolean isEntityUpdateMode = updateBody.isEmpty() || isIgnoreNullKeyword;
+            if (isEntityUpdateMode) {
+                int entityPos = argPosition.incrementAndGet();
+                if (runtimeArgs == null || runtimeArgs.length < entityPos || runtimeArgs[entityPos - 1] == null) {
+                    throw new IllegalArgumentException(
+                            "Entity argument at position 0 must not be null for method: " + statementMethod.getName());
+                }
+                Object entityArg = runtimeArgs[entityPos - 1];
+                if (entityArg instanceof EntityListener listener) {
+                    listener.preUpdate(entityArg);
+                }
+                EntitySnapshot snapshot = EntitySnapshot.snapshot(meta, entityArg);
+                updateIgnoreNull = isIgnoreNullKeyword;
+                List<String> updatable = new ArrayList<>(meta.updatableColumns());
+                if (meta.primaryKey() != null) {
+                    updatable.remove(meta.primaryKey());
+                }
+                for (String col : updatable) {
+                    Object val = snapshot.value(col);
+                    if (updateIgnoreNull && val == null) {
+                        continue;
+                    }
+                    updateSetColumns.add(col);
+                    updateSetValues.put(col, val);
+                    bindings.add(JoyaExecutorSupport.ParameterBinding.constant(val));
+                }
+                cacheable = false;
+            } else {
+                updateSetColumns.addAll(parseUpdateSetColumns(meta, updateBody));
+                for (int i = 0; i < updateSetColumns.size(); i++) {
+                    int pos = argPosition.incrementAndGet();
+                    bindings.add(new JoyaExecutorSupport.ParameterBinding(pos));
+                }
+            }
+        }
 
         WhereCriterion whereCriterion;
         if (orGroups.size() <= 1) {
@@ -144,27 +213,123 @@ public class JPAQueryParser<T> extends AbstractQueryParser {
             }
         }
 
-        EntityMetadataContext meta = CacheHolder.tableMetaCache().getMetadataContext(domainClass);
         java.lang.reflect.Type returnType = statementMethod.getGenericReturnType();
 
         String sql;
         if (subject.isDelete()) {
-            MutationContext deleteCtx = new MutationContext(meta, Map.of(), whereCriterion, Set.of(), false, false);
+            MutationContext deleteCtx = new MutationContext(meta, Map.of(), whereCriterion, Set.of(), false, false, settings);
             sql = DeleteStatementFactory.create(deleteCtx).sql();
-        } else if (subject.update) {
-            Set<String> allColumns = new LinkedHashSet<>(meta.columnNames());
-            MutationContext updateCtx = new MutationContext(meta, Map.of(), whereCriterion, allColumns, false, false);
+        } else if (subject.isUpdate()) {
+            MutationContext updateCtx = new MutationContext(
+                    meta,
+                    updateSetValues,
+                    whereCriterion,
+                    new LinkedHashSet<>(updateSetColumns),
+                    updateIgnoreNull,
+                    false,
+                    settings);
             sql = UpdateStatementFactory.create(updateCtx).sql();
         } else if (subject.isCountProjection() || subject.isExistsProjection()) {
             Set<String> countColumns = new LinkedHashSet<>();
             countColumns.add("count(*)");
-            sql = SelectStatementFactory.create(meta, whereCriterion, countColumns).sql();
+            sql = SelectStatementFactory.create(meta, whereCriterion, countColumns, null, settings).sql();
         } else {
-            String extPart = subject.getMaxResults().map(limit -> "LIMIT " + limit).orElse(null);
-            sql = SelectStatementFactory.create(meta, whereCriterion, null, extPart).sql();
+            String orderByClause = parseOrderByClause(meta, orderBySource);
+            String limitClause = subject.getMaxResults().map(limit -> "LIMIT " + limit).orElse(null);
+            String extPart = joinClauses(orderByClause, limitClause);
+            sql = SelectStatementFactory.create(meta, whereCriterion, null, extPart, settings).sql();
+            if (subject.isDistinct() && sql.regionMatches(true, 0, "SELECT ", 0, 7)) {
+                sql = "SELECT DISTINCT " + sql.substring(7);
+            }
         }
 
-        return new DefaultEntityBasedBoundSql(returnType, sql, bindings);
+        return new DefaultEntityBasedBoundSql(returnType, sql, bindings, cacheable);
+    }
+
+    private List<String> parseUpdateSetColumns(EntityMetadataContext meta, String updateSubjectBody) {
+        String[] tokens = Pattern.compile(String.format(KEYWORD_TEMPLATE, "And")).split(updateSubjectBody);
+        List<String> columns = new ArrayList<>();
+        StringBuilder candidate = new StringBuilder();
+        for (String token : tokens) {
+            if (!Strings.hasText(token)) {
+                continue;
+            }
+            if (candidate.isEmpty()) {
+                candidate.append(Introspector.decapitalize(token));
+            } else {
+                candidate.append("And").append(token);
+            }
+            String col = resolveColumn(meta, candidate.toString());
+            if (col != null) {
+                columns.add(col);
+                candidate.setLength(0);
+            }
+        }
+        if (!candidate.isEmpty()) {
+            throw new IllegalSqlException(
+                    "No property name found in update subject({}) for the method({}), please check it",
+                    candidate, statementMethod.getName());
+        }
+        return columns;
+    }
+
+    private @Nullable String parseOrderByClause(EntityMetadataContext meta, @Nullable String orderBySource) {
+        if (orderBySource == null || orderBySource.isBlank()) {
+            return null;
+        }
+        Matcher matcher = ORDER_DIR_PATTERN.matcher(orderBySource);
+        List<String> orderItems = new ArrayList<>();
+        int start = 0;
+        while (matcher.find()) {
+            String rawProp = orderBySource.substring(start, matcher.start());
+            if (rawProp.startsWith("And") && rawProp.length() > 3 && Character.isUpperCase(rawProp.charAt(3))
+                    && resolveColumn(meta, Introspector.decapitalize(rawProp)) == null) {
+                rawProp = rawProp.substring(3);
+            }
+            String col = resolveColumn(meta, Introspector.decapitalize(rawProp));
+            if (col == null) {
+                continue;
+            }
+            String dir = matcher.group(1).equalsIgnoreCase("Desc") ? "DESC" : "ASC";
+            orderItems.add(meta.formatColumn(col, settings) + " " + dir);
+            start = matcher.end();
+        }
+        if (start < orderBySource.length()) {
+            String remaining = orderBySource.substring(start);
+            if (remaining.startsWith("And") && remaining.length() > 3 && Character.isUpperCase(remaining.charAt(3))
+                    && resolveColumn(meta, Introspector.decapitalize(remaining)) == null) {
+                remaining = remaining.substring(3);
+            }
+            String col = resolveColumn(meta, Introspector.decapitalize(remaining));
+            if (col == null) {
+                throw new IllegalSqlException(
+                        "No property name found in OrderBy clause({}) for the method({}), please check it",
+                        remaining, statementMethod.getName());
+            }
+            orderItems.add(meta.formatColumn(col, settings) + " ASC");
+        }
+        return orderItems.isEmpty() ? null : "ORDER BY " + String.join(", ", orderItems);
+    }
+
+    private static @Nullable String joinClauses(@Nullable String first, @Nullable String second) {
+        if (first == null || first.isBlank()) {
+            return second;
+        }
+        if (second == null || second.isBlank()) {
+            return first;
+        }
+        return first + " " + second;
+    }
+
+    private static @Nullable String resolveColumn(EntityMetadataContext meta, String fieldOrColumn) {
+        String col = meta.columnByField(fieldOrColumn);
+        if (col != null) {
+            return col;
+        }
+        if (meta.containsColumn(fieldOrColumn)) {
+            return fieldOrColumn;
+        }
+        return null;
     }
 
     private void applyPredicatePart(WhereCriterion target,
@@ -302,13 +467,8 @@ public class JPAQueryParser<T> extends AbstractQueryParser {
         } else {
             prefix.append(propertyPath.getName());
         }
-        EntityTableMetaDefinition metaDefinition = CacheHolder.tableMetaCache().findByEntityClass(this.domainClass)
-                .orElseThrow(() -> new IllegalStateException("The class is not table entity:" + domainClass));
-        // find field
-        String propertyName = metaDefinition.findColumnNameByField(decapitalize);
-        if (null == propertyName && metaDefinition.containColumn(decapitalize)) {
-            propertyName = decapitalize;
-        }
+        EntityMetadataContext meta = CacheHolder.tableMetaCache().getMetadataContext(this.domainClass);
+        String propertyName = resolveColumn(meta, decapitalize);
         if (null != propertyName) {
             return buildPredicatePart(predicatePart, propertyName);
         }
@@ -316,10 +476,7 @@ public class JPAQueryParser<T> extends AbstractQueryParser {
         // not found, then append type string
         if (null != predicatePart.getSourceSuffix()) {
             String candidateField = prefix + predicatePart.getSourceSuffix();
-            propertyName = metaDefinition.findColumnNameByField(candidateField);
-            if (null == propertyName && metaDefinition.containColumn(candidateField)) {
-                propertyName = candidateField;
-            }
+            propertyName = resolveColumn(meta, candidateField);
             if (null != propertyName) {
                 return buildPredicatePart(predicatePart, propertyName);
             }
@@ -362,58 +519,57 @@ public class JPAQueryParser<T> extends AbstractQueryParser {
         private final boolean exists;
         private final boolean delete;
         private final boolean update;
+        private final String updateBody;
         private final Optional<Integer> maxResults;
 
         public Subject(Optional<String> subject) {
-
             this.distinct = subject.map(it -> it.contains(DISTINCT)).orElse(false);
             this.count = matches(subject, COUNT_BY_TEMPLATE);
             this.exists = matches(subject, EXISTS_BY_TEMPLATE);
             this.delete = matches(subject, DELETE_BY_TEMPLATE);
             this.maxResults = returnMaxResultsIfFirstKSubjectOrNull(subject);
             this.update = matches(subject, UPDATE_BY_TEMPLATE);
+            this.updateBody = extractUpdateBody(subject);
         }
 
-        /**
-         * @param subject
-         * @return
-         * @since 1.9
-         */
+        private String extractUpdateBody(Optional<String> subject) {
+            if (subject.isEmpty()) {
+                return "";
+            }
+            Matcher m = UPDATE_BY_TEMPLATE.matcher(subject.get());
+            if (!m.find()) {
+                return "";
+            }
+            String grp = m.group(2);
+            return grp == null ? "" : grp;
+        }
+
         private Optional<Integer> returnMaxResultsIfFirstKSubjectOrNull(Optional<String> subject) {
-
             return subject.map(it -> {
-
                 Matcher grp = LIMITED_QUERY_TEMPLATE.matcher(it);
-
                 if (!grp.find()) {
                     return null;
                 }
-
                 return Strings.hasText(grp.group(4)) ? Integer.valueOf(grp.group(4)) : 1;
             });
-
         }
 
-        /**
-         * Returns {@literal true} if {@link Subject} matches {@link #DELETE_BY_TEMPLATE}.
-         *
-         * @return
-         * @since 1.8
-         */
         public boolean isDelete() {
             return delete;
+        }
+
+        public boolean isUpdate() {
+            return update;
+        }
+
+        public String getUpdateBody() {
+            return updateBody;
         }
 
         public boolean isCountProjection() {
             return count;
         }
 
-        /**
-         * Returns {@literal true} if {@link Subject} matches {@link #EXISTS_BY_TEMPLATE}.
-         *
-         * @return
-         * @since 1.13
-         */
         public boolean isExistsProjection() {
             return exists;
         }
@@ -431,21 +587,26 @@ public class JPAQueryParser<T> extends AbstractQueryParser {
         }
     }
 
-    private static class Predicate implements Streamable<OrPart> {
+    private static class Predicate implements Iterable<OrPart> {
 
-        private final String pathToUse;
-        private final Class<?> domainClass;
         private final List<OrPart> nodes;
 
         private Predicate(String pathToUse, Class<?> domainClass) {
-            this.pathToUse = pathToUse;
-            this.domainClass = domainClass;
-            Pattern orPattern = Pattern.compile(String.format(KEYWORD_TEMPLATE, "Or"));
-            String[] ors = orPattern.split(pathToUse);
-
-            this.nodes = Arrays.stream(ors).map(part -> new OrPart(part, domainClass)).collect(Collectors.toList());
+            if (pathToUse == null || pathToUse.isBlank()) {
+                this.nodes = List.of();
+            } else {
+                Pattern orPattern = Pattern.compile(String.format(KEYWORD_TEMPLATE, "Or"));
+                String[] ors = orPattern.split(pathToUse);
+                this.nodes = Arrays.stream(ors)
+                        .filter(Strings::hasText)
+                        .map(part -> new OrPart(part, domainClass))
+                        .collect(Collectors.toList());
+            }
         }
 
+        public List<OrPart> nodes() {
+            return nodes;
+        }
 
         @NonNull
         @Override

@@ -39,4 +39,9 @@ public interface DataOps {
      */
     @SuppressWarnings("rawtypes")
     <M extends JoyaMapper> M mapper(Class<M> mapperType);
+
+    /** 获取当前数据操作上下文的客户端配置（默认返回 {@link JoyaSettings#DEFAULT}）。 */
+    default JoyaSettings settings() {
+        return JoyaSettings.DEFAULT;
+    }
 }

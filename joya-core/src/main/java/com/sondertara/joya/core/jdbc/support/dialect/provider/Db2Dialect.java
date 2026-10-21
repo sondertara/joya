@@ -26,10 +26,6 @@ import com.sondertara.joya.core.jdbc.support.dialect.PageSqlDialect;
  * @version : 2020-10-31
  */
 public class Db2Dialect extends AbstractDialect implements PageSqlDialect {
-    @Override
-    protected String defaultQualifier() {
-        return "\"";
-    }
 
     @Override
     public BoundSql pageSql(BoundSql boundSql, long start, long limit) {

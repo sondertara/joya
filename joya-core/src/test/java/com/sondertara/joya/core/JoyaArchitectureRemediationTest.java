@@ -1,7 +1,9 @@
 package com.sondertara.joya.core;
 
 import com.sondertara.joya.core.jdbc.dao.JoyaMapper;
+import com.sondertara.joya.core.jdbc.resultset.mapper.BeanRowMapper;
 import com.sondertara.joya.core.jdbc.support.annotation.Query;
+import com.sondertara.joya.core.jdbc.support.listener.EntityListener;
 import com.sondertara.joya.core.kernel.interceptor.Chain;
 import com.sondertara.joya.core.kernel.interceptor.RewriteContext;
 import com.sondertara.joya.core.kernel.interceptor.SqlInterceptor;
@@ -208,6 +210,18 @@ class JoyaArchitectureRemediationTest {
         boolean existsByUserName(String userName);
 
         List<Account> findFirst2ByDeptId(Long deptId);
+
+        List<Account> findByDeptIdOrderByAgeDesc(Long deptId);
+
+        List<Account> findByDeptIdOrderByAgeAscIdDesc(Long deptId);
+
+        List<Account> findAllByOrderByIdDesc();
+
+        int updateUserNameAndAgeById(String userName, Integer age, Long id);
+
+        int updateById(Account entity, Long id);
+
+        int updateIgnoreNullByUserName(Account patch, String userName);
 
         int deleteByUserName(String userName);
 
@@ -455,11 +469,26 @@ class JoyaArchitectureRemediationTest {
         List<Account> inResult = mapper.findByIdIn(List.of(1L, 3L));
         assertEquals(2, inResult.size());
 
-        // 6. 派生查询：countBy / existsBy / findFirst2By
+        // 6. 派生查询：countBy / existsBy / findFirst2By / OrderBy
         assertEquals(2L, mapper.countByDeptId(10L));
         assertTrue(mapper.existsByUserName("Bob"));
         assertFalse(mapper.existsByUserName("Nobody"));
         assertEquals(2, mapper.findFirst2ByDeptId(10L).size());
+
+        List<Account> orderedDesc = mapper.findByDeptIdOrderByAgeDesc(10L);
+        assertEquals(2, orderedDesc.size());
+        assertEquals("Alice", orderedDesc.get(0).getUserName()); // age 30
+        assertEquals("Bob", orderedDesc.get(1).getUserName());   // age 22
+
+        List<Account> orderedAsc = mapper.findByDeptIdOrderByAgeAscIdDesc(10L);
+        assertEquals(2, orderedAsc.size());
+        assertEquals("Bob", orderedAsc.get(0).getUserName());   // age 22
+        assertEquals("Alice", orderedAsc.get(1).getUserName()); // age 30
+
+        List<Account> allDesc = mapper.findAllByOrderByIdDesc();
+        assertEquals(3, allDesc.size());
+        assertEquals(3L, allDesc.get(0).getId());
+        assertEquals(1L, allDesc.get(2).getId());
 
         // 7. @Query 注解（乱序 ?2 ?1、Optional<BigDecimal> 标量、UPDATE 修改语句）
         List<Account> customQueryRows = mapper.findByOutOfOrderParams(25, 10L);
@@ -474,9 +503,116 @@ class JoyaArchitectureRemediationTest {
         assertEquals(1, updated);
         assertEquals(31, mapper.findById(1L).orElseThrow().getAge());
 
-        // 8. 派生删除：deleteByUserName
+        // 8. 派生更新（Mode A：按方法名声明 SET 列；Mode B：传实体全量/非空条件更新）
+        int modeAUpdated = mapper.updateUserNameAndAgeById("AliceRenamed", 35, 1L);
+        assertEquals(1, modeAUpdated);
+        Account aliceAfterModeA = mapper.findById(1L).orElseThrow();
+        assertEquals("AliceRenamed", aliceAfterModeA.getUserName());
+        assertEquals(35, aliceAfterModeA.getAge());
+
+        Account patchEntity = new Account();
+        patchEntity.setAge(29);
+        int modeBIgnoreNull = mapper.updateIgnoreNullByUserName(patchEntity, "Bob");
+        assertEquals(1, modeBIgnoreNull);
+        Account bobAfterPatch = mapper.findById(2L).orElseThrow();
+        assertEquals("Bob", bobAfterPatch.getUserName()); // 未被 null 覆盖
+        assertEquals(29, bobAfterPatch.getAge());
+
+        Account fullEntity = mapper.findById(1L).orElseThrow();
+        fullEntity.setUserName("Alice");
+        fullEntity.setAge(30);
+        int modeBFull = mapper.updateById(fullEntity, 1L);
+        assertEquals(1, modeBFull);
+        assertEquals("Alice", mapper.findById(1L).orElseThrow().getUserName());
+
+        // 9. 派生删除：deleteByUserName
         int deleted = mapper.deleteByUserName("Charlie");
         assertEquals(1, deleted);
         assertEquals(2L, mapper.count());
+    }
+
+    @Entity
+    @Table(name = "t_dept")
+    public static class AuditedDept extends Dept implements EntityListener {
+        private transient boolean persistCalled;
+        private transient boolean updateCalled;
+
+        public AuditedDept() {
+        }
+
+        public AuditedDept(Long id, String deptName) {
+            super(id, deptName);
+        }
+
+        @Override
+        public void prePersist(Object entity) {
+            this.persistCalled = true;
+            if (getDeptName() == null) {
+                setDeptName("DEFAULT_DEPT");
+            }
+        }
+
+        @Override
+        public void preUpdate(Object entity) {
+            this.updateCalled = true;
+        }
+    }
+
+    @Test
+    void saveAll_invokesPrePersistOnInsertedEntities_andPreUpdateOnExistingEntities_andBeanRowMapperIsCached() {
+        joya.sql("""
+                DROP TABLE IF EXISTS t_dept;
+                CREATE TABLE t_dept (
+                    id BIGINT PRIMARY KEY,
+                    dept_name VARCHAR(64)
+                );
+                """).update();
+
+        joya.of(AuditedDept.class).insert(new AuditedDept(1L, "Existing"));
+
+        AuditedDept existing = new AuditedDept(1L, "ExistingUpdated");
+        AuditedDept fresh = new AuditedDept(2L, null);
+        joya.of(AuditedDept.class).saveAll(List.of(existing, fresh));
+
+        assertTrue(existing.updateCalled, "已存在实体在 saveAll 中应触发 preUpdate");
+        assertFalse(existing.persistCalled);
+        assertTrue(fresh.persistCalled, "新增实体在 saveAll 中应触发 prePersist");
+        assertFalse(fresh.updateCalled);
+        assertEquals("DEFAULT_DEPT", joya.of(AuditedDept.class).findById(2L).orElseThrow().getDeptName());
+
+        // BeanRowMapper.of 使用 ClassValue 缓存同一实例
+        assertSame(BeanRowMapper.of(Account.class), BeanRowMapper.of(Account.class));
+    }
+
+    @Test
+    void joyaSettings_instanceLevelMaxJoinTable_andUppercaseFormattingWork() {
+        JdbcDataSource ds = new JdbcDataSource();
+        ds.setURL("jdbc:h2:mem:joya_remediation_test;DB_CLOSE_DELAY=-1");
+
+        JoyaSettings customSettings = JoyaSettings.builder()
+                .maxJoinTable(1)
+                .tableUppercase(true)
+                .columnUppercase(true)
+                .build();
+        JoyaClient customClient = JoyaClient.builder(ds).settings(customSettings).build();
+
+        // 1. 验证 tableUppercase 与 columnUppercase 在单表与多表 SQL 中生效
+        SqlStatement selectStmt = customClient.from(Account.class)
+                .where(w -> w.eq(Account::getUserName, "Alice"))
+                .select(Account::getId, Account::getUserName)
+                .toSqlStatement(Account.class);
+        assertEquals("SELECT t0.ID AS id, t0.USER_NAME AS userName FROM T_ACCOUNT t0 WHERE t0.USER_NAME = ?", selectStmt.sql());
+
+        SqlStatement updateStmt = customClient.of(Account.class).update()
+                .set(Account::getAge, 33)
+                .where(w -> w.eq(Account::getId, 1L))
+                .toSqlStatement();
+        assertEquals("UPDATE T_ACCOUNT SET AGE = ? WHERE ID = ?", updateStmt.sql());
+
+        // 2. 验证 maxJoinTable = 1 时，主表 + 1 张关联表（共 2 张表）超出上限立即抛异常
+        assertThrows(com.sondertara.joya.exceptions.DbException.class, () ->
+                customClient.from(Account.class)
+                        .join(Account::getDeptId, Dept::getId)
+                        .toSqlStatement());
     }
 }

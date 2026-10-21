@@ -78,7 +78,7 @@ final class Projections {
         if (columns.isEmpty()) {
             throw new IllegalStateException("No mappable property found on " + type.getName());
         }
-        return new Projection<>(columns, new BeanRowMapper<>(type));
+        return new Projection<>(columns, BeanRowMapper.of(type));
     }
 
     /** 实体全部列（按实体元数据映射）。 */
@@ -88,7 +88,7 @@ final class Projections {
         for (ColumnAlias column : allColumns) {
             columns.add(column.identity());
         }
-        return new Projection<>(columns, new BeanRowMapper<>(type));
+        return new Projection<>(columns, BeanRowMapper.of(type));
     }
 
     // ===== 写了 select =====
@@ -109,7 +109,7 @@ final class Projections {
             }
             columns.add(provider.resolveSql(ctx) + " AS " + label);
         }
-        return new Projection<>(columns, new BeanRowMapper<>(type));
+        return new Projection<>(columns, BeanRowMapper.of(type));
     }
 
     @SuppressWarnings("unchecked")

@@ -2,7 +2,6 @@ package com.sondertara.joya.core;
 
 import com.sondertara.common.convert.ConvertUtils;
 import com.sondertara.common.function.IGetter;
-import com.sondertara.common.reflect.ReflectUtils;
 import com.sondertara.joya.core.cache.CacheHolder;
 import com.sondertara.joya.core.jdbc.resultset.mapper.BeanRowMapper;
 import com.sondertara.joya.core.jdbc.support.listener.EntityListener;
@@ -16,7 +15,6 @@ import com.sondertara.joya.core.kernel.statement.TableRef;
 import com.sondertara.joya.core.metadata.EntityMetadataContext;
 import com.sondertara.joya.core.metadata.EntitySnapshot;
 import com.sondertara.joya.core.metadata.MutationContext;
-import com.sondertara.joya.core.model.EntityTableMetaDefinition;
 import com.sondertara.joya.core.query.criterion.WhereCriterion;
 import com.sondertara.joya.core.query.dsl.Query;
 import com.sondertara.joya.core.query.pagination.OrderParam;
@@ -174,9 +172,17 @@ public final class EntityOps<T> {
             Map<Object, T> keyed = new LinkedHashMap<>();
 
             for (T row : partition) {
-                Object pkVal = EntitySnapshot.snapshot(meta, row).value(pk);
+                Object pkVal = meta.readFieldValue(row, pk);
                 if (pkVal == null) {
-                    insertWithoutKey.add(row);
+                    if (row instanceof EntityListener listener) {
+                        listener.prePersist(row);
+                    }
+                    Object pkAfterHook = meta.readFieldValue(row, pk);
+                    if (pkAfterHook == null) {
+                        insertWithoutKey.add(row);
+                    } else {
+                        insertWithKey.add(row);
+                    }
                 } else {
                     keyed.put(pkVal, row);
                 }
@@ -187,6 +193,9 @@ public final class EntityOps<T> {
                     if (existing.contains(pkVal)) {
                         toUpdate.add(row);
                     } else {
+                        if (row instanceof EntityListener listener) {
+                            listener.prePersist(row);
+                        }
                         insertWithKey.add(row);
                     }
                 });
@@ -254,11 +263,12 @@ public final class EntityOps<T> {
      * 清空整张表（执行 {@code TRUNCATE TABLE}）。
      */
     public void truncate() {
+        String tableName = meta.qualifiedTableName(template.settings());
         StatementMetadata metadata = StatementMetadata.builder(Operation.DELETE)
-                .table(TableRef.of(meta.qualifiedTableName()))
+                .table(TableRef.of(tableName))
                 .entityType(entityType)
                 .build();
-        template.update(SqlStatement.of("TRUNCATE TABLE " + meta.qualifiedTableName(), List.of(), metadata, false));
+        template.update(SqlStatement.of("TRUNCATE TABLE " + tableName, List.of(), metadata, false));
     }
 
     // ===== 2. 链式变更构建器入口 =====
@@ -283,8 +293,8 @@ public final class EntityOps<T> {
     /** 按主键查询单条记录。 */
     public Optional<T> findById(Serializable id) {
         Objects.requireNonNull(id, "id must not be null");
-        SqlStatement stmt = SelectStatementFactory.byPrimaryKey(meta, id);
-        return Optional.ofNullable(template.query(stmt, new BeanRowMapper<>(entityType)));
+        SqlStatement stmt = SelectStatementFactory.byPrimaryKey(meta, id, template.settings());
+        return Optional.ofNullable(template.query(stmt, BeanRowMapper.of(entityType)));
     }
 
     /** 按主键集合批量查询记录（单条 {@code IN} 语句）。 */
@@ -336,7 +346,7 @@ public final class EntityOps<T> {
         } else {
             declaredColumns = new LinkedHashSet<>(meta.insertableColumns());
         }
-        MutationContext ctx = new MutationContext(meta, values, null, declaredColumns, ignoreNull, false);
+        MutationContext ctx = new MutationContext(meta, values, null, declaredColumns, ignoreNull, false, template.settings());
         SqlStatement stmt = InsertStatementFactory.create(ctx);
         Object generatedKey = template.insert(stmt);
         Object finalKey = generatedKey != null ? generatedKey : existingPkVal;
@@ -364,7 +374,7 @@ public final class EntityOps<T> {
         WhereCriterion where = WhereCriterion.create();
         where.eq(pk, pkValue);
         MutationContext ctx = new MutationContext(meta, values, where,
-                new LinkedHashSet<>(setColumns), ignoreNull, false);
+                new LinkedHashSet<>(setColumns), ignoreNull, false, template.settings());
         int affected = template.update(UpdateStatementFactory.create(ctx));
         return MutationResult.ofAffected(affected);
     }
@@ -372,7 +382,7 @@ public final class EntityOps<T> {
     private MutationResult doUpsert(T entity, boolean ignoreNull) {
         Objects.requireNonNull(entity, "entity must not be null");
         String pk = meta.primaryKey();
-        Object pkVal = pk == null ? null : EntitySnapshot.snapshot(meta, entity).value(pk);
+        Object pkVal = pk == null ? null : meta.readFieldValue(entity, pk);
         boolean exists = (pkVal instanceof Serializable s) && existsById(s);
         if (!exists) {
             return doInsert(entity, ignoreNull);
@@ -386,16 +396,12 @@ public final class EntityOps<T> {
         if (pkCol == null) {
             return;
         }
-        String pkField = meta.fieldByColumn(pkCol);
-        if (pkField == null) {
-            return;
-        }
         try {
             Class<?> pkType = meta.primaryKeyType();
             Object converted = (pkType != null && !pkType.isInstance(generatedKey))
                     ? ConvertUtils.convert(generatedKey, pkType)
                     : generatedKey;
-            ReflectUtils.setFieldValue(entity, pkField, converted);
+            meta.writeFieldValue(entity, pkCol, converted);
         } catch (Exception ignored) {
             // 若实体无对应可写字段或转换失败，保持静默，调用方仍可从 MutationResult 获取生成键
         }
@@ -413,7 +419,7 @@ public final class EntityOps<T> {
         String pk = requirePrimaryKey();
         WhereCriterion where = WhereCriterion.create();
         where.in(pk, keys);
-        SqlStatement stmt = SelectStatementFactory.create(meta, where, Set.of(pk), null);
+        SqlStatement stmt = SelectStatementFactory.create(meta, where, Set.of(pk), null, template.settings());
         Class<?> pkType = meta.primaryKeyType();
         List<Object> rows = template.queryList(stmt, rs -> {
             try {
@@ -433,13 +439,16 @@ public final class EntityOps<T> {
         if (rows == null || rows.isEmpty()) {
             return null;
         }
+        var settings = template.settings();
         List<String> columns = withKey ? new ArrayList<>(meta.columnNames()) : meta.insertableColumns();
+        List<String> formattedColumns = columns.stream().map(c -> meta.formatColumn(c, settings)).toList();
+        String tableName = meta.qualifiedTableName(settings);
         StatementMetadata metadata = StatementMetadata.builder(Operation.INSERT)
-                .table(TableRef.of(meta.qualifiedTableName()))
+                .table(TableRef.of(tableName))
                 .entityType(entityType)
                 .build();
         return new BatchSqlStatement(
-                buildInsertSql(meta.qualifiedTableName(), columns),
+                buildInsertSql(tableName, formattedColumns),
                 bindingsOf(columns),
                 rowsOf(rows, columns),
                 metadata);
@@ -449,6 +458,7 @@ public final class EntityOps<T> {
         if (rows == null || rows.isEmpty()) {
             return null;
         }
+        var settings = template.settings();
         String pk = requirePrimaryKey();
         List<String> setColumns = new ArrayList<>(meta.updatableColumns());
         setColumns.remove(pk);
@@ -457,14 +467,16 @@ public final class EntityOps<T> {
                 listener.preUpdate(row);
             }
         }
+        List<String> formattedSetColumns = setColumns.stream().map(c -> meta.formatColumn(c, settings)).toList();
         List<String> allColumns = new ArrayList<>(setColumns);
         allColumns.add(pk);
+        String tableName = meta.qualifiedTableName(settings);
         StatementMetadata metadata = StatementMetadata.builder(Operation.UPDATE)
-                .table(TableRef.of(meta.qualifiedTableName()))
+                .table(TableRef.of(tableName))
                 .entityType(entityType)
                 .build();
         return new BatchSqlStatement(
-                buildUpdateSql(meta.qualifiedTableName(), setColumns, pk),
+                buildUpdateSql(tableName, formattedSetColumns, meta.formatColumn(pk, settings)),
                 bindingsOf(allColumns),
                 rowsOf(rows, allColumns),
                 metadata);

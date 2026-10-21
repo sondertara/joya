@@ -24,11 +24,8 @@ import com.sondertara.joya.core.jdbc.support.dialect.PageSqlDialect;
  * @author 赵永春 (zyc@hasor.net)
  */
 public class HiveDialect extends AbstractDialect implements PageSqlDialect {
-    @Override
-    protected String defaultQualifier() {
-        return "\"";
-    }
 
+    @Override
     public BoundSql countSql(BoundSql boundSql) {
         throw new UnsupportedOperationException();
     }

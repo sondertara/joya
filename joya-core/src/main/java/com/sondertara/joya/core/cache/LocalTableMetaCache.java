@@ -1,14 +1,9 @@
 package com.sondertara.joya.core.cache;
 
-import com.sondertara.common.collection.LinkedCaseInsensitiveMap;
-import com.sondertara.common.collection.WeakConcurrentMap;
 import com.sondertara.joya.core.metadata.EntityMetadataContext;
 import com.sondertara.joya.core.metadata.PersistenceAnnotations;
-import com.sondertara.joya.core.model.EntityTableMetaDefinition;
 import com.sondertara.joya.exceptions.DbException;
 import com.sondertara.joya.utils.Strings;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
@@ -20,23 +15,25 @@ import java.util.Map;
 import java.util.Optional;
 
 /**
- * local cache for entity table metadata
+ * 实体表元数据本地缓存 —— 单轨直接产出不可变 {@link EntityMetadataContext}，
+ * 基于 JDK {@link ClassValue} 实现无锁高频访问与随 {@link ClassLoader} 自动回收。
  *
  * @author huangxiaohu
  */
 public class LocalTableMetaCache {
 
-    private static final Logger log = LoggerFactory.getLogger(LocalTableMetaCache.class);
+    private volatile ClassValue<EntityMetadataContext> contextCache = createCache();
 
-    private final Map<Class<?>, Optional<EntityTableMetaDefinition>> cache;
-    private final Map<Class<?>, EntityMetadataContext> contextCache;
-
-    public LocalTableMetaCache() {
-        this.cache = new WeakConcurrentMap<>();
-        this.contextCache = new WeakConcurrentMap<>();
+    private static ClassValue<EntityMetadataContext> createCache() {
+        return new ClassValue<>() {
+            @Override
+            protected EntityMetadataContext computeValue(Class<?> entityClass) {
+                return parseMetadataContext(entityClass);
+            }
+        };
     }
 
-    private Optional<EntityTableMetaDefinition> getDirect(Class<?> entityClass) {
+    private static EntityMetadataContext parseMetadataContext(Class<?> entityClass) {
         Optional<PersistenceAnnotations.TableMeta> tableOpt = PersistenceAnnotations.findTable(entityClass);
         String tableName = null;
         String schemaName = null;
@@ -59,9 +56,9 @@ public class LocalTableMetaCache {
         }
 
         tableName = tableName.toLowerCase(Locale.US);
-        EntityTableMetaDefinition entityTableMetaDefinition = new EntityTableMetaDefinition();
-        entityTableMetaDefinition.setTableName(tableName);
-        entityTableMetaDefinition.setSchemaName(schemaName);
+        EntityMetadataContext.Builder builder = new EntityMetadataContext.Builder(entityClass)
+                .tableName(tableName)
+                .schemaName(schemaName);
 
         // Scan superclass hierarchy from base class down to subclass so inherited @Id / fields are included
         List<Class<?>> hierarchy = new ArrayList<>();
@@ -72,57 +69,37 @@ public class LocalTableMetaCache {
         for (Class<?> clazz : hierarchy) {
             for (Field field : clazz.getDeclaredFields()) {
                 int modifiers = field.getModifiers();
-                if (Modifier.isStatic(modifiers) || Modifier.isTransient(modifiers)) {
+                if (Modifier.isStatic(modifiers) || Modifier.isTransient(modifiers) || field.isSynthetic()) {
                     continue;
                 }
                 fieldMap.put(field.getName(), field);
             }
         }
 
-        LinkedCaseInsensitiveMap<String> relation = new LinkedCaseInsensitiveMap<>();
-        LinkedCaseInsensitiveMap<Field> columns = new LinkedCaseInsensitiveMap<>();
-
         for (Map.Entry<String, Field> entry : fieldMap.entrySet()) {
             Field field = entry.getValue();
             if (PersistenceAnnotations.isTransientPresent(field)) {
                 continue;
             }
-            String name = field.getName();
-            name = Strings.toUnderlineCase(name);
-            Optional<String> colName = PersistenceAnnotations.findColumnName(field);
-            if (colName.isPresent()) {
-                name = colName.get();
-            }
-
-            name = name.toLowerCase(Locale.US);
+            String colName = PersistenceAnnotations.findColumnName(field)
+                    .orElseGet(() -> Strings.toUnderlineCase(field.getName()));
+            colName = colName.toLowerCase(Locale.US);
             if (PersistenceAnnotations.isIdPresent(field)) {
-                entityTableMetaDefinition.setPrimaryKey(name);
-                entityTableMetaDefinition.setPrimaryKeyType(field.getType());
+                builder.primaryKey(colName)
+                        .primaryKeyType(field.getType())
+                        .generatedColumn(colName);
             }
-            columns.put(name, field);
-            relation.put(name, field.getName());
+            builder.column(colName, field.getName(), field);
         }
 
-        entityTableMetaDefinition.setEntityClass(entityClass);
-        entityTableMetaDefinition.setColumns(columns);
-        entityTableMetaDefinition.setColumnFieldNameRelation(relation);
-        return Optional.of(entityTableMetaDefinition);
-    }
-
-    public Optional<EntityTableMetaDefinition> findByEntityClass(Class<?> entityClass) {
-        return cache.computeIfAbsent(entityClass, this::getDirect).map(EntityTableMetaDefinition::clone);
+        return builder.build();
     }
 
     public EntityMetadataContext getMetadataContext(Class<?> entityClass) {
-        return contextCache.computeIfAbsent(entityClass, cls -> {
-            Optional<EntityTableMetaDefinition> def = cache.computeIfAbsent(cls, this::getDirect);
-            return EntityMetadataContext.from(def.orElseThrow(() ->
-                    new IllegalArgumentException("No table metadata registered for entity: " + cls.getName())));
-        });
+        return contextCache.get(entityClass);
     }
 
     public void destroy() {
-        this.cache.clear();
-        this.contextCache.clear();
+        this.contextCache = createCache();
     }
 }

@@ -8,6 +8,7 @@ import com.sondertara.joya.core.kernel.interceptor.SqlInterceptor;
 import com.sondertara.joya.core.kernel.statement.SqlStatement;
 import com.sondertara.joya.core.kernel.statement.TableRef;
 import com.sondertara.joya.core.query.PageResult;
+import com.sondertara.joya.core.query.criterion.WhereCriterion;
 import com.sondertara.joya.core.query.dsl.Query;
 import com.sondertara.joya.core.query.pagination.FieldParam;
 import com.sondertara.joya.core.query.pagination.OrderParam;
@@ -575,14 +576,14 @@ class JoyaFluentApiAndTxIntegrationTest {
         assertEquals("Alice", orderOwners.get(0).getName());
         assertNull(orderOwners.get(0).getBalance());
 
-        // 4. 跨表 DTO 按位置构造映射 + 分页
+        // 4. 跨表 DTO 按位置构造映射 + 分页（配合 *IfPresent / *IfNotBlank / *IfNotEmpty 动态忽略空条件）
         PageResult<AccountOrderView> viewPage = joya.from(OrderRecord.class)
                 .leftJoin(OrderRecord::getAccountId, Account::getId)
                 .where(w -> w
                         .eq(Account::getName, "Alice")
-                        .eq(Account::getEmail, null)              // null 自动忽略
-                        .contains(OrderRecord::getItemName, "  ") // 空白字符串自动忽略
-                        .in(OrderRecord::getId, List.of())        // 空集合自动忽略
+                        .eqIfPresent(Account::getEmail, null)              // null 显式忽略
+                        .containsIfNotBlank(OrderRecord::getItemName, "  ") // 空白字符串显式忽略
+                        .inIfNotEmpty(OrderRecord::getId, List.of())        // 空集合显式忽略
                 )
                 .orderByDesc(OrderRecord::getAmount)
                 .select(OrderRecord::getId, OrderRecord::getAmount, Account::getName)
@@ -659,22 +660,29 @@ class JoyaFluentApiAndTxIntegrationTest {
     }
 
     @Test
-    void whereCriterion_neTwoGettersGeneratesNotEqualAndNullSkippingWorks() {
+    void whereCriterion_neTwoGetters_explicitIfPresentSkipping_andNullFailFast() {
         SqlStatement stmt = Query.of(Account.class)
                 .where(w -> w
                         .ne(Account::getName, Account::getEmail)
-                        .eq(Account::getName, null)
-                        .ne(Account::getEmail, null)
-                        .contains(Account::getName, "")
-                        .notContains(Account::getName, "   ")
-                        .in(Account::getId, null)
-                        .notIn(Account::getId, List.of())
+                        .eqIfPresent(Account::getName, null)
+                        .neIfPresent(Account::getEmail, null)
+                        .containsIfNotBlank(Account::getName, "")
+                        .notContainsIfNotBlank(Account::getName, "   ")
+                        .inIfNotEmpty(Account::getId, null)
+                        .notInIfNotEmpty(Account::getId, List.of())
+                        .when(false, sub -> sub.eq(Account::getId, 999L))
                 )
                 .select(Account::getId, Account::getName)
                 .toSqlStatement(Account.class);
 
         assertEquals("SELECT t0.id AS id, t0.name AS name FROM t_account t0 WHERE t0.name != t0.email", stmt.sql());
         assertTrue(stmt.parameters().isEmpty());
+
+        // 标准比较方法遇到 null 或空集合必须 fail-fast 抛 IllegalArgumentException，防止 UPDATE/DELETE 误吞条件导致全表事故
+        assertThrows(IllegalArgumentException.class, () -> WhereCriterion.create().eq(Account::getId, null));
+        assertThrows(IllegalArgumentException.class, () -> WhereCriterion.create().ne(Account::getEmail, (Object) null));
+        assertThrows(IllegalArgumentException.class, () -> WhereCriterion.create().in(Account::getId, List.of()));
+        assertThrows(IllegalArgumentException.class, () -> WhereCriterion.create().notIn(Account::getId, (List<Long>) null));
     }
 
     @Test

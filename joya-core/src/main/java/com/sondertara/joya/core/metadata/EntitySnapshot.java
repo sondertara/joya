@@ -1,9 +1,8 @@
 package com.sondertara.joya.core.metadata;
 
-import com.sondertara.common.reflect.ReflectUtils;
-
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -23,28 +22,25 @@ public final class EntitySnapshot {
         this.values = Collections.unmodifiableMap(new LinkedHashMap<>(values));
     }
 
-    /** 从实体实例创建快照，按元数据列顺序读取字段值。 */
+    /** 从实体实例创建快照，按元数据列顺序通过预缓存 {@link java.lang.reflect.Field} 直接读取字段值。 */
     public static EntitySnapshot snapshot(EntityMetadataContext metadata, Object entity) {
-        Map<String, Object> values = new LinkedHashMap<>();
-        for (String column : metadata.columnNames()) {
-            String fieldName = metadata.fieldByColumn(column);
-            if (fieldName != null) {
-                values.put(column, ReflectUtils.getFieldValue(entity, fieldName));
-            }
-        }
-        return new EntitySnapshot(metadata, values);
+        return new EntitySnapshot(metadata, readValues(metadata, entity));
     }
 
     /** 实体监听器修改后重新快照。 */
     public void refresh(Object entity) {
-        Map<String, Object> newValues = new LinkedHashMap<>();
-        for (String column : metadata.columnNames()) {
-            String fieldName = metadata.fieldByColumn(column);
-            if (fieldName != null) {
-                newValues.put(column, ReflectUtils.getFieldValue(entity, fieldName));
+        this.values = Collections.unmodifiableMap(readValues(metadata, entity));
+    }
+
+    private static Map<String, Object> readValues(EntityMetadataContext metadata, Object entity) {
+        List<String> columns = metadata.columnNames();
+        Map<String, Object> values = new LinkedHashMap<>(columns.size());
+        for (String column : columns) {
+            if (metadata.fieldByColumn(column) != null) {
+                values.put(column, metadata.readFieldValue(entity, column));
             }
         }
-        this.values = Collections.unmodifiableMap(new LinkedHashMap<>(newValues));
+        return values;
     }
 
     /** 获取快照值（不可变视图）。 */

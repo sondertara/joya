@@ -4,32 +4,56 @@ import com.sondertara.joya.core.jdbc.dao.JoyaExecutorSupport;
 
 import java.lang.reflect.Type;
 import java.util.List;
+import java.util.Locale;
 
 public class DefaultEntityBasedBoundSql implements EntityBasedBoundSql {
 
     private final Type returnType;
-
     private final String preparedSql;
-
     private final List<JoyaExecutorSupport.ParameterBinding> parameters;
+    private final boolean query;
+    private final boolean cacheable;
 
-    public DefaultEntityBasedBoundSql(Type returnType, String preparedSql, List<JoyaExecutorSupport.ParameterBinding> parameters) {
+    public DefaultEntityBasedBoundSql(
+            Type returnType,
+            String preparedSql,
+            List<JoyaExecutorSupport.ParameterBinding> parameters) {
+        this(returnType, preparedSql, parameters, true);
+    }
+
+    public DefaultEntityBasedBoundSql(
+            Type returnType,
+            String preparedSql,
+            List<JoyaExecutorSupport.ParameterBinding> parameters,
+            boolean cacheable) {
         this.returnType = returnType;
         this.preparedSql = preparedSql;
-        this.parameters = parameters;
+        this.parameters = parameters == null ? List.of() : List.copyOf(parameters);
+        this.query = detectIsQuery(preparedSql);
+        this.cacheable = cacheable;
+    }
+
+    private static boolean detectIsQuery(String sql) {
+        if (sql == null) {
+            return true;
+        }
+        String normalized = sql.trim().toLowerCase(Locale.ROOT);
+        return !(normalized.startsWith("update")
+                || normalized.startsWith("delete")
+                || normalized.startsWith("insert")
+                || normalized.startsWith("truncate")
+                || normalized.startsWith("drop")
+                || normalized.startsWith("alter")
+                || normalized.startsWith("create"));
     }
 
     @Override
     public boolean isQuery() {
-        String sql = this.preparedSql.toLowerCase().trim();
-        if (sql.startsWith("update") || sql.startsWith("delete") || sql.startsWith("insert")) {
-            return false;
-        }
+        return this.query;
+    }
 
-        if (sql.startsWith("truncate") || sql.startsWith("drop") || sql.startsWith("alter") || sql.startsWith("create")) {
-            return false;
-        }
-        return true;
+    public boolean isCacheable() {
+        return this.cacheable;
     }
 
     @Override
@@ -46,5 +70,4 @@ public class DefaultEntityBasedBoundSql implements EntityBasedBoundSql {
     public String getSqlString() {
         return this.preparedSql;
     }
-
 }

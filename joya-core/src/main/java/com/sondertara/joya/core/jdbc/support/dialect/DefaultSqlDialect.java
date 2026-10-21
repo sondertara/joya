@@ -15,48 +15,13 @@
  */
 package com.sondertara.joya.core.jdbc.support.dialect;
 
-import com.sondertara.joya.utils.Strings;
-
-import java.util.Collections;
-import java.util.List;
-import java.util.Set;
-
 /**
  * 默认 SqlDialect 实现
  * @version : 2020-10-31
  * @author 赵永春 (zyc@hasor.net)
  */
-public class DefaultSqlDialect implements ConditionSqlDialect, PageSqlDialect, InsertSqlDialect {
+public class DefaultSqlDialect implements PageSqlDialect {
     public static final DefaultSqlDialect DEFAULT = new DefaultSqlDialect();
-
-    @Override
-    public Set<String> keywords() {
-        return Collections.emptySet();
-    }
-
-    @Override
-    public String leftQualifier() {
-        return "";
-    }
-
-    @Override
-    public String rightQualifier() {
-        return "";
-    }
-
-    @Override
-    public String tableName(boolean useQualifier, String catalog, String schema, String table) {
-        if (Strings.isBlank(schema)) {
-            return table;
-        } else {
-            return schema + "." + table;
-        }
-    }
-
-    @Override
-    public String fmtName(boolean useQualifier, String name) {
-        return name;
-    }
 
     @Override
     public BoundSql countSql(BoundSql boundSql) {
@@ -67,54 +32,4 @@ public class DefaultSqlDialect implements ConditionSqlDialect, PageSqlDialect, I
     public BoundSql pageSql(BoundSql boundSql, long start, long limit) {
         throw new UnsupportedOperationException();
     }
-
-    @Override
-    public boolean supportInsertInto(List<String> primaryKey, List<String> columns) {
-        return true;
-    }
-
-    @Override
-    public String insertWithInto(boolean useQualifier, String catalog, String schema, String table, List<String> primaryKey, List<String> columns) {
-        StringBuilder strBuilder = new StringBuilder();
-        strBuilder.append("INSERT INTO ");
-        strBuilder.append(tableName(useQualifier, catalog, schema, table));
-        strBuilder.append(" ");
-        strBuilder.append("(");
-
-        StringBuilder argBuilder = new StringBuilder();
-        for (int i = 0; i < columns.size(); i++) {
-            if (i > 0) {
-                strBuilder.append(", ");
-                argBuilder.append(", ");
-            }
-            strBuilder.append(fmtName(useQualifier, columns.get(i)));
-            argBuilder.append("?");
-        }
-
-        strBuilder.append(") VALUES (");
-        strBuilder.append(argBuilder);
-        strBuilder.append(")");
-        return strBuilder.toString();
-    }
-
-    @Override
-    public boolean supportInsertIgnore(List<String> primaryKey, List<String> columns) {
-        return false;
-    }
-
-    @Override
-    public String insertWithIgnore(boolean useQualifier, String catalog, String schema, String table, List<String> primaryKey, List<String> columns) {
-        throw new UnsupportedOperationException();
-    }
-
-    @Override
-    public boolean supportUpsert(List<String> primaryKey, List<String> columns) {
-        return false;
-    }
-
-    @Override
-    public String insertWithUpsert(boolean useQualifier, String catalog, String schema, String table, List<String> primaryKey, List<String> columns) {
-        throw new UnsupportedOperationException();
-    }
-
 }

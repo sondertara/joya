@@ -188,13 +188,17 @@ public final class TypeUtils {
         return new Class<?>[0];
     }
 
-    /** 自底向上收集继承链上的类型变量绑定，处理链式继承（T → U → User）。 */
+    /** 自底向上收集继承链（含父类与多层父接口）上的类型变量绑定，处理链式继承（T → U → User）。 */
     private static void collectTypeVariables(Class<?> clazz, Map<TypeVariable<?>, Type> variableMap) {
+        if (clazz == null || clazz == Object.class) {
+            return;
+        }
         collectFromType(clazz.getGenericSuperclass(), clazz.getSuperclass(), variableMap);
         Type[] genericInterfaces = clazz.getGenericInterfaces();
         Class<?>[] interfaces = clazz.getInterfaces();
         for (int i = 0; i < genericInterfaces.length && i < interfaces.length; i++) {
             collectFromType(genericInterfaces[i], interfaces[i], variableMap);
+            collectTypeVariables(interfaces[i], variableMap);
         }
         Class<?> superClass = clazz.getSuperclass();
         if (superClass != null && superClass != Object.class) {
@@ -220,30 +224,31 @@ public final class TypeUtils {
         }
     }
 
-    /** 在 clazz 继承链上定位 genericIfc 对应的 Type（尽量为 ParameterizedType）。 */
+    /** 在 clazz 继承链（含父类与多层父接口）上定位 genericIfc 对应的 Type（尽量为 ParameterizedType）。 */
     private static Type findGenericType(Class<?> clazz, Class<?> genericIfc) {
-        Class<?> current = clazz;
-        while (current != null && current != Object.class) {
-            Type genericSuper = current.getGenericSuperclass();
-            if (genericSuper instanceof ParameterizedType) {
-                if (((ParameterizedType) genericSuper).getRawType() == genericIfc) {
-                    return genericSuper;
-                }
-            } else if (genericSuper == genericIfc) {
-                return genericSuper;
-            }
-            for (Type genericInterface : current.getGenericInterfaces()) {
-                if (genericInterface instanceof ParameterizedType) {
-                    if (((ParameterizedType) genericInterface).getRawType() == genericIfc) {
-                        return genericInterface;
-                    }
-                } else if (genericInterface == genericIfc) {
-                    return genericInterface;
-                }
-            }
-            current = current.getSuperclass();
+        if (clazz == null || clazz == Object.class) {
+            return null;
         }
-        return null;
+        Type genericSuper = clazz.getGenericSuperclass();
+        if (genericSuper instanceof ParameterizedType pt && pt.getRawType() == genericIfc) {
+            return genericSuper;
+        } else if (genericSuper == genericIfc) {
+            return genericSuper;
+        }
+        for (Type genericInterface : clazz.getGenericInterfaces()) {
+            if (genericInterface instanceof ParameterizedType pt && pt.getRawType() == genericIfc) {
+                return genericInterface;
+            } else if (genericInterface == genericIfc) {
+                return genericInterface;
+            }
+        }
+        for (Class<?> ifc : clazz.getInterfaces()) {
+            Type found = findGenericType(ifc, genericIfc);
+            if (found != null) {
+                return found;
+            }
+        }
+        return findGenericType(clazz.getSuperclass(), genericIfc);
     }
 
     /** 将 Type 解析为 Class，类型变量经 variableMap 替换；未绑定的变量取上界。 */

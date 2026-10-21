@@ -1,6 +1,5 @@
 package com.sondertara.joya.core;
 
-import com.sondertara.joya.core.constant.JoyaConfig;
 import com.sondertara.joya.core.jdbc.callback.ConnectionCallback;
 import com.sondertara.joya.core.jdbc.dao.JoyaMapper;
 import com.sondertara.joya.core.jdbc.support.DbType;
@@ -39,11 +38,6 @@ import java.util.concurrent.ConcurrentHashMap;
  * {@link com.sondertara.joya.core.tx.Tx}；{@code Tx} 同样实现 {@link DataOps}，事务内外书写风格完全一致。
  */
 public final class JoyaClient implements DataOps {
-
-    /** 全局配置访问入口（兼容保留；多数据源推荐使用 {@link #settings()}）。 */
-    public static JoyaConfig config() {
-        return JoyaConfig.instance();
-    }
 
     private final JoyaTemplate template;
     private final TxEngine txEngine;

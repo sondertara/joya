@@ -16,15 +16,11 @@
 
 package com.sondertara.joya.utils;
 
-import com.sondertara.joya.utils.Strings;
-import com.sondertara.joya.core.jdbc.callback.DatabaseMetaDataCallback;
 import com.sondertara.joya.core.jdbc.support.DbType;
-import com.sondertara.joya.exceptions.DbException;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.sql.DataSource;
 import java.lang.reflect.Field;
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
@@ -123,56 +119,6 @@ public abstract class JdbcUtils {
                 // We don't trust the JDBC driver: It might throw RuntimeException or Error.
                 logger.trace("Unexpected exception on closing JDBC ResultSet", ex);
             }
-        }
-    }
-
-
-    /**
-     * Extract database meta-data via the given DatabaseMetaDataCallback.
-     * <p>This method will open a connection to the database and retrieve its meta-data.
-     * Since this method is called before the exception translation feature is configured
-     * for a DataSource, this method can not rely on SQLException translation itself.
-     * <p>Any exceptions will be wrapped in a MetaDataAccessException. This is a checked
-     * exception and any calling code should catch and handle this exception. You can just
-     * log the error and hope for the best, but there is probably a more serious error that
-     * will reappear when you try to access the database again.
-     *
-     * @param dataSource the DataSource to extract meta-data for
-     * @param action     callback that will do the actual work
-     * @return object containing the extracted information, as returned by
-     * the DatabaseMetaDataCallback's {@code processMetaData} method
-     * @see DatabaseMetaData
-     */
-    public static <T> T extractDatabaseMetaData(DataSource dataSource, DatabaseMetaDataCallback<T> action) {
-
-        Connection con = null;
-        boolean isTransactional = false;
-        try {
-            con = dataSource.getConnection();
-            DatabaseMetaData metaData;
-            try {
-                metaData = con.getMetaData();
-            } catch (SQLException ex) {
-                logger.debug("Failed to obtain DatabaseMetaData from Connection - " +
-                        "retrying against fresh Connection", ex);
-                closeConnection(con);
-                con = dataSource.getConnection();
-                metaData = con.getMetaData();
-            }
-            if (metaData == null) {
-                // should only happen in test environments
-                throw new DbException("DatabaseMetaData returned by Connection [" + con + "] was null");
-            }
-            return action.processMetaData(metaData);
-        } catch (SQLException ex) {
-            throw new DbException("Error while extracting DatabaseMetaData", ex);
-        } catch (AbstractMethodError err) {
-            throw new DbException(
-                    "JDBC DatabaseMetaData method not implemented by JDBC driver - upgrade your driver", err);
-        } catch (Exception ex) {
-            throw new DbException("Could not get Connection for extracting meta-data", ex);
-        } finally {
-            closeConnection(con);
         }
     }
 

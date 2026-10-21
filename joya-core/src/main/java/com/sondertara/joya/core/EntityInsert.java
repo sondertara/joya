@@ -80,7 +80,7 @@ public final class EntityInsert<T> {
             throw new IllegalStateException("Insert values must not be empty");
         }
         Set<String> declared = new LinkedHashSet<>(values.keySet());
-        MutationContext ctx = new MutationContext(meta, values, null, declared, ignoreNull, false);
+        MutationContext ctx = new MutationContext(meta, values, null, declared, ignoreNull, false, template.settings());
         return InsertStatementFactory.create(ctx);
     }
 

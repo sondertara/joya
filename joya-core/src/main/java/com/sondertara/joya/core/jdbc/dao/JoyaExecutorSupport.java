@@ -35,6 +35,7 @@ public class JoyaExecutorSupport {
 
     private final DataOps joyaClient;
     private final Class<?> entityClass;
+    private final java.util.Map<Method, EntityBasedBoundSql> boundSqlCache = new java.util.concurrent.ConcurrentHashMap<>();
 
     public JoyaExecutorSupport(DataOps joyaClient, Class<?> entityClass) {
         this.joyaClient = joyaClient;
@@ -44,17 +45,11 @@ public class JoyaExecutorSupport {
     @SuppressWarnings({"unchecked", "rawtypes"})
     public Object execute(final Method method, Object[] args) {
         Object[] actualArgs = args == null ? new Object[0] : args;
-        EntityBasedBoundSql boundSql;
-        Query annotation = method.getAnnotation(Query.class);
-        if (annotation != null) {
-            boundSql = new NativeQueryParser(entityClass, method).parse();
-        } else {
-            boundSql = new JPAQueryParser<>(entityClass, method, actualArgs).parse();
-        }
+        EntityBasedBoundSql boundSql = resolveBoundSql(method, actualArgs);
         String sqlString = boundSql.getSqlString();
         Type returnType = boundSql.returnType();
         Class<?> aClass = TypeUtils.getClass(returnType);
-        List<Object> list = new ArrayList<>();
+        List<Object> list = new ArrayList<>(boundSql.parameterBinding().size());
         for (ParameterBinding binding : boundSql.parameterBinding()) {
             if (binding instanceof ConstantParameterBinding constantBinding) {
                 list.add(constantBinding.getValue());
@@ -68,8 +63,6 @@ public class JoyaExecutorSupport {
             Object prepared = binding.prepare(actualArgs[position - 1]);
             list.add(prepared);
         }
-
-        sqlString = sqlString.replaceAll(POSITIONAL_OR_INDEXED_PARAMETER, "?");
 
         boolean query = boundSql.isQuery();
         Object[] parameters = list.toArray();
@@ -131,6 +124,36 @@ public class JoyaExecutorSupport {
         return sqlOps.one(aClass).orElse(null);
     }
 
+    private EntityBasedBoundSql resolveBoundSql(Method method, Object[] actualArgs) {
+        EntityBasedBoundSql cached = boundSqlCache.get(method);
+        if (cached != null) {
+            return cached;
+        }
+        EntityBasedBoundSql parsed = parseAndNormalize(method, actualArgs);
+        if (!(parsed instanceof com.sondertara.joya.core.jdbc.dao.support.DefaultEntityBasedBoundSql def) || def.isCacheable()) {
+            boundSqlCache.putIfAbsent(method, parsed);
+        }
+        return parsed;
+    }
+
+    private EntityBasedBoundSql parseAndNormalize(Method method, Object[] actualArgs) {
+        EntityBasedBoundSql raw;
+        if (method.isAnnotationPresent(Query.class)) {
+            raw = new NativeQueryParser(entityClass, method).parse();
+        } else {
+            raw = new JPAQueryParser<>(entityClass, method, actualArgs, joyaClient.settings()).parse();
+        }
+        String normalizedSql = raw.getSqlString().replaceAll(POSITIONAL_OR_INDEXED_PARAMETER, "?");
+        boolean cacheable = !(raw instanceof com.sondertara.joya.core.jdbc.dao.support.DefaultEntityBasedBoundSql def)
+                || def.isCacheable();
+        return new com.sondertara.joya.core.jdbc.dao.support.DefaultEntityBasedBoundSql(
+                raw.returnType(),
+                normalizedSql,
+                raw.parameterBinding(),
+                cacheable
+        );
+    }
+
     private SqlOps createSqlOps(String sql, Object[] parameters, boolean query) {
         try {
             EntityMetadataContext meta = CacheHolder.tableMetaCache().getMetadataContext(entityClass);
@@ -138,7 +161,7 @@ public class JoyaExecutorSupport {
                     ? Operation.SELECT
                     : (sql.trim().toLowerCase().startsWith("delete") ? Operation.DELETE : Operation.UPDATE);
             StatementMetadata metadata = StatementMetadata.builder(op)
-                    .table(TableRef.of(meta.qualifiedTableName()))
+                    .table(TableRef.of(meta.qualifiedTableName(joyaClient.settings())))
                     .entityType(entityClass)
                     .build();
             SqlStatement stmt = (query ? SqlStatement.select(sql, parameters) : SqlStatement.update(sql, parameters))

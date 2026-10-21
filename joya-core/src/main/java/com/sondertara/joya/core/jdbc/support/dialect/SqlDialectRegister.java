@@ -62,7 +62,6 @@ public class SqlDialectRegister {
         registerDialectAlias(DbType.hive.name(), HiveDialect.class);
         registerDialectAlias(DbType.informix.name(), InformixDialect.class);
         registerDialectAlias(DbType.hsql.name(), HSQLDialect.class);
-//        registerDialectAlias(DbType.i.name(), ImpalaDialect.class);
         registerDialectAlias(DbType.kingbase.name(), KingbaseDialect.class);
         registerDialectAlias(DbType.mariadb.name(), MariaDBDialect.class);
         registerDialectAlias(DbType.mysql.name(), MySqlDialect.class);
@@ -124,7 +123,7 @@ public class SqlDialectRegister {
         }
         if (aClass != null) {
             try {
-                dialect = (SqlDialect) aClass.newInstance();
+                dialect = (SqlDialect) aClass.getDeclaredConstructor().newInstance();
             } catch (Exception e) {
                 throw new IllegalStateException("load dialect '" + aClass.getName() + "' failed, " + e.getMessage(), e);
             }
