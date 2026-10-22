@@ -7,7 +7,7 @@
 ## 🍹 项目特性
 
 - **单一查询入口，9 种形态全覆盖**：从 `joya.from(Entity.class)` 出发，一脉相承覆盖完整实体、部分列装回实体、单列直取、跨表构造映射（`Record::new`）、分组聚合、宽 DTO 自动推列与分页
-- **零字符串别名，编译期类型校验**：多表联查与聚合通过定长泛型 `Select1..8` + `Record::new` 按位置构造映射，内置 `RecordOrderVerifier` 防止同类型字段顺序颠倒
+- **零字符串别名，编译期列数/类型匹配 + 渲染期表归属校验**：多表联查与聚合通过定长泛型 `Select1..8` + `Record::new` 按位置构造映射，内置 `RecordOrderVerifier` 防止同类型字段顺序颠倒；列所属表是否已在 `FROM / JOIN` 中注册，由渲染期统一校验并给出可用表清单
 - **旁路集成，零侵入共存**：在 Spring Boot 3 中直接复用原生 `spring.datasource` 与 `@Transactional` 事务连接（支持与 JPA / MyBatis 共享同一事务连接），扩展数据源通过 `joya.datasources` 数组独立配置，不污染全局 `DataSource` Bean
 - **免扫描跨库 `JoyaMapper`**：通过 `joya.mapper(UserMapper.class)` 即拿即用 JPA 方法名派生查询与 `@Query` 原生 SQL，同一个实体与 Mapper 接口可在任意多个数据源上无缝复用
 - **显式值事务（`Tx`）**：事务是可传递的一等公民值（`1 Tx = 1 Connection`），支持嵌套于 Spring `@Transactional` 内执行 `savepoint` 局部回滚与 `afterCommit` 钩子
@@ -161,7 +161,7 @@ List<String> names = joya.from(User.class)
     .select(User::getName)
     .list();
 
-// 6. 跨表 DTO / Record：按位置构造映射 + 分页（零字符串别名，编译期校验类型与列数）
+// 6. 跨表 DTO / Record：按位置构造映射 + 分页（零字符串别名；编译期校验类型与列数，渲染期校验表归属）
 public record OrderUserVO(Long orderId, BigDecimal amount, String userName) {}
 
 PageResult<OrderUserVO> page = joya.from(Order.class)

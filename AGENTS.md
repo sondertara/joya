@@ -18,19 +18,30 @@ joya-parent                             父 POM，聚合以下模块
 
 ## joya-core 分层与包结构
 
-所有核心代码位于 `com.sondertara.joya.core`，遵循严格的四层单向依赖架构：
-**API 门面层 (`core/`) → 语句渲染层 (`statement/` + `query/`) → 执行内核层 (`kernel/` + `jdbc/`) ← 显式事务层 (`tx/`)**
+所有核心代码位于 `com.sondertara.joya.core`，遵循单向依赖架构：
+**API 门面层 (`core/`) → 语句渲染层 (`query/` + `statement/` + `metadata/`) → 执行内核层 (`kernel/`) → 基础层 (`naming/` + `utils/` + `exceptions/`)**，
+`jdbc/` 位于内核之上（提供行映射与 Mapper 适配），`tx/` 与门面并列（1 Tx = 1 Connection）。
+
+依赖方向由 `ArchitectureGuardTest` 以**白名单**强制：
+`kernel/**` 只允许依赖 `kernel/`、`naming/`、`utils/`、`exceptions/`；
+`naming/**` 与 `model/**` 不得依赖任何其他项目包。
 
 ```
 core/
 ├── DataOps.java                        统一数据操作契约：from(Class<T>) / of(Class<T>) / sql(...) / mapper(Class<M>)
 ├── JoyaClient.java                     单数据源客户端门面（1 JoyaClient = 1 DataSource），暴露 from / of / sql / mapper / tx / txCall / script / withConnection
-├── JoyaSettings.java                   实例级客户端配置（queryTimeoutSeconds / batchSize / maxJoinTable / columnUppercase / tableUppercase / schemaValidation）
+├── JoyaSettings.java                   实例级客户端配置（queryTimeoutSeconds / batchSize / maxJoinTable / columnUppercase / tableUppercase）
 ├── EntityOps.java                      实体域门面：命令式写（insert/update/patch/save/delete）+ 列级变更构建器（insert/update/delete）+ 按主键快捷读
 ├── EntityInsert.java                   实体流式插入构建器（value / values / ignoreNulls → execute）
 ├── EntityUpdate.java                   实体流式条件更新构建器（set / where / allowAll → execute）
 ├── EntityDelete.java                   实体流式条件删除构建器（where / allowAll → execute）
 ├── SqlOps.java                         参数化原生 SQL 流式门面（list / listMap / one / first / value / count / page / stream / update / insert / batch）
+├── BatchPlanner.java                   批量写规划（insertAll / updateAll / patchAll 的分组与分片，只写不读不删）
+├── EntityFinder.java                   实体读取（findById / findByIds / findAll / existsById / count）
+├── EntityDeleter.java                  实体删除（deleteById / deleteByIds / delete / deleteAll / truncate）
+├── UpsertPlanner.java                  先查后写策略（save / saveAll）
+├── GeneratedKeyWriter.java             自增主键回写
+├── Partitions.java                     集合分片与 IN 子句上限（写/删/查共用一份）
 │
 ├── query/                              三段式类型安全查询 DSL 与延迟绑定渲染引擎
 │   ├── ColumnMetaProvider.java         惰性列元数据提供器（API 期不翻译别名，按无捕获 Getter Class 二级缓存）
@@ -53,45 +64,51 @@ core/
 │   ├── TxStarter.java                  不可变事务配置与启动器：isolation / readOnly / timeout / retryOnDeadlock → run / call / begin
 │   ├── TxConnection.java               单库物理连接状态机（实现 ConnectionProvider，管理保存点栈 Deque<Savepoint>、deadline 超时与现场还原）
 │   ├── TxOptions.java                  不可变事务选项
+│   ├── TxEngine.java                   事务引擎扩展点 SPI（JdbcTxEngine / SpringTxEngine 实现）
 │   ├── Isolation.java                  事务隔离级别枚举
 │   └── TxOutcome.java                  事务终态枚举（COMMITTED / ROLLED_BACK）
 │
-├── kernel/                             无状态执行内核（零业务/实体依赖）
+├── kernel/                             执行内核（只依赖 kernel / naming / utils / exceptions）
 │   ├── JoyaTemplate.java               唯一执行与拦截器链入口（仅接收 SqlStatement / BatchSqlStatement，支持 bind(ConnectionProvider) 派生事务视图）
+│   ├── ExecutionOptions.java           执行期配置（超时 / 批大小）
 │   ├── connection/
 │   │   ├── ConnectionProvider.java     连接获取策略端口（acquire / release / queryTimeoutSeconds）
-│   │   └── DataSourceConnectionProvider.java  池化自动提交连接提供者（每次操作即借即还，支持默认 queryTimeoutSeconds）
-│   ├── tx/
-│   │   └── TxEngine.java               事务引擎扩展点 SPI（纯 JDBC 使用 JdbcTxEngine，Spring 环境使用 SpringTxEngine）
-│   ├── interceptor/
-│   │   ├── SqlInterceptor.java         SQL 改写拦截器接口
-│   │   ├── RewriteContext.java         改写上下文
-│   │   └── DefaultChain.java           责任链实现
-│   ├── statement/
-│   │   ├── SqlStatement.java           不可变 SQL 契约（含 sql、参数列表与 StatementMetadata TableRef 集合）
-│   │   └── BatchSqlStatement.java      列级元数据批处理契约
-│   └── dialect/
-│       ├── Dialect.java                内核方言接口
-│       ├── DialectStrategy.java        方言解析策略（fixed / cached / perConnection）
-│       └── DialectResolver.java        按 DataSource 缓存方言解析器
+│   │   ├── ConnectionCallback.java     连接级逃生回调端口
+│   │   └── DataSourceConnectionProvider.java  池化自动提交连接提供者
+│   ├── executor/                       执行端口与默认 JDBC 适配器
+│   │   ├── Executor.java               SQL 执行端口（query / queryList / queryStream / update / batchExecute）
+│   │   ├── JdbcExecutor.java           默认实现（借连接 → 执行 → 还连接）
+│   │   ├── RowMapper.java             行映射端口
+│   │   ├── ResultSetExtractor.java    结果集提取端口
+│   │   ├── BatchSlice.java            批量执行内核值类型（计数 + 生成键）
+│   │   └── JdbcType.java              JDBC 类型码枚举
+│   ├── interceptor/                    SqlInterceptor / RewriteContext / DefaultChain
+│   ├── statement/                      SqlStatement / BatchSqlStatement / 参数与表引用契约
+│   ├── dialect/                        Dialect / DialectStrategy / DialectResolver / DbType
+│   └── support/                        ScriptRunner / LoggingOutputStream
 │
-├── statement/factory/                  单表 CRUD 语句工厂
-│   ├── SelectStatementFactory.java     按主键 SELECT 语句渲染
-│   ├── InsertStatementFactory.java     INSERT 语句渲染
-│   ├── UpdateStatementFactory.java     UPDATE 语句渲染（强制非空 WHERE 或显式 allowAll）
-│   └── DeleteStatementFactory.java     DELETE 语句渲染（强制非空 WHERE 或显式 allowAll）
+├── statement/                          语句构建层
+│   └── MutationContext.java            变更操作上下文（metadata + values + where + naming）
+│
+├── statement/factory/                  语句工厂（只决定列与参数，不写 SQL 文本）
+│   ├── SqlRenderer.java                全仓唯一 DML 文本渲染器（INSERT / UPDATE / DELETE）
+│   ├── SelectStatementFactory.java     单表 SELECT 渲染
+│   ├── InsertStatementFactory.java     INSERT 渲染
+│   ├── UpdateStatementFactory.java     UPDATE 渲染（强制非空 WHERE 或显式 allowAll）
+│   └── DeleteStatementFactory.java     DELETE 渲染（强制非空 WHERE 或显式 allowAll）
 │
 ├── metadata/                           只读实体元数据与操作快照
-│   ├── PersistenceAnnotations.java     持久化注解双栈解析器（兼容 jakarta.persistence.* 与 javax.persistence.*）
-│   ├── EntityMetadataContext.java      不可变实体表结构元数据
-│   ├── EntitySnapshot.java             单次操作实体字段值快照
-│   └── MutationContext.java            变更操作上下文
+│   ├── PersistenceAnnotations.java     持久化注解双栈解析器（jakarta + javax）
+│   ├── EntityMetadataContext.java      不可变实体表结构元数据（保留注解原文）
+│   └── EntitySnapshot.java             单次操作实体字段值快照
 │
-└── jdbc/                               JDBC 底层适配与结果集映射
-    ├── executor/JdbcExecutor.java      纯 JDBC 执行器（仅依赖 ConnectionProvider）
-    ├── dao/                            JoyaMapper 接口及默认实现 JoyaMapperImpl
-    ├── resultset/mapper/               RowMapper（BeanRowMapper 原生支持 JavaBean 与 Java 17 Record 规范构造器映射 / SingleColumnRowMapper / MapRowMapper）
-    └── support/dialect/                18+ 数据库分页与计数方言实现
+├── naming/                             命名策略值对象（零内部依赖）
+│   └── NamingPolicy.java               formatTable / formatColumn / maxJoinTable
+│
+└── jdbc/                               JDBC 上层适配（依赖 kernel，不被 kernel 依赖）
+    ├── dao/                            JoyaMapper 接口、JoyaMapperImpl、方法名派生解析
+    ├── resultset/                      BeanRowMapper / MapRowMapper / FieldAlias
+    └── support/                        @Query 注解与 EntityListener 监听器契约
 ```
 
 ## 核心设计原则
@@ -110,12 +127,13 @@ core/
    - 彻底废除 `ThreadLocal` 事务上下文及伪分布式跨库事务包装，多数据源场景直接实例化多个对应的 `JoyaClient`。
    - 事务通过 `joya.tx(tx -> ...)`、`joya.txCall(tx -> ...)` 或 `joya.tx().isolation(...).run(tx -> ...)` 显式传递 `Tx` 值；局部回滚使用 `tx.savepoint(...)` / `tx.savepointCall(...)`。
 3. **动态条件零样板（`WhereCriterion`）与默认防误操作**：
-   - `WhereCriterion` 的 `eq`、`ne`、`lt`、`lte`、`gt`、`gte`、`between` 在参数值为 `null` 时自动忽略该条件（`IS NULL` 使用显式 `isNull`/`isNotNull`）；`contains`/`startsWith`/`endsWith` 在 `null` 或空白字符串时自动忽略；`in`/`notIn` 在 `null` 或空集合时自动忽略。
+   - `WhereCriterion` 的比较条件默认**严格非空**：`eq` / `ne` / `lt` / `lte` / `gt` / `gte` / `between` / `contains` 传入 `null` 会立即抛 `IllegalArgumentException`（异常信息会提示改用 `isNull` 或 `*IfPresent`）。
+   - 需要"值为空则跳过该条件"时，显式使用 `eqIfPresent` / `gtIfPresent` 等 `*IfPresent` 系列；空白字符串过滤使用 `containsIfNotBlank`；`in` / `notIn` 同样拒绝 `null` 或空集合，可选过滤使用 `inIfNotEmpty` / `notInIfNotEmpty`；`IS NULL` 使用显式 `isNull` / `isNotNull`。
    - `EntityUpdate` 与 `EntityDelete` 默认强制要求非空 `WHERE` 条件，全表操作必须显式调用 `.allowAll()`。
    - 外部动态筛选协议通过 `QueryCustomizer` 插件（`PageQueryParams.of(param)`）接入，强制执行标识符正则与实体元数据白名单校验，杜绝 SQL 注入。
 4. **拦截器链无旁路与现代 Java 17 映射**：
    - `JoyaTemplate` 是所有 SQL 执行的唯一收口，所有查询、变更、原生 SQL 与批处理 100% 经过 `SqlInterceptor` 链并携带完整 `StatementMetadata`。
 5. **Spring Boot 3 旁路（Sidecar）与多数据源原生镜像（`joya-spring-boot-starter`）**：
-   - **DataSource 自动镜像（`JoyaClientRegistrar`）**：按容器中的 `DataSource` 1:1 自动注册 `JoyaClient` Bean，自动继承 `@Primary`、`@Qualifier("dsName")` 与自定义 `@Qualifier` 派生注解。
+   - **DataSource 自动镜像（`JoyaAutoConfiguration` → `JoyaClientRegistry`）**：按容器中的 `DataSource` 1:1 自动构建 `JoyaClient` 并登记到注册表，自动继承 `@Primary`、`@Qualifier("dsName")` 与自定义 `@Qualifier` 派生注解。
    - **Spring 事务无缝融入（`SpringConnectionProvider` + `SpringTxEngine`）**：通过 `DataSourceUtils` 与 `PlatformTransactionManager` 协同，使 `joya` 操作、`joya.tx(...)`（含 `savepoint`）与 `@Transactional` 及主 ORM 共享同一条事务连接。
    - **`JoyaMapper` 双模支持**：既支持免扫描的 `joya.mapper(XxxMapper.class)` / `tx.mapper(XxxMapper.class)` 随取随用，也支持轻量级按需 `@JoyaMapperScan(basePackages = ..., client = ...)` 多数据源注入。
