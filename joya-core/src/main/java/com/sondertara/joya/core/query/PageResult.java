@@ -1,8 +1,7 @@
 package com.sondertara.joya.core.query;
 
-import com.sondertara.common.bean.BeanUtils;
-import com.sondertara.common.collection.CollectionUtils;
-import com.sondertara.common.reflect.ReflectUtils;
+import com.sondertara.joya.utils.ClassUtils;
+import com.sondertara.joya.utils.CollectionUtils;
 import lombok.Data;
 
 import java.util.ArrayList;
@@ -80,8 +79,8 @@ public class PageResult<T> {
         if (CollectionUtils.isNotEmpty(source.getData())) {
 
             for (T data : source.getData()) {
-                R target = ReflectUtils.newInstance(tClass);
-                BeanUtils.copyProperties(data, target);
+                R target = ClassUtils.newInstance(tClass);
+                ClassUtils.copyProperties(data, target);
                 targetPageData.add(target);
             }
         }

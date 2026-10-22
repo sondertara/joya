@@ -1,19 +1,16 @@
 package com.sondertara.joya.core.kernel;
 
 import com.sondertara.joya.core.jdbc.resultset.mapper.MapRowMapper;
-import com.sondertara.joya.core.jdbc.resultset.mapper.SingleColumnRowMapper;
-import com.sondertara.joya.core.jdbc.support.dialect.BoundSql;
+import com.sondertara.joya.core.kernel.executor.SingleColumnRowMapper;
 import com.sondertara.joya.core.kernel.dialect.Dialect;
 import com.sondertara.joya.core.kernel.dialect.DialectResolver;
-import com.sondertara.joya.core.kernel.dialect.JdbcDialect;
+import com.sondertara.joya.core.kernel.dialect.StandardDialect;
 import com.sondertara.joya.core.kernel.interceptor.Chain;
 import com.sondertara.joya.core.kernel.interceptor.RewriteContext;
 import com.sondertara.joya.core.kernel.interceptor.SqlInterceptor;
 import com.sondertara.joya.core.kernel.statement.Operation;
 import com.sondertara.joya.core.kernel.statement.SqlStatement;
 import com.sondertara.joya.core.kernel.statement.StatementMetadata;
-import com.sondertara.joya.core.query.PageResult;
-import com.sondertara.joya.core.query.pagination.PageRequest;
 import org.h2.jdbcx.JdbcDataSource;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -71,18 +68,17 @@ class KernelIntegrationTest {
     @Test
     void queryPage_walksInterceptorChain() {
         marking.captured.clear();
-        PageRequest page = PageRequest.of(0, 10);
 
-        PageResult<Map<String, Object>> result =
+        PageSlice<Map<String, Object>> result =
                 template.queryPage(SqlStatement.select("SELECT id, name FROM t_user WHERE id <= 2"),
-                        new MapRowMapper(), page);
+                        new MapRowMapper(), 0L, 10L);
 
         assertEquals(1, marking.captured.size(), "queryPage 应恰好触发一次拦截器链");
         assertEquals("SELECT id, name FROM t_user WHERE id <= 2", marking.captured.get(0), "拦截器应收到原始 SQL");
 
         assertNotNull(result);
-        assertEquals(2L, result.getTotal());
-        assertEquals(2, result.getData().size());
+        assertEquals(2L, result.total());
+        assertEquals(2, result.rows().size());
     }
 
     @Test
@@ -124,22 +120,22 @@ class KernelIntegrationTest {
 
         assertNotNull(first);
         assertTrue(first == second, "同一 DataSource 应复用缓存的方言实例");
-        assertTrue(first instanceof JdbcDialect);
+        assertTrue(first instanceof StandardDialect);
         assertNotNull(first.dbType(), "H2 应被识别出 DbType");
     }
 
     @Test
     void dialect_countAndPageSql_nonBlank() {
         Dialect dialect = DialectResolver.resolve(dataSource);
-        BoundSql bound = new BoundSql.BoundSqlObj("SELECT id, name FROM t_user WHERE id > ?", new Object[]{0});
+        SqlStatement stmt = SqlStatement.select("SELECT id, name FROM t_user WHERE id > ?", 0);
 
-        BoundSql count = dialect.countSql(bound);
-        BoundSql page = dialect.pageSql(bound, 0, 10);
+        SqlStatement count = dialect.countSql(stmt);
+        SqlStatement page = dialect.pageSql(stmt, 0, 10);
 
         assertNotNull(count);
         assertNotNull(page);
-        assertTrue(count.getSqlString().toUpperCase().contains("COUNT"));
-        assertNotSame(page.getSqlString(), bound.getSqlString(), "分页方言应改写 SQL");
+        assertTrue(count.sql().toUpperCase().contains("COUNT"));
+        assertNotSame(page.sql(), stmt.sql(), "分页方言应改写 SQL");
     }
 
     @Test

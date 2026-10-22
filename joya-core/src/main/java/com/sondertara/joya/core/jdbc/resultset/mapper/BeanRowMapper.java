@@ -1,15 +1,15 @@
 package com.sondertara.joya.core.jdbc.resultset.mapper;
 
-import com.sondertara.common.convert.ConvertUtils;
-import com.sondertara.common.function.TypedConverter;
-import com.sondertara.common.reflect.ReflectUtils;
+import com.sondertara.joya.core.kernel.executor.RowMapper;
+import com.sondertara.joya.core.kernel.executor.SingleColumnRowMapper;
 
-import com.sondertara.joya.utils.Strings;
-import com.sondertara.common.collection.CollectionUtils;
-import com.sondertara.common.collection.LinkedCaseInsensitiveMap;
+import com.sondertara.joya.core.function.TypedConverter;
 import com.sondertara.joya.utils.ClassUtils;
+import com.sondertara.joya.utils.CollectionUtils;
+import com.sondertara.joya.utils.ConvertUtils;
+import com.sondertara.joya.utils.LinkedCaseInsensitiveMap;
 import com.sondertara.joya.utils.PropertyUtils;
-import com.sondertara.common.text.VariableStyles;
+import com.sondertara.joya.utils.Strings;
 import com.sondertara.joya.core.jdbc.resultset.FieldAlias;
 import com.sondertara.joya.core.cache.CacheHolder;
 import com.sondertara.joya.core.metadata.EntityMetadataContext;
@@ -62,7 +62,7 @@ public class BeanRowMapper<T> implements RowMapper<T> {
 
     private final Class<T> type;
 
-    private LinkedCaseInsensitiveMap<PropertyDescriptor> mappedFields;
+    private LinkedCaseInsensitiveMap<PropertyTarget> mappedTargets;
 
     @Nullable
     private LinkedCaseInsensitiveMap<String> columnPropertyAlias = null;
@@ -83,6 +83,16 @@ public class BeanRowMapper<T> implements RowMapper<T> {
     @Nullable
     private LinkedCaseInsensitiveMap<Integer> recordComponentIndex;
 
+    private record PropertyTarget(String name, Class<?> type, @Nullable Method setter, @Nullable Field field) {
+        void write(Object bean, Object value) throws Exception {
+            if (setter != null) {
+                setter.invoke(bean, value);
+            } else if (field != null) {
+                field.set(bean, value);
+            }
+        }
+    }
+
     public BeanRowMapper(Class<T> type) {
         this.type = type;
         this.isRecord = type != null && type.isRecord();
@@ -91,31 +101,115 @@ public class BeanRowMapper<T> implements RowMapper<T> {
 
 
     private void initialize() {
-        this.mappedFields = new LinkedCaseInsensitiveMap<>();
+        this.mappedTargets = new LinkedCaseInsensitiveMap<>();
         this.fieldTypeConverterMap = new HashMap<>();
         if (this.isRecord) {
             initializeRecord();
             return;
         }
+        if (type == null || type.isInterface() || type.isPrimitive() || SqlFormatUtils.isPrimitive(type)) {
+            return;
+        }
         try {
-            if (type != null && !type.isInterface() && !type.isPrimitive()) {
-                this.defaultConstructor = type.getDeclaredConstructor();
-                this.defaultConstructor.setAccessible(true);
-            }
+            this.defaultConstructor = type.getDeclaredConstructor();
+            this.defaultConstructor.setAccessible(true);
         } catch (NoSuchMethodException ignored) {
         }
-        Collection<PropertyDescriptor> collection = PropertyUtils.getPropertyDescriptors(type);
-        collection.forEach(pd -> {
-            if (pd.getWriteMethod() != null) {
-                this.mappedFields.put(pd.getName(), pd);
-            }
-
-        });
         if (PersistenceAnnotations.isTableOrEntityPresent(type)) {
             metadataContext = CacheHolder.tableMetaCache().getMetadataContext(type);
-        } else if (!SqlFormatUtils.isPrimitive(type)) {
-            initColumnPropertyAliases();
         }
+
+        Map<String, Method> writeMethods = new HashMap<>();
+        Collection<PropertyDescriptor> descriptors = PropertyUtils.getPropertyDescriptors(type);
+        for (PropertyDescriptor pd : descriptors) {
+            Method writeMethod = pd.getWriteMethod();
+            if (writeMethod != null) {
+                try {
+                    writeMethod.setAccessible(true);
+                } catch (Exception ignored) {
+                }
+                writeMethods.put(pd.getName(), writeMethod);
+                PropertyTarget target = new PropertyTarget(pd.getName(), pd.getPropertyType(), writeMethod, null);
+                registerTargetKeys(pd.getName(), target);
+            }
+        }
+
+        List<Field> fields = ClassUtils.getFieldsByCache(type);
+        for (Field field : fields) {
+            if (PersistenceAnnotations.isTransientPresent(field)) {
+                continue;
+            }
+            try {
+                field.setAccessible(true);
+            } catch (Exception ignored) {
+            }
+            String fieldName = field.getName();
+            Method setter = writeMethods.get(fieldName);
+            if (setter == null) {
+                setter = findChainOrNonStandardSetter(type, fieldName, field.getType());
+            }
+            PropertyTarget target = new PropertyTarget(fieldName, field.getType(), setter, field);
+            registerTargetKeys(fieldName, target);
+        }
+
+        if (metadataContext != null) {
+            for (String col : metadataContext.columnNames()) {
+                String fieldName = metadataContext.fieldByColumn(col);
+                Field metaField = metadataContext.field(col);
+                PropertyTarget existing = fieldName != null ? mappedTargets.get(fieldName) : null;
+                if (existing == null && metaField != null) {
+                    existing = new PropertyTarget(
+                            metaField.getName(),
+                            metaField.getType(),
+                            findChainOrNonStandardSetter(type, metaField.getName(), metaField.getType()),
+                            metaField);
+                    registerTargetKeys(metaField.getName(), existing);
+                }
+                if (existing != null) {
+                    mappedTargets.put(col, existing);
+                }
+            }
+        }
+
+        initColumnPropertyAliases();
+        if (this.columnPropertyAlias != null) {
+            for (Map.Entry<String, String> entry : this.columnPropertyAlias.entrySet()) {
+                PropertyTarget target = mappedTargets.get(entry.getValue());
+                if (target != null) {
+                    mappedTargets.put(entry.getKey(), target);
+                }
+            }
+        }
+    }
+
+    private void registerTargetKeys(String fieldName, PropertyTarget target) {
+        mappedTargets.put(fieldName, target);
+        String snake = Strings.toUnderlineCase(fieldName);
+        if (Strings.isNotBlank(snake)) {
+            mappedTargets.putIfAbsent(snake, target);
+        }
+    }
+
+    private static @Nullable Method findChainOrNonStandardSetter(Class<?> clazz, String fieldName, Class<?> fieldType) {
+        if (fieldName == null || fieldName.isEmpty()) {
+            return null;
+        }
+        String setterName = "set" + Character.toUpperCase(fieldName.charAt(0)) + fieldName.substring(1);
+        for (Class<?> cur = clazz; cur != null && cur != Object.class; cur = cur.getSuperclass()) {
+            for (Method m : cur.getDeclaredMethods()) {
+                if (m.getName().equals(setterName) && m.getParameterCount() == 1) {
+                    Class<?> paramType = m.getParameterTypes()[0];
+                    if (paramType.isAssignableFrom(fieldType) || wrapPrimitive(paramType).isAssignableFrom(wrapPrimitive(fieldType))) {
+                        try {
+                            m.setAccessible(true);
+                        } catch (Exception ignored) {
+                        }
+                        return m;
+                    }
+                }
+            }
+        }
+        return null;
     }
 
     private void initializeRecord() {
@@ -173,7 +267,7 @@ public class BeanRowMapper<T> implements RowMapper<T> {
                     tmp.put(jsonProp.toLowerCase(), field.getName());
                 } else if (field.isAnnotationPresent(FieldAlias.class)) {
                     FieldAlias fieldAlias = field.getAnnotation(FieldAlias.class);
-                    TypedConverter typeConverter = ReflectUtils.newInstance(fieldAlias.converter());
+                    TypedConverter typeConverter = ClassUtils.newInstance(fieldAlias.converter());
                     fieldTypeConverterMap.put(field.getName(), typeConverter);
                     for (String s : fieldAlias.value()) {
                         aliasTmpMap.put(s.trim(), field.getName());
@@ -217,37 +311,34 @@ public class BeanRowMapper<T> implements RowMapper<T> {
             if (this.isRecord) {
                 return mapRecord(row, metaData, count);
             }
-            if (this.mappedFields.isEmpty()) {
+            if (this.mappedTargets.isEmpty()) {
                 return (T) setSingleField(row);
             }
-            T bean = (defaultConstructor != null ? defaultConstructor : type.getDeclaredConstructor()).newInstance();
+            Constructor<T> ctor = defaultConstructor != null ? defaultConstructor : type.getDeclaredConstructor();
+            ctor.setAccessible(true);
+            T bean = ctor.newInstance();
             for (int i = 1; i <= count; i++) {
                 String columnName = SqlDataUtils.lookupColumnName(metaData, i);
-                //if the name has alias
                 if (columnName.contains(Strings.DOT)) {
                     columnName = Strings.subAfter(columnName, '.', true);
                 }
 
-                //not property found for bean field
-                String bestGuessProperty = bestGuessProperty(columnName);
-                if (null == bestGuessProperty) {
+                PropertyTarget target = resolvePropertyTarget(columnName);
+                if (target == null) {
                     continue;
                 }
-                PropertyDescriptor pd = this.mappedFields.get(bestGuessProperty);
-                if (pd == null) {
-                    continue;
-                }
-                Class<?> propertyType = pd.getPropertyType();
+                Class<?> propertyType = target.type();
                 Object value = SqlDataUtils.getResultSetValue(row, i, propertyType);
-                if (fieldTypeConverterMap.containsKey(pd.getName())) {
-                    value = fieldTypeConverterMap.get(pd.getName()).convert(value);
+                if (fieldTypeConverterMap.containsKey(target.name())) {
+                    value = fieldTypeConverterMap.get(target.name()).convert(value);
+                } else if (value != null && !wrapPrimitive(propertyType).isInstance(value)) {
+                    value = ConvertUtils.convert(value, propertyType);
                 }
-                Method setter = pd.getWriteMethod();
-                if (value != null && null != setter) {
+                if (value != null) {
                     try {
-                        setter.invoke(bean, value);
+                        target.write(bean, value);
                     } catch (Exception e) {
-                        log.error("Invoke method[{}] value[{}] type[{}] error:{}", setter.getName(), value, value.getClass().getName(), e.getMessage(), e);
+                        log.error("Write property[{}] value[{}] type[{}] error:{}", target.name(), value, value.getClass().getName(), e.getMessage(), e);
                         throw new DbException(e);
                     }
                 }
@@ -309,7 +400,7 @@ public class BeanRowMapper<T> implements RowMapper<T> {
             return recordComponentIndex.get(columnName);
         }
         if (columnName.contains("_")) {
-            String camel = VariableStyles.SNAKE.toCamelCase(columnName);
+            String camel = Strings.toCamelCase(columnName);
             if (recordComponentIndex.containsKey(camel)) {
                 return recordComponentIndex.get(camel);
             }
@@ -347,45 +438,19 @@ public class BeanRowMapper<T> implements RowMapper<T> {
         return null;
     }
 
-    private String bestGuessProperty(String aliasName) {
-        String propertyName = null;
-        // 1. 判断是否为 entity（O(1) 大小写无关查找）
-        if (null != metadataContext) {
-            propertyName = metadataContext.fieldByColumn(aliasName);
-            if (null == propertyName) {
-                propertyName = metadataContext.findFieldIgnoreCase(aliasName);
-            }
+    private @Nullable PropertyTarget resolvePropertyTarget(String columnName) {
+        if (columnName == null || this.mappedTargets.isEmpty()) {
+            return null;
         }
-        //2.判断普通 pojo是否设置别名
-        if (null == propertyName && CollectionUtils.isNotEmpty(this.columnPropertyAlias)) {
-            propertyName = this.columnPropertyAlias.get(aliasName);
-            if (null == propertyName) {
-                for (Map.Entry<String, String> entry : this.columnPropertyAlias.entrySet()) {
-                    if (aliasName.equalsIgnoreCase(entry.getKey()) || aliasName.equalsIgnoreCase(entry.getValue())) {
-                        propertyName = entry.getValue();
-                        break;
-                    }
-                }
-            }
+        PropertyTarget direct = this.mappedTargets.get(columnName);
+        if (direct != null) {
+            return direct;
         }
-        //3.普通pojo按驼峰转换
-        if (null == propertyName) {
-            propertyName = aliasName;
-            if (aliasName.contains(String.valueOf("_"))) {
-                propertyName = VariableStyles.SNAKE.toCamelCase(aliasName);
-            }
+        if (columnName.contains("_")) {
+            String camel = Strings.toCamelCase(columnName);
+            return this.mappedTargets.get(camel);
         }
-        if (this.mappedFields.containsKey(propertyName)) {
-            return propertyName;
-        }
-        //3.1模糊匹配
-        for (Map.Entry<String, PropertyDescriptor> entry : this.mappedFields.entrySet()) {
-            if (propertyName.equalsIgnoreCase(entry.getKey())) {
-                propertyName = entry.getKey();
-                break;
-            }
-        }
-        return propertyName;
+        return null;
     }
 
     /**

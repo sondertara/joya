@@ -1,7 +1,7 @@
 package com.sondertara.joya.core.query.criterion;
 
-import com.sondertara.common.collection.CollectionUtils;
-import com.sondertara.common.function.IGetter;
+import com.sondertara.joya.utils.CollectionUtils;
+import com.sondertara.joya.core.function.IGetter;
 import com.sondertara.joya.core.kernel.statement.ParameterSource;
 import com.sondertara.joya.core.kernel.statement.SqlParameterList;
 import com.sondertara.joya.core.model.ColumnAlias;

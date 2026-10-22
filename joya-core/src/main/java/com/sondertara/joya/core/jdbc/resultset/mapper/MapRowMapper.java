@@ -1,7 +1,9 @@
 package com.sondertara.joya.core.jdbc.resultset.mapper;
 
+import com.sondertara.joya.core.kernel.executor.RowMapper;
+
 import com.sondertara.joya.utils.Strings;
-import com.sondertara.common.collection.LinkedCaseInsensitiveMap;
+import com.sondertara.joya.utils.LinkedCaseInsensitiveMap;
 import com.sondertara.joya.exceptions.DbException;
 import com.sondertara.joya.utils.SqlDataUtils;
 import lombok.extern.slf4j.Slf4j;

@@ -1,9 +1,6 @@
 package com.sondertara.joya.core.kernel.dialect;
 
-import com.sondertara.joya.core.jdbc.support.DbType;
-import com.sondertara.joya.core.jdbc.support.dialect.PageSqlDialect;
-import com.sondertara.joya.core.jdbc.support.dialect.SqlDialectRegister;
-import com.sondertara.joya.utils.JdbcUtils;
+import com.sondertara.joya.core.kernel.dialect.DbType;
 
 import javax.sql.DataSource;
 import java.sql.Connection;
@@ -12,10 +9,8 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * 方言解析器（工厂 + 缓存）：从 {@link DataSource} 惰性探测数据库类型并缓存，避免每次调用都开连接。
- * <p>
- * 设计模式：工厂方法 + 按 {@link DataSource} 缓存的 Flyweight。
- * 线程安全：{@link ConcurrentHashMap#computeIfAbsent} 保证同一 DataSource 只探测一次。
+ * 方言解析器（工厂 + 缓存）：从 {@link DataSource} 惰性探测数据库类型并映射到无状态 {@link Dialect} 实例，
+ * 避免每次调用都打开连接。
  */
 public final class DialectResolver {
 
@@ -29,7 +24,7 @@ public final class DialectResolver {
      *
      * @param dataSource 数据源，不可为 null
      * @return 方言端口实例
-     * @throws IllegalStateException 数据源不可用、无法识别类型或方言初始化失败
+     * @throws IllegalStateException 数据源不可用或方言初始化失败
      */
     public static Dialect resolve(DataSource dataSource) {
         if (dataSource == null) {
@@ -45,9 +40,8 @@ public final class DialectResolver {
 
     private static Dialect create(DataSource dataSource) {
         try (Connection connection = dataSource.getConnection()) {
-            DbType dbType = JdbcUtils.getDatabaseType(connection);
-            PageSqlDialect pageSqlDialect = SqlDialectRegister.getDialect(connection);
-            return new JdbcDialect(dbType, pageSqlDialect);
+            DbType dbType = DbType.of(connection);
+            return Dialects.forDbType(dbType);
         } catch (SQLException e) {
             throw new IllegalStateException("无法从 DataSource 解析数据库方言", e);
         }

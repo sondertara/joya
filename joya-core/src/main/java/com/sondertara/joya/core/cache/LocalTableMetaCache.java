@@ -55,7 +55,6 @@ public class LocalTableMetaCache {
             }
         }
 
-        tableName = tableName.toLowerCase(Locale.US);
         EntityMetadataContext.Builder builder = new EntityMetadataContext.Builder(entityClass)
                 .tableName(tableName)
                 .schemaName(schemaName);
@@ -83,7 +82,6 @@ public class LocalTableMetaCache {
             }
             String colName = PersistenceAnnotations.findColumnName(field)
                     .orElseGet(() -> Strings.toUnderlineCase(field.getName()));
-            colName = colName.toLowerCase(Locale.US);
             if (PersistenceAnnotations.isIdPresent(field)) {
                 builder.primaryKey(colName)
                         .primaryKeyType(field.getType())

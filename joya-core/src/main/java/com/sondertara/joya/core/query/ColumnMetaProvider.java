@@ -1,6 +1,6 @@
 package com.sondertara.joya.core.query;
 
-import com.sondertara.common.function.IGetter;
+import com.sondertara.joya.core.function.IGetter;
 import com.sondertara.joya.core.model.ColumnAlias;
 import com.sondertara.joya.core.query.dsl.Expr;
 import com.sondertara.joya.utils.LambdaUtils;
@@ -211,7 +211,7 @@ public sealed interface ColumnMetaProvider
         @Override
         public @Nullable String propertyName() {
             Object val = fn.apply(null);
-            ColumnPair pair = SqlFormatUtils.warpColumn(Objects.toString(val, ""));
+            ColumnPair pair = RawColumnParser.parse(Objects.toString(val, ""));
             return pair != null ? pair.getValue() : null;
         }
 
@@ -223,7 +223,7 @@ public sealed interface ColumnMetaProvider
         @Override
         public ColumnAlias resolveAlias(RenderContext ctx) {
             Object val = fn.apply(null);
-            ColumnPair pair = SqlFormatUtils.warpColumn(Objects.toString(val, ""), ctx.settings().columnUppercase());
+            ColumnPair pair = RawColumnParser.parse(Objects.toString(val, ""), ctx.namingPolicy().columnUppercase());
             ColumnAlias alias = new ColumnAlias();
             if (pair != null) {
                 alias.setColumnName(pair.getKey());

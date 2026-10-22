@@ -1,6 +1,6 @@
 package com.sondertara.joya.utils;
 
-import com.sondertara.common.function.IGetter;
+import com.sondertara.joya.core.function.IGetter;
 import com.sondertara.joya.exceptions.TaraException;
 
 import java.lang.invoke.SerializedLambda;

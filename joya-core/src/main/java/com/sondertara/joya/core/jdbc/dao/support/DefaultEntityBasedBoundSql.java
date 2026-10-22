@@ -33,18 +33,57 @@ public class DefaultEntityBasedBoundSql implements EntityBasedBoundSql {
         this.cacheable = cacheable;
     }
 
-    private static boolean detectIsQuery(String sql) {
+    public static boolean detectIsQuery(String sql) {
         if (sql == null) {
             return true;
         }
-        String normalized = sql.trim().toLowerCase(Locale.ROOT);
+        String normalized = stripLeadingComments(sql).toLowerCase(Locale.ROOT);
+        if (normalized.isEmpty()) {
+            return true;
+        }
         return !(normalized.startsWith("update")
                 || normalized.startsWith("delete")
                 || normalized.startsWith("insert")
                 || normalized.startsWith("truncate")
                 || normalized.startsWith("drop")
                 || normalized.startsWith("alter")
-                || normalized.startsWith("create"));
+                || normalized.startsWith("create")
+                || normalized.startsWith("merge")
+                || normalized.startsWith("replace"));
+    }
+
+    /**
+     * 剥离 SQL 前导空白、块注释（{@code /* ... *}{@code /}）与行注释（{@code -- ...}）。
+     */
+    public static String stripLeadingComments(String sql) {
+        if (sql == null) {
+            return "";
+        }
+        int len = sql.length();
+        int i = 0;
+        while (i < len) {
+            while (i < len && Character.isWhitespace(sql.charAt(i))) {
+                i++;
+            }
+            if (i + 1 < len && sql.charAt(i) == '/' && sql.charAt(i + 1) == '*') {
+                int end = sql.indexOf("*/", i + 2);
+                if (end < 0) {
+                    return "";
+                }
+                i = end + 2;
+                continue;
+            }
+            if (i + 1 < len && sql.charAt(i) == '-' && sql.charAt(i + 1) == '-') {
+                int nl = sql.indexOf('\n', i + 2);
+                if (nl < 0) {
+                    return "";
+                }
+                i = nl + 1;
+                continue;
+            }
+            break;
+        }
+        return sql.substring(i).trim();
     }
 
     @Override

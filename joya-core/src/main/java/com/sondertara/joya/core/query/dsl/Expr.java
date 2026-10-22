@@ -1,6 +1,6 @@
 package com.sondertara.joya.core.query.dsl;
 
-import com.sondertara.common.function.IGetter;
+import com.sondertara.joya.core.function.IGetter;
 import com.sondertara.joya.core.query.RenderContext;
 import org.jspecify.annotations.Nullable;
 

@@ -3,7 +3,7 @@ package com.sondertara.joya.core;
 import com.sondertara.joya.core.kernel.JoyaTemplate;
 import com.sondertara.joya.core.kernel.statement.SqlStatement;
 import com.sondertara.joya.core.metadata.EntityMetadataContext;
-import com.sondertara.joya.core.metadata.MutationContext;
+import com.sondertara.joya.core.statement.MutationContext;
 import com.sondertara.joya.core.query.criterion.WhereCriterion;
 import com.sondertara.joya.core.result.MutationResult;
 import com.sondertara.joya.core.statement.factory.DeleteStatementFactory;
@@ -57,7 +57,7 @@ public final class EntityDelete<T> {
     /** 渲染为不可变 {@link SqlStatement}。 */
     public SqlStatement toSqlStatement() {
         WhereCriterion where = buildWhere();
-        MutationContext ctx = new MutationContext(meta, Map.of(), where, Set.of(), false, allowAll, template.settings());
+        MutationContext ctx = new MutationContext(meta, Map.of(), where, Set.of(), false, allowAll, template.namingPolicy());
         return DeleteStatementFactory.create(ctx);
     }
 

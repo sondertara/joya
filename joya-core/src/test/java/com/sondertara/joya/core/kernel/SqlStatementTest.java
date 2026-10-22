@@ -1,6 +1,6 @@
 package com.sondertara.joya.core.kernel;
 
-import com.sondertara.joya.core.jdbc.support.DbType;
+import com.sondertara.joya.core.kernel.dialect.DbType;
 import com.sondertara.joya.core.kernel.statement.Operation;
 import com.sondertara.joya.core.kernel.statement.ParameterSource;
 import com.sondertara.joya.core.kernel.statement.SqlParameter;

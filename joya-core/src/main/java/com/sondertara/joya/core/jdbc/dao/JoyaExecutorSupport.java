@@ -3,6 +3,7 @@ package com.sondertara.joya.core.jdbc.dao;
 import com.sondertara.joya.core.DataOps;
 import com.sondertara.joya.core.SqlOps;
 import com.sondertara.joya.core.cache.CacheHolder;
+import com.sondertara.joya.core.jdbc.dao.support.DefaultEntityBasedBoundSql;
 import com.sondertara.joya.core.jdbc.dao.support.EntityBasedBoundSql;
 import com.sondertara.joya.core.jdbc.dao.support.JPAQueryParser;
 import com.sondertara.joya.core.jdbc.dao.support.NativeQueryParser;
@@ -12,6 +13,8 @@ import com.sondertara.joya.core.kernel.statement.SqlStatement;
 import com.sondertara.joya.core.kernel.statement.StatementMetadata;
 import com.sondertara.joya.core.kernel.statement.TableRef;
 import com.sondertara.joya.core.metadata.EntityMetadataContext;
+import com.sondertara.joya.core.query.PageResult;
+import com.sondertara.joya.core.query.pagination.PageRequest;
 import com.sondertara.joya.utils.Assert;
 import com.sondertara.joya.utils.Strings;
 import com.sondertara.joya.utils.TypeUtils;
@@ -23,8 +26,10 @@ import java.lang.reflect.Type;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.StringJoiner;
 
 import static com.sondertara.joya.utils.SqlFormatUtils.POSITIONAL_OR_INDEXED_PARAMETER;
 
@@ -45,14 +50,17 @@ public class JoyaExecutorSupport {
     @SuppressWarnings({"unchecked", "rawtypes"})
     public Object execute(final Method method, Object[] args) {
         Object[] actualArgs = args == null ? new Object[0] : args;
+        PageRequest pageRequest = extractPageRequest(method, actualArgs);
         EntityBasedBoundSql boundSql = resolveBoundSql(method, actualArgs);
         String sqlString = boundSql.getSqlString();
         Type returnType = boundSql.returnType();
         Class<?> aClass = TypeUtils.getClass(returnType);
-        List<Object> list = new ArrayList<>(boundSql.parameterBinding().size());
+
+        List<Object> rawValues = new ArrayList<>(boundSql.parameterBinding().size());
+        boolean hasMultiValue = false;
         for (ParameterBinding binding : boundSql.parameterBinding()) {
             if (binding instanceof ConstantParameterBinding constantBinding) {
-                list.add(constantBinding.getValue());
+                rawValues.add(constantBinding.getValue());
                 continue;
             }
             int position = binding.getRequiredPosition();
@@ -61,7 +69,18 @@ public class JoyaExecutorSupport {
                         "Parameter position[{}] not match args index for method[{}]", position - 1, method));
             }
             Object prepared = binding.prepare(actualArgs[position - 1]);
-            list.add(prepared);
+            if (isCollectionOrNonByteArray(prepared)) {
+                hasMultiValue = true;
+            }
+            rawValues.add(prepared);
+        }
+
+        List<Object> list;
+        if (hasMultiValue) {
+            list = new ArrayList<>();
+            sqlString = expandCollectionPlaceholders(sqlString, rawValues, list, method);
+        } else {
+            list = rawValues;
         }
 
         boolean query = boundSql.isQuery();
@@ -82,6 +101,17 @@ public class JoyaExecutorSupport {
             return affected;
         }
 
+        // PageResult<T> return
+        if (PageResult.class.isAssignableFrom(aClass)) {
+            if (pageRequest == null) {
+                throw new IllegalArgumentException(
+                        "Mapper method returning PageResult must provide a non-null PageRequest argument: " + method);
+            }
+            Type argument = TypeUtils.getTypeArgument(returnType);
+            Class<?> returnClass = argument != null ? TypeUtils.getClass(argument) : entityClass;
+            return sqlOps.page(returnClass, pageRequest);
+        }
+
         // boolean return (e.g. existsBy...)
         if (aClass == boolean.class || aClass == Boolean.class) {
             Object raw = sqlOps.value(Object.class).orElse(null);
@@ -98,6 +128,9 @@ public class JoyaExecutorSupport {
         if (Collection.class.isAssignableFrom(aClass)) {
             Type argument = TypeUtils.getTypeArgument(returnType);
             Class<?> returnClass = argument != null ? TypeUtils.getClass(argument) : entityClass;
+            if (pageRequest != null) {
+                return sqlOps.limit(returnClass, pageRequest.getOffset(), pageRequest.getSize());
+            }
             return sqlOps.list(returnClass);
         }
 
@@ -124,6 +157,84 @@ public class JoyaExecutorSupport {
         return sqlOps.one(aClass).orElse(null);
     }
 
+    private static @Nullable PageRequest extractPageRequest(Method method, Object[] actualArgs) {
+        if (actualArgs.length == 0) {
+            return null;
+        }
+        Object last = actualArgs[actualArgs.length - 1];
+        if (last instanceof PageRequest pr) {
+            return pr;
+        }
+        Class<?>[] paramTypes = method.getParameterTypes();
+        if (paramTypes.length > 0 && PageRequest.class.isAssignableFrom(paramTypes[paramTypes.length - 1])) {
+            return null;
+        }
+        return null;
+    }
+
+    private static boolean isCollectionOrNonByteArray(@Nullable Object val) {
+        if (val == null) {
+            return false;
+        }
+        if (val instanceof Collection<?>) {
+            return true;
+        }
+        return val.getClass().isArray() && val.getClass().getComponentType() != byte.class;
+    }
+
+    private static List<Object> flattenMultiValue(Object val, Method method) {
+        List<Object> items = new ArrayList<>();
+        if (val instanceof Collection<?> col) {
+            items.addAll(col);
+        } else if (val != null && val.getClass().isArray()) {
+            int len = Array.getLength(val);
+            for (int i = 0; i < len; i++) {
+                items.add(Array.get(val, i));
+            }
+        }
+        if (items.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "Collection or array parameter for IN clause must not be empty in method: " + method.getName());
+        }
+        return items;
+    }
+
+    private static String expandCollectionPlaceholders(
+            String sql, List<Object> rawValues, List<Object> expandedOut, Method method) {
+        StringBuilder sb = new StringBuilder(sql.length() + 16);
+        int bindIdx = 0;
+        boolean inSingleQuote = false;
+        for (int i = 0; i < sql.length(); i++) {
+            char ch = sql.charAt(i);
+            if (ch == '\'') {
+                inSingleQuote = !inSingleQuote;
+                sb.append(ch);
+                continue;
+            }
+            if (!inSingleQuote && ch == '?' && bindIdx < rawValues.size()) {
+                Object val = rawValues.get(bindIdx++);
+                if (isCollectionOrNonByteArray(val)) {
+                    List<Object> items = flattenMultiValue(val, method);
+                    StringJoiner sj = new StringJoiner(", ");
+                    for (Object item : items) {
+                        sj.add("?");
+                        expandedOut.add(item);
+                    }
+                    sb.append(sj);
+                } else {
+                    sb.append('?');
+                    expandedOut.add(val);
+                }
+            } else {
+                sb.append(ch);
+            }
+        }
+        while (bindIdx < rawValues.size()) {
+            expandedOut.add(rawValues.get(bindIdx++));
+        }
+        return sb.toString();
+    }
+
     private EntityBasedBoundSql resolveBoundSql(Method method, Object[] actualArgs) {
         EntityBasedBoundSql cached = boundSqlCache.get(method);
         if (cached != null) {
@@ -141,7 +252,7 @@ public class JoyaExecutorSupport {
         if (method.isAnnotationPresent(Query.class)) {
             raw = new NativeQueryParser(entityClass, method).parse();
         } else {
-            raw = new JPAQueryParser<>(entityClass, method, actualArgs, joyaClient.settings()).parse();
+            raw = new JPAQueryParser<>(entityClass, method, actualArgs, joyaClient.settings().namingPolicy()).parse();
         }
         String normalizedSql = raw.getSqlString().replaceAll(POSITIONAL_OR_INDEXED_PARAMETER, "?");
         boolean cacheable = !(raw instanceof com.sondertara.joya.core.jdbc.dao.support.DefaultEntityBasedBoundSql def)
@@ -157,11 +268,14 @@ public class JoyaExecutorSupport {
     private SqlOps createSqlOps(String sql, Object[] parameters, boolean query) {
         try {
             EntityMetadataContext meta = CacheHolder.tableMetaCache().getMetadataContext(entityClass);
+            String stripped = DefaultEntityBasedBoundSql.stripLeadingComments(sql).toLowerCase(Locale.ROOT);
             Operation op = query
                     ? Operation.SELECT
-                    : (sql.trim().toLowerCase().startsWith("delete") ? Operation.DELETE : Operation.UPDATE);
+                    : (stripped.startsWith("delete")
+                            ? Operation.DELETE
+                            : (stripped.startsWith("insert") ? Operation.INSERT : Operation.UPDATE));
             StatementMetadata metadata = StatementMetadata.builder(op)
-                    .table(TableRef.of(meta.qualifiedTableName(joyaClient.settings())))
+                    .table(TableRef.of(meta.qualifiedTableName(joyaClient.settings().namingPolicy())))
                     .entityType(entityClass)
                     .build();
             SqlStatement stmt = (query ? SqlStatement.select(sql, parameters) : SqlStatement.update(sql, parameters))

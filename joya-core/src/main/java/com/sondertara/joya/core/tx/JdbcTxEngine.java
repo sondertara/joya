@@ -1,7 +1,6 @@
 package com.sondertara.joya.core.tx;
 
 import com.sondertara.joya.core.kernel.JoyaTemplate;
-import com.sondertara.joya.core.kernel.tx.TxEngine;
 
 import java.sql.Connection;
 import java.sql.SQLException;

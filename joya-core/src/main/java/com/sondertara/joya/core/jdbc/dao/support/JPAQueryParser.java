@@ -1,12 +1,12 @@
 package com.sondertara.joya.core.jdbc.dao.support;
 
-import com.sondertara.joya.core.JoyaSettings;
 import com.sondertara.joya.core.cache.CacheHolder;
 import com.sondertara.joya.core.jdbc.dao.JoyaExecutorSupport;
 import com.sondertara.joya.core.jdbc.support.listener.EntityListener;
+import com.sondertara.joya.core.naming.NamingPolicy;
 import com.sondertara.joya.core.metadata.EntityMetadataContext;
 import com.sondertara.joya.core.metadata.EntitySnapshot;
-import com.sondertara.joya.core.metadata.MutationContext;
+import com.sondertara.joya.core.statement.MutationContext;
 import com.sondertara.joya.core.query.LinkType;
 import com.sondertara.joya.core.query.criterion.WhereCriterion;
 import com.sondertara.joya.core.statement.factory.DeleteStatementFactory;
@@ -51,22 +51,22 @@ public class JPAQueryParser<T> extends AbstractQueryParser {
     private static final Pattern ORDER_DIR_PATTERN = Pattern.compile("(Asc|Desc)(?=$|\\p{Lu})");
 
     private final @Nullable Object[] runtimeArgs;
-    private final JoyaSettings settings;
+    private final NamingPolicy namingPolicy;
     private Subject subject;
     private Predicate predicate;
 
     public JPAQueryParser(Class<T> domainClass, Method method) {
-        this(domainClass, method, null, JoyaSettings.DEFAULT);
+        this(domainClass, method, null, NamingPolicy.DEFAULT);
     }
 
     public JPAQueryParser(Class<T> domainClass, Method method, @Nullable Object[] runtimeArgs) {
-        this(domainClass, method, runtimeArgs, JoyaSettings.DEFAULT);
+        this(domainClass, method, runtimeArgs, NamingPolicy.DEFAULT);
     }
 
-    public JPAQueryParser(Class<T> domainClass, Method method, @Nullable Object[] runtimeArgs, @Nullable JoyaSettings settings) {
+    public JPAQueryParser(Class<T> domainClass, Method method, @Nullable Object[] runtimeArgs, @Nullable NamingPolicy namingPolicy) {
         super(domainClass, method);
         this.runtimeArgs = runtimeArgs;
-        this.settings = settings == null ? JoyaSettings.DEFAULT : settings;
+        this.namingPolicy = namingPolicy == null ? NamingPolicy.DEFAULT : namingPolicy;
     }
 
     @Override
@@ -217,7 +217,7 @@ public class JPAQueryParser<T> extends AbstractQueryParser {
 
         String sql;
         if (subject.isDelete()) {
-            MutationContext deleteCtx = new MutationContext(meta, Map.of(), whereCriterion, Set.of(), false, false, settings);
+            MutationContext deleteCtx = new MutationContext(meta, Map.of(), whereCriterion, Set.of(), false, false, namingPolicy);
             sql = DeleteStatementFactory.create(deleteCtx).sql();
         } else if (subject.isUpdate()) {
             MutationContext updateCtx = new MutationContext(
@@ -227,17 +227,17 @@ public class JPAQueryParser<T> extends AbstractQueryParser {
                     new LinkedHashSet<>(updateSetColumns),
                     updateIgnoreNull,
                     false,
-                    settings);
+                    namingPolicy);
             sql = UpdateStatementFactory.create(updateCtx).sql();
         } else if (subject.isCountProjection() || subject.isExistsProjection()) {
             Set<String> countColumns = new LinkedHashSet<>();
             countColumns.add("count(*)");
-            sql = SelectStatementFactory.create(meta, whereCriterion, countColumns, null, settings).sql();
+            sql = SelectStatementFactory.create(meta, whereCriterion, countColumns, null, namingPolicy).sql();
         } else {
             String orderByClause = parseOrderByClause(meta, orderBySource);
             String limitClause = subject.getMaxResults().map(limit -> "LIMIT " + limit).orElse(null);
             String extPart = joinClauses(orderByClause, limitClause);
-            sql = SelectStatementFactory.create(meta, whereCriterion, null, extPart, settings).sql();
+            sql = SelectStatementFactory.create(meta, whereCriterion, null, extPart, namingPolicy).sql();
             if (subject.isDistinct() && sql.regionMatches(true, 0, "SELECT ", 0, 7)) {
                 sql = "SELECT DISTINCT " + sql.substring(7);
             }
@@ -291,7 +291,7 @@ public class JPAQueryParser<T> extends AbstractQueryParser {
                 continue;
             }
             String dir = matcher.group(1).equalsIgnoreCase("Desc") ? "DESC" : "ASC";
-            orderItems.add(meta.formatColumn(col, settings) + " " + dir);
+            orderItems.add(meta.formatColumn(col, namingPolicy) + " " + dir);
             start = matcher.end();
         }
         if (start < orderBySource.length()) {
@@ -306,7 +306,7 @@ public class JPAQueryParser<T> extends AbstractQueryParser {
                         "No property name found in OrderBy clause({}) for the method({}), please check it",
                         remaining, statementMethod.getName());
             }
-            orderItems.add(meta.formatColumn(col, settings) + " ASC");
+            orderItems.add(meta.formatColumn(col, namingPolicy) + " ASC");
         }
         return orderItems.isEmpty() ? null : "ORDER BY " + String.join(", ", orderItems);
     }
@@ -326,10 +326,7 @@ public class JPAQueryParser<T> extends AbstractQueryParser {
         if (col != null) {
             return col;
         }
-        if (meta.containsColumn(fieldOrColumn)) {
-            return fieldOrColumn;
-        }
-        return null;
+        return meta.canonicalColumn(fieldOrColumn);
     }
 
     private void applyPredicatePart(WhereCriterion target,

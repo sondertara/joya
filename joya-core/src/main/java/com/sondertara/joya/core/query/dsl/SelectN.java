@@ -1,6 +1,6 @@
 package com.sondertara.joya.core.query.dsl;
 
-import com.sondertara.common.function.IGetter;
+import com.sondertara.joya.core.function.IGetter;
 import com.sondertara.joya.core.kernel.statement.SqlStatement;
 import com.sondertara.joya.core.query.PageResult;
 import com.sondertara.joya.core.query.pagination.PageRequest;

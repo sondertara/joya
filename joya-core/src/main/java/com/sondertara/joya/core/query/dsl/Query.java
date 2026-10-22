@@ -1,8 +1,10 @@
 package com.sondertara.joya.core.query.dsl;
 
-import com.sondertara.common.function.IGetter;
-import com.sondertara.joya.core.jdbc.resultset.mapper.SingleColumnRowMapper;
+import com.sondertara.joya.core.function.IGetter;
+import com.sondertara.joya.core.kernel.executor.SingleColumnRowMapper;
 import com.sondertara.joya.core.kernel.JoyaTemplate;
+import com.sondertara.joya.core.naming.NamingPolicy;
+import com.sondertara.joya.core.kernel.PageSlice;
 import com.sondertara.joya.core.kernel.statement.Operation;
 import com.sondertara.joya.core.kernel.statement.ParameterSource;
 import com.sondertara.joya.core.kernel.statement.SqlParameterList;
@@ -73,7 +75,7 @@ public final class Query<T> implements QueryScope {
         return RenderContext.forQuery(
                 rootType,
                 joinCriterion.getJoinSegments(),
-                template != null ? template.settings() : com.sondertara.joya.core.JoyaSettings.DEFAULT
+                template != null ? template.namingPolicy() : NamingPolicy.DEFAULT
         );
     }
 
@@ -84,13 +86,28 @@ public final class Query<T> implements QueryScope {
         return this;
     }
 
+    public <L, R> Query<T> join(IGetter<L, ?> left, IGetter<R, ?> right, UnaryOperator<WhereCriterion> onCondition) {
+        joinCriterion.join(left, right, onCondition);
+        return this;
+    }
+
     public <L, R> Query<T> leftJoin(IGetter<L, ?> left, IGetter<R, ?> right) {
         joinCriterion.leftJoin(left, right);
         return this;
     }
 
+    public <L, R> Query<T> leftJoin(IGetter<L, ?> left, IGetter<R, ?> right, UnaryOperator<WhereCriterion> onCondition) {
+        joinCriterion.leftJoin(left, right, onCondition);
+        return this;
+    }
+
     public <L, R> Query<T> rightJoin(IGetter<L, ?> left, IGetter<R, ?> right) {
         joinCriterion.rightJoin(left, right);
+        return this;
+    }
+
+    public <L, R> Query<T> rightJoin(IGetter<L, ?> left, IGetter<R, ?> right, UnaryOperator<WhereCriterion> onCondition) {
+        joinCriterion.rightJoin(left, right, onCondition);
         return this;
     }
 
@@ -437,7 +454,12 @@ public final class Query<T> implements QueryScope {
         Objects.requireNonNull(page, "page must not be null");
         SqlStatement dataStmt = renderStatement(projection.columns(), true, ctx);
         SqlStatement countStmt = renderCountStatement(projection.columns(), ctx);
-        return requireTemplate().queryPage(dataStmt, countStmt, projection.mapper(), page);
+        PageSlice<V> slice = requireTemplate().queryPage(
+                dataStmt, countStmt, projection.mapper(), page.getOffset(), page.getSize());
+        return PageResult.of(slice.rows())
+                .pagination(page.getPage(), page.getSize())
+                .total(slice.total())
+                .build();
     }
 
     SqlStatement renderStatement(List<String> selectColumns) {
@@ -445,14 +467,14 @@ public final class Query<T> implements QueryScope {
     }
 
     private SqlStatement renderStatement(List<String> selectColumns, boolean includeOrderBy, RenderContext ctx) {
+        SqlParameterList params = new SqlParameterList();
         StringBuilder sql = new StringBuilder("SELECT ");
         if (distinct) {
             sql.append("DISTINCT ");
         }
         sql.append(String.join(", ", selectColumns));
-        sql.append(" FROM ").append(ctx.renderFromClause());
+        sql.append(" FROM ").append(ctx.renderFromClause(params));
 
-        SqlParameterList params = new SqlParameterList();
         if (!whereCriterion.isEmpty()) {
             StringBuilder whereSql = new StringBuilder();
             whereCriterion.render(ctx, whereSql, params, ParameterSource.WHERE);

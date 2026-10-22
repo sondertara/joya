@@ -16,7 +16,6 @@
 
 package com.sondertara.joya.utils;
 
-import com.sondertara.joya.core.jdbc.support.DbType;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -155,23 +154,6 @@ public abstract class JdbcUtils {
         return false;
     }
 
-
-    /**
-     * Return the database type based on connection meta data.
-     *
-     * @param con the Connection to check
-     * @return the matched {@link DbType}
-     */
-    public static DbType getDatabaseType(Connection con) {
-        try {
-            DatabaseMetaData metaData = con.getMetaData();
-            String databaseName = metaData.getDatabaseProductName().toLowerCase();
-            return DbType.of(databaseName);
-        } catch (SQLException e) {
-            logger.warn("Exception thrown when getting database type", e);
-        }
-        return DbType.other;
-    }
 
     /**
      * Determine the column name to use. The column name is determined based on a

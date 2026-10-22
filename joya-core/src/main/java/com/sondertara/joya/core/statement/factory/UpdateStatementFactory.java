@@ -1,5 +1,8 @@
 package com.sondertara.joya.core.statement.factory;
 
+import com.sondertara.joya.core.naming.NamingPolicy;
+import com.sondertara.joya.core.kernel.statement.BatchSqlStatement;
+import com.sondertara.joya.core.kernel.statement.ColumnBinding;
 import com.sondertara.joya.core.kernel.statement.Operation;
 import com.sondertara.joya.core.kernel.statement.ParameterSource;
 import com.sondertara.joya.core.kernel.statement.SqlParameterList;
@@ -7,24 +10,20 @@ import com.sondertara.joya.core.kernel.statement.SqlStatement;
 import com.sondertara.joya.core.kernel.statement.StatementMetadata;
 import com.sondertara.joya.core.kernel.statement.TableRef;
 import com.sondertara.joya.core.metadata.EntityMetadataContext;
-import com.sondertara.joya.core.metadata.MutationContext;
+import com.sondertara.joya.core.statement.MutationContext;
 import com.sondertara.joya.core.query.RenderContext;
 import com.sondertara.joya.core.query.criterion.WhereCriterion;
 
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 
 /**
- * UPDATE 语句工厂。
+ * UPDATE 语句工厂（统一覆盖单条 {@link SqlStatement} 与批量 {@link BatchSqlStatement} 构建）。
  * <p>
  * 关键不变量：<b>SET 参数必须排在 WHERE 参数之前</b>。
  * 参数顺序：SET 列值 → WHERE 条件值。
- * <p>
- * 条件体系统一使用 {@link WhereCriterion}，通过单表 {@link RenderContext#forSingleTable(EntityMetadataContext)}
- * 直接渲染无别名的 WHERE 列名与参数。
  */
 public final class UpdateStatementFactory {
 
@@ -34,27 +33,27 @@ public final class UpdateStatementFactory {
     public static SqlStatement create(MutationContext ctx) {
         EntityMetadataContext meta = ctx.metadata();
         WhereCriterion where = ctx.where();
-        var settings = ctx.settings();
+        NamingPolicy namingPolicy = ctx.namingPolicy();
 
         if ((where == null || where.isEmpty()) && !ctx.allowAll()) {
             throw new IllegalStateException("UPDATE without WHERE is not allowed; use allowAll() explicitly");
         }
 
-        // 1. 确定 SET 列
+        // 1. 确定 SET 列：显式声明时按元数据列顺序归一，避免调用方传入 HashSet 导致 SQL 文本不确定
         List<String> setColumns = ctx.declaredColumns().isEmpty()
                 ? meta.updatableColumns()
-                : new ArrayList<>(ctx.declaredColumns());
+                : orderByMetadata(meta, ctx.declaredColumns());
 
         SqlParameterList params = new SqlParameterList();
 
         // 2. 先渲染 SET 和 SET 参数
         List<String> finalSetColumns = new ArrayList<>();
         for (String col : setColumns) {
-            Object value = resolveValue(ctx, col);
+            Object value = ctx.resolveValue(col);
             if (ctx.ignoreNull() && value == null) {
                 continue;
             }
-            finalSetColumns.add(meta.formatColumn(col, settings));
+            finalSetColumns.add(meta.formatColumn(col, namingPolicy));
             params.add(col, value, ParameterSource.SET);
         }
         if (finalSetColumns.isEmpty()) {
@@ -64,13 +63,13 @@ public final class UpdateStatementFactory {
         // 3. 再通过单表 RenderContext 直接渲染 WHERE 与 WHERE 参数（排在 SET 之后）
         StringBuilder whereSql = new StringBuilder();
         if (where != null && !where.isEmpty()) {
-            RenderContext renderContext = RenderContext.forSingleTable(meta, settings);
+            RenderContext renderContext = RenderContext.forSingleTable(meta, namingPolicy);
             where.render(renderContext, whereSql, params, ParameterSource.WHERE);
         }
 
-        // 4. 生成 SQL
-        String tableName = meta.qualifiedTableName(settings);
-        String sql = buildSql(tableName, finalSetColumns, whereSql.toString());
+        // 4. 统一由 SqlRenderer 生成 SQL
+        String tableName = meta.qualifiedTableName(namingPolicy);
+        String sql = SqlRenderer.renderUpdate(tableName, finalSetColumns, whereSql.toString());
 
         // 5. 元数据
         Set<TableRef> tables = new LinkedHashSet<>();
@@ -83,25 +82,59 @@ public final class UpdateStatementFactory {
         return SqlStatement.of(sql, params.toList(), metadata, true);
     }
 
-    private static Object resolveValue(MutationContext ctx, String columnName) {
-        Map<String, Object> values = ctx.values();
-        if (values.containsKey(columnName)) {
-            return values.get(columnName);
+    /**
+     * 按元数据列顺序归一显式声明的列，元数据外的列保持其原始迭代顺序追加。
+     *
+     * <p>存在的理由：{@code ctx.declaredColumns()} 可能是任意 {@link Set} 实现，
+     * 直接遍历会让同一逻辑产生不同 SQL 文本，破坏执行计划缓存与快照测试的稳定性。
+     */
+    private static List<String> orderByMetadata(EntityMetadataContext meta, Set<String> declared) {
+        List<String> ordered = new ArrayList<>(declared.size());
+        for (String col : meta.columnNames()) {
+            if (declared.contains(col)) {
+                ordered.add(col);
+            }
         }
-        String field = ctx.metadata().fieldByColumn(columnName);
-        return field != null ? values.get(field) : null;
+        for (String col : declared) {
+            if (!ordered.contains(col)) {
+                ordered.add(col);
+            }
+        }
+        return ordered;
     }
 
-    private static String buildSql(String tableName, List<String> setColumns, String whereSql) {
-        StringBuilder sb = new StringBuilder();
-        sb.append("UPDATE ").append(tableName).append(" SET ");
-        for (int i = 0; i < setColumns.size(); i++) {
-            if (i > 0) sb.append(", ");
-            sb.append(setColumns.get(i)).append(" = ?");
+    /**
+     * 构建按主键批量更新的 {@link BatchSqlStatement}（参数顺序：setColumns 依次排在前，pk 排在最后）。
+     */
+    public static BatchSqlStatement createBatchByPrimaryKey(
+            EntityMetadataContext meta,
+            List<String> setColumns,
+            String pk,
+            List<Object[]> rows,
+            NamingPolicy namingPolicy,
+            int batchSize
+    ) {
+        List<String> formattedSetColumns = setColumns.stream()
+                .map(c -> meta.formatColumn(c, namingPolicy))
+                .toList();
+        String formattedPk = meta.formatColumn(pk, namingPolicy);
+        String tableName = meta.qualifiedTableName(namingPolicy);
+        StatementMetadata metadata = StatementMetadata.builder(Operation.UPDATE)
+                .table(TableRef.of(tableName))
+                .entityType(meta.entityType())
+                .build();
+        List<ColumnBinding> bindings = new ArrayList<>(setColumns.size() + 1);
+        for (String col : setColumns) {
+            bindings.add(ColumnBinding.of(col));
         }
-        if (whereSql != null && !whereSql.isEmpty()) {
-            sb.append(" WHERE ").append(whereSql);
-        }
-        return sb.toString();
+        bindings.add(ColumnBinding.of(pk));
+        return new BatchSqlStatement(
+                SqlRenderer.renderUpdate(tableName, formattedSetColumns, formattedPk + " = ?"),
+                bindings,
+                rows,
+                metadata,
+                batchSize,
+                false
+        );
     }
 }

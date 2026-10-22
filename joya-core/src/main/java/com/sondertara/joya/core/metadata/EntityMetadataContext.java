@@ -1,7 +1,10 @@
 package com.sondertara.joya.core.metadata;
 
-import com.sondertara.common.reflect.ReflectUtils;
-import com.sondertara.joya.core.JoyaSettings;
+import com.sondertara.joya.core.function.IGetter;
+import com.sondertara.joya.core.naming.NamingPolicy;
+import com.sondertara.joya.utils.ClassUtils;
+import com.sondertara.joya.utils.LambdaUtils;
+import com.sondertara.joya.utils.Strings;
 import org.jspecify.annotations.Nullable;
 
 import java.lang.reflect.Field;
@@ -120,9 +123,9 @@ public final class EntityMetadataContext {
         return tableName;
     }
 
-    public String tableName(@Nullable JoyaSettings settings) {
-        if (settings != null && settings.tableUppercase() && tableName != null) {
-            return tableName.toUpperCase(Locale.ROOT);
+    public String tableName(@Nullable NamingPolicy namingPolicy) {
+        if (namingPolicy != null) {
+            return namingPolicy.formatTable(tableName);
         }
         return tableName;
     }
@@ -136,27 +139,37 @@ public final class EntityMetadataContext {
         return qualifiedTableName(null);
     }
 
-    /** 按客户端配置格式化后的限定表名（支持 {@link JoyaSettings#tableUppercase()}）。 */
-    public String qualifiedTableName(@Nullable JoyaSettings settings) {
-        String tbl = tableName(settings);
+    /** 按命名策略格式化后的限定表名（支持 {@link NamingPolicy#tableUppercase()}）。 */
+    public String qualifiedTableName(@Nullable NamingPolicy namingPolicy) {
+        String tbl = tableName(namingPolicy);
         if (schemaName == null || schemaName.isBlank()) {
             return tbl;
         }
-        String sch = (settings != null && settings.tableUppercase())
-                ? schemaName.toUpperCase(Locale.ROOT)
+        String sch = namingPolicy != null
+                ? namingPolicy.formatTable(schemaName)
                 : schemaName;
         return sch + "." + tbl;
     }
 
-    /** 按客户端配置格式化列名（支持 {@link JoyaSettings#columnUppercase()}）。 */
-    public String formatColumn(String columnName, @Nullable JoyaSettings settings) {
+    /** 按命名策略格式化列名（默认原样保留 {@code @Column(name)} 注解原文，开启 {@link NamingPolicy#columnUppercase()} 时转为大写）。 */
+    public String formatColumn(String columnName, @Nullable NamingPolicy namingPolicy) {
         if (columnName == null) {
             return null;
         }
-        if (settings != null && settings.columnUppercase()) {
-            return columnName.toUpperCase(Locale.ROOT);
+        String canonical = canonicalColumn(columnName);
+        String target = canonical != null ? canonical : columnName;
+        return namingPolicy != null ? namingPolicy.formatColumn(target) : target;
+    }
+
+    /** 获取元数中记录的规范列名（保留 {@code @Column(name)} 注解原始大小写）。 */
+    public @Nullable String canonicalColumn(String columnName) {
+        if (columnName == null) {
+            return null;
         }
-        return columnName;
+        if (columnToField.containsKey(columnName)) {
+            return columnName;
+        }
+        return lowerColumnToCanonical.get(columnName.toLowerCase(Locale.ROOT));
     }
 
     public String primaryKey() {
@@ -224,12 +237,29 @@ public final class EntityMetadataContext {
                 || lowerFieldToCanonical.containsKey(fieldName.toLowerCase(Locale.ROOT));
     }
 
+    /** 按字段名或列名获取预缓存且已开启访问权限的 {@link Field}。 */
+    public @Nullable Field field(String fieldOrColumn) {
+        if (fieldOrColumn == null) {
+            return null;
+        }
+        Field direct = columnFields.get(fieldOrColumn);
+        if (direct != null) {
+            return direct;
+        }
+        String canonicalCol = lowerColumnToCanonical.get(fieldOrColumn.toLowerCase(Locale.ROOT));
+        if (canonicalCol != null) {
+            return columnFields.get(canonicalCol);
+        }
+        String colByField = columnByField(fieldOrColumn);
+        return colByField != null ? columnFields.get(colByField) : null;
+    }
+
     /** 直接通过预缓存的 {@link Field} 读取实体属性值（零二次按名查找）。 */
     public @Nullable Object readFieldValue(Object entity, String columnName) {
         if (entity == null || columnName == null) {
             return null;
         }
-        Field f = columnFields.get(columnName);
+        Field f = field(columnName);
         if (f != null) {
             try {
                 return f.get(entity);
@@ -237,7 +267,7 @@ public final class EntityMetadataContext {
             }
         }
         String fieldName = fieldByColumn(columnName);
-        return fieldName != null ? ReflectUtils.getFieldValue(entity, fieldName) : null;
+        return fieldName != null ? ClassUtils.getFieldValue(entity, fieldName) : null;
     }
 
     /** 直接通过预缓存的 {@link Field} 写入实体属性值。 */
@@ -245,7 +275,7 @@ public final class EntityMetadataContext {
         if (entity == null || columnName == null) {
             return;
         }
-        Field f = columnFields.get(columnName);
+        Field f = field(columnName);
         if (f != null) {
             try {
                 f.set(entity, value);
@@ -255,8 +285,34 @@ public final class EntityMetadataContext {
         }
         String fieldName = fieldByColumn(columnName);
         if (fieldName != null) {
-            ReflectUtils.setFieldValue(entity, fieldName, value);
+            ClassUtils.setFieldValue(entity, fieldName, value);
         }
+    }
+
+    /** 按 Lambda Getter 引用解析规范列名，不存在时抛出 {@link IllegalArgumentException}。 */
+    public <E> String resolveColumn(IGetter<E, ?> getter) {
+        String m = LambdaUtils.getImplMethodName(getter);
+        String prop = m.startsWith("get") && m.length() > 3 ? Strings.lowerFirst(m.substring(3))
+                : (m.startsWith("is") && m.length() > 2 ? Strings.lowerFirst(m.substring(2)) : m);
+        String col = columnByField(prop);
+        if (col == null) {
+            throw new IllegalArgumentException("Unknown property '" + prop + "' on entity " + entityType.getName());
+        }
+        return col;
+    }
+
+    /** 按字段名或列名解析规范列名，不存在时抛出 {@link IllegalArgumentException}。 */
+    public String resolveColumnName(String columnOrField) {
+        if (columnOrField == null || columnOrField.isBlank()) {
+            throw new IllegalArgumentException("Column or field name must not be blank");
+        }
+        String trimmed = columnOrField.trim();
+        String col = containsField(trimmed) ? columnByField(trimmed) : canonicalColumn(trimmed);
+        if (col != null) {
+            return col;
+        }
+        throw new IllegalArgumentException(
+                "Unknown column or field '" + columnOrField + "' for entity " + entityType.getName());
     }
 
     /** 生成列集合（自增主键、数据库生成列）。 */

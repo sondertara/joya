@@ -1,10 +1,10 @@
 package com.sondertara.joya.core;
 
-import com.sondertara.common.function.IGetter;
+import com.sondertara.joya.core.function.IGetter;
 import com.sondertara.joya.core.kernel.JoyaTemplate;
 import com.sondertara.joya.core.kernel.statement.SqlStatement;
 import com.sondertara.joya.core.metadata.EntityMetadataContext;
-import com.sondertara.joya.core.metadata.MutationContext;
+import com.sondertara.joya.core.statement.MutationContext;
 import com.sondertara.joya.core.query.criterion.WhereCriterion;
 import com.sondertara.joya.core.result.MutationResult;
 import com.sondertara.joya.core.statement.factory.UpdateStatementFactory;
@@ -88,7 +88,7 @@ public final class EntityUpdate<T> {
         }
         WhereCriterion where = buildWhere();
         Set<String> declared = new LinkedHashSet<>(values.keySet());
-        MutationContext ctx = new MutationContext(meta, values, where, declared, false, allowAll, template.settings());
+        MutationContext ctx = new MutationContext(meta, values, where, declared, false, allowAll, template.namingPolicy());
         return UpdateStatementFactory.create(ctx);
     }
 

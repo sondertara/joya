@@ -1,6 +1,6 @@
 package com.sondertara.joya.core.statement.factory;
 
-import com.sondertara.joya.core.JoyaSettings;
+import com.sondertara.joya.core.naming.NamingPolicy;
 import com.sondertara.joya.core.kernel.statement.Operation;
 import com.sondertara.joya.core.kernel.statement.ParameterSource;
 import com.sondertara.joya.core.kernel.statement.SqlParameterList;
@@ -18,13 +18,6 @@ import java.util.Set;
 
 /**
  * SELECT 语句工厂（单表场景）。
- * <p>
- * 规则：
- * <ul>
- *   <li>未声明列时 SELECT *；声明列时按元数据列顺序输出（稳定）。</li>
- *   <li>通过 {@link RenderContext#forSingleTable(EntityMetadataContext)} 直接渲染无表别名的 WHERE 子句与参数。</li>
- *   <li>extPart（ORDER BY / LIMIT / FOR UPDATE）原样追加。</li>
- * </ul>
  */
 public final class SelectStatementFactory {
 
@@ -33,11 +26,11 @@ public final class SelectStatementFactory {
 
     public static SqlStatement create(EntityMetadataContext meta, WhereCriterion where,
                                       Set<String> declaredColumns, String extPart) {
-        return create(meta, where, declaredColumns, extPart, JoyaSettings.DEFAULT);
+        return create(meta, where, declaredColumns, extPart, NamingPolicy.DEFAULT);
     }
 
     public static SqlStatement create(EntityMetadataContext meta, WhereCriterion where,
-                                      Set<String> declaredColumns, String extPart, JoyaSettings settings) {
+                                      Set<String> declaredColumns, String extPart, NamingPolicy namingPolicy) {
         // 1. 列选择：未声明则 *
         String selectPart = "*";
         if (declaredColumns != null && !declaredColumns.isEmpty()) {
@@ -45,7 +38,7 @@ public final class SelectStatementFactory {
             List<String> ordered = new ArrayList<>();
             for (String col : meta.columnNames()) {
                 if (declaredColumns.contains(col)) {
-                    ordered.add(meta.formatColumn(col, settings));
+                    ordered.add(meta.formatColumn(col, namingPolicy));
                 }
             }
             // 元数据外的声明列（例如别名列或 count(*)）原样追加
@@ -61,20 +54,13 @@ public final class SelectStatementFactory {
         SqlParameterList params = new SqlParameterList();
         StringBuilder whereSql = new StringBuilder();
         if (where != null && !where.isEmpty()) {
-            RenderContext renderContext = RenderContext.forSingleTable(meta, settings);
+            RenderContext renderContext = RenderContext.forSingleTable(meta, namingPolicy);
             where.render(renderContext, whereSql, params, ParameterSource.WHERE);
         }
 
-        // 3. 组装 SQL
-        String tableName = meta.qualifiedTableName(settings);
-        StringBuilder sql = new StringBuilder();
-        sql.append("SELECT ").append(selectPart).append(" FROM ").append(tableName);
-        if (!whereSql.isEmpty()) {
-            sql.append(" WHERE ").append(whereSql);
-        }
-        if (extPart != null && !extPart.isBlank()) {
-            sql.append(" ").append(extPart.trim());
-        }
+        // 3. 统一由 SqlRenderer 生成 SQL
+        String tableName = meta.qualifiedTableName(namingPolicy);
+        String sql = SqlRenderer.renderSelect(selectPart, tableName, whereSql.toString(), extPart);
 
         // 4. 元数据：表引用 + 实体类型
         Set<TableRef> tables = new LinkedHashSet<>();
@@ -84,27 +70,27 @@ public final class SelectStatementFactory {
                 .entityType(meta.entityType())
                 .build();
 
-        return SqlStatement.of(sql.toString(), params.toList(), metadata, true);
+        return SqlStatement.of(sql, params.toList(), metadata, true);
     }
 
     /** 便捷构造：无 extPart。 */
     public static SqlStatement create(EntityMetadataContext meta, WhereCriterion where, Set<String> declaredColumns) {
-        return create(meta, where, declaredColumns, null, JoyaSettings.DEFAULT);
+        return create(meta, where, declaredColumns, null, NamingPolicy.DEFAULT);
     }
 
     /** 便捷构造：按主键查询（findById 语义）。 */
     public static SqlStatement byPrimaryKey(EntityMetadataContext meta, Object id) {
-        return byPrimaryKey(meta, id, JoyaSettings.DEFAULT);
+        return byPrimaryKey(meta, id, NamingPolicy.DEFAULT);
     }
 
-    /** 便捷构造：按主键查询（支持客户端配置）。 */
-    public static SqlStatement byPrimaryKey(EntityMetadataContext meta, Object id, JoyaSettings settings) {
+    /** 便捷构造：按主键查询（支持命名策略配置）。 */
+    public static SqlStatement byPrimaryKey(EntityMetadataContext meta, Object id, NamingPolicy namingPolicy) {
         String pk = meta.primaryKey();
         if (pk == null || pk.isBlank()) {
             throw new IllegalStateException("entity has no primary key: " + meta.entityType().getName());
         }
         WhereCriterion where = WhereCriterion.create();
         where.eq(pk, id);
-        return create(meta, where, null, null, settings);
+        return create(meta, where, null, null, namingPolicy);
     }
 }

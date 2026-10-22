@@ -1,6 +1,6 @@
 package com.sondertara.joya.core.query.dsl;
 
-import com.sondertara.common.convert.ConvertUtils;
+import com.sondertara.joya.utils.ConvertUtils;
 import com.sondertara.joya.exceptions.DbException;
 import com.sondertara.joya.utils.LambdaUtils;
 import com.sondertara.joya.utils.SqlDataUtils;

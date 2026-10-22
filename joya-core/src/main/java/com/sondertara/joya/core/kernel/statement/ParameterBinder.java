@@ -1,12 +1,12 @@
 package com.sondertara.joya.core.kernel.statement;
 
-import com.sondertara.joya.core.jdbc.support.DbType;
-import com.sondertara.joya.utils.JdbcUtils;
+import com.sondertara.joya.core.kernel.dialect.DbType;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.sql.Timestamp;
+import java.sql.Types;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.util.Date;
@@ -22,11 +22,41 @@ public interface ParameterBinder {
 
     void bind(PreparedStatement statement, int index, SqlParameter parameter) throws SQLException;
 
-    /** 默认绑定：复用现有 {@code JdbcExecutor} 的成熟逻辑（含 java.util.Date / OffsetDateTime / Oracle 特例）。 */
-    ParameterBinder DEFAULT = (statement, index, parameter) -> {
-        Object value = parameter.value();
+    /**
+     * 直接按列值绑定（批处理热路径使用，{@link #DEFAULT} 实现零 {@link SqlParameter} 对象分配）。
+     */
+    default void bindValue(PreparedStatement statement, int index, String columnName, Object value) throws SQLException {
+        bind(statement, index, SqlParameter.of(index, columnName, value, ParameterSource.RAW));
+    }
+
+    /**
+     * 直接绑定无列名的参数值。
+     */
+    default void bindValue(PreparedStatement statement, int index, Object value) throws SQLException {
+        bindValue(statement, index, null, value);
+    }
+
+    /** 默认绑定：零额外对象分配，含 java.util.Date / OffsetDateTime / Oracle 及跨驱动 NULL 兼容。 */
+    ParameterBinder DEFAULT = new ParameterBinder() {
+        @Override
+        public void bind(PreparedStatement statement, int index, SqlParameter parameter) throws SQLException {
+            bindRawValue(statement, index, parameter.value());
+        }
+
+        @Override
+        public void bindValue(PreparedStatement statement, int index, String columnName, Object value) throws SQLException {
+            bindRawValue(statement, index, value);
+        }
+
+        @Override
+        public void bindValue(PreparedStatement statement, int index, Object value) throws SQLException {
+            bindRawValue(statement, index, value);
+        }
+    };
+
+    private static void bindRawValue(PreparedStatement statement, int index, Object value) throws SQLException {
         if (value == null) {
-            statement.setObject(index, null);
+            bindNull(statement, index);
             return;
         }
         if (value instanceof java.sql.Date date) {
@@ -44,12 +74,24 @@ public interface ParameterBinder {
         } else {
             statement.setObject(index, value);
         }
-    };
+    }
+
+    static void bindNull(PreparedStatement statement, int index) throws SQLException {
+        try {
+            statement.setNull(index, Types.NULL);
+        } catch (SQLException e) {
+            try {
+                statement.setNull(index, Types.VARCHAR);
+            } catch (SQLException ignored) {
+                statement.setObject(index, null);
+            }
+        }
+    }
 
     private static boolean isOracle(PreparedStatement statement) {
         try {
             Connection conn = statement.getConnection();
-            return conn != null && DbType.oracle.equals(JdbcUtils.getDatabaseType(conn));
+            return conn != null && DbType.oracle.equals(DbType.of(conn));
         } catch (Exception ignored) {
             return false;
         }

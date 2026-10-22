@@ -1,6 +1,6 @@
 package com.sondertara.joya.core.query.dsl;
 
-import com.sondertara.common.function.IGetter;
+import com.sondertara.joya.core.function.IGetter;
 import com.sondertara.joya.core.jdbc.resultset.mapper.BeanRowMapper;
 import com.sondertara.joya.core.metadata.PersistenceAnnotations;
 import com.sondertara.joya.core.model.ColumnAlias;

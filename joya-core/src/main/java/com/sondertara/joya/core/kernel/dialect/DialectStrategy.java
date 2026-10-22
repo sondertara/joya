@@ -1,10 +1,7 @@
 package com.sondertara.joya.core.kernel.dialect;
 
-import com.sondertara.joya.core.jdbc.support.DbType;
-import com.sondertara.joya.core.jdbc.support.dialect.PageSqlDialect;
-import com.sondertara.joya.core.jdbc.support.dialect.SqlDialectRegister;
+import com.sondertara.joya.core.kernel.dialect.DbType;
 import com.sondertara.joya.core.kernel.connection.ConnectionProvider;
-import com.sondertara.joya.utils.JdbcUtils;
 
 import javax.sql.DataSource;
 import java.sql.Connection;
@@ -26,13 +23,20 @@ public interface DialectStrategy {
     Dialect resolve(ConnectionProvider connections);
 
     /**
-     * 固定方言策略：由显式指定的 {@link DbType} 直接构建方言，不打开任何数据库连接探测。
+     * 固定方言策略：由显式指定的 {@link DbType} 直接获取预置方言，不打开任何数据库连接探测。
      */
     static DialectStrategy fixed(DbType dbType) {
         Objects.requireNonNull(dbType, "dbType must not be null");
-        PageSqlDialect pageSqlDialect = (PageSqlDialect) SqlDialectRegister.findOrCreate(dbType);
-        Dialect fixedDialect = new JdbcDialect(dbType, pageSqlDialect);
+        Dialect fixedDialect = Dialects.forDbType(dbType);
         return connections -> fixedDialect;
+    }
+
+    /**
+     * 固定方言策略：直接使用自定义或预置 {@link Dialect} 实例。
+     */
+    static DialectStrategy fixed(Dialect dialect) {
+        Objects.requireNonNull(dialect, "dialect must not be null");
+        return connections -> dialect;
     }
 
     /**
@@ -51,9 +55,8 @@ public interface DialectStrategy {
             Connection conn = null;
             try {
                 conn = connections.acquire();
-                DbType dbType = JdbcUtils.getDatabaseType(conn);
-                PageSqlDialect pageSqlDialect = (PageSqlDialect) SqlDialectRegister.findOrCreate(dbType);
-                return new JdbcDialect(dbType, pageSqlDialect);
+                DbType dbType = DbType.of(conn);
+                return Dialects.forDbType(dbType);
             } catch (SQLException e) {
                 throw new IllegalStateException("Failed to resolve dialect from ConnectionProvider", e);
             } finally {

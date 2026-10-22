@@ -1,6 +1,6 @@
 package com.sondertara.joya.core.kernel.statement;
 
-import com.sondertara.joya.core.jdbc.support.DbType;
+import com.sondertara.joya.core.kernel.dialect.DbType;
 
 import java.util.Collections;
 import java.util.LinkedHashSet;

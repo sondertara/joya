@@ -1,8 +1,8 @@
 package com.sondertara.joya.core.kernel.executor;
 
-import com.sondertara.joya.core.jdbc.callback.ConnectionCallback;
-import com.sondertara.joya.core.jdbc.resultset.mapper.ResultSetExtractor;
-import com.sondertara.joya.core.jdbc.resultset.mapper.RowMapper;
+import com.sondertara.joya.core.kernel.connection.ConnectionCallback;
+import com.sondertara.joya.core.kernel.executor.ResultSetExtractor;
+import com.sondertara.joya.core.kernel.executor.RowMapper;
 import com.sondertara.joya.core.kernel.statement.BatchSqlStatement;
 import com.sondertara.joya.core.kernel.statement.SqlStatement;
 
@@ -33,8 +33,13 @@ public interface Executor {
     /** 插入并返回首个生成键；无生成键时返回 {@code null}。 */
     Object insert(SqlStatement statement);
 
-    /** 列级绑定的批量执行。 */
+    /** 列级绑定的批量执行（返回逐行计数数组）。 */
     int[] batchUpdate(BatchSqlStatement batch);
+
+    /** 列级绑定的批量执行（支持分片 Flush 与生成键收集）。 */
+    default BatchSlice batchExecute(BatchSqlStatement batch) {
+        return BatchSlice.of(batchUpdate(batch), null);
+    }
 
     /** 以 {@code template.sql()} 为模板，对每组参数各执行一次（template 自身参数忽略）。 */
     int[] batchUpdate(SqlStatement template, List<Object[]> rows);

@@ -1,10 +1,11 @@
 package com.sondertara.joya.core.jdbc.dao;
 
-import com.sondertara.common.function.IGetter;
+import com.sondertara.joya.core.function.IGetter;
 import com.sondertara.joya.core.query.PageResult;
 import com.sondertara.joya.core.query.criterion.WhereCriterion;
 import com.sondertara.joya.core.query.pagination.OrderParam;
 import com.sondertara.joya.core.query.pagination.PageQueryParam;
+import com.sondertara.joya.core.result.MutationResult;
 
 import java.io.Serializable;
 import java.util.Collection;
@@ -34,6 +35,27 @@ public interface JoyaMapper<T> {
      */
 
     <S extends T> void saveAll(Iterable<S> entities);
+
+    /**
+     * Batch inserts all entities (with generated primary key write-back).
+     */
+    <S extends T> MutationResult insertAll(Collection<S> entities);
+
+    /**
+     * Batch updates all entities by primary key (all updatable columns).
+     */
+    <S extends T> MutationResult updateAll(Collection<S> entities);
+
+    /**
+     * Batch updates only the specified columns by primary key.
+     */
+    @SuppressWarnings("unchecked")
+    <S extends T> MutationResult updateAll(Collection<S> entities, IGetter<T, ?>... columns);
+
+    /**
+     * Batch patches entities by primary key (only non-null columns of each entity).
+     */
+    <S extends T> MutationResult patchAll(Collection<S> entities);
 
     /*========================================select==============================================*/
 

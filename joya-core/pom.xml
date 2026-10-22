@@ -58,8 +58,8 @@
             <optional>true</optional>
         </dependency>
         <dependency>
-            <groupId>com.sondertara</groupId>
-            <artifactId>common-tara-core</artifactId>
+            <groupId>org.jspecify</groupId>
+            <artifactId>jspecify</artifactId>
         </dependency>
         <dependency>
             <groupId>org.projectlombok</groupId>

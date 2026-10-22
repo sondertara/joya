@@ -1,6 +1,5 @@
 package com.sondertara.joya.core.model;
 
-import com.sondertara.joya.core.query.ColumnPair;
 import lombok.Data;
 import org.jspecify.annotations.Nullable;
 
@@ -47,9 +46,6 @@ public class ColumnAlias implements Serializable {
     }
 
 
-    public ColumnPair queryPair() {
-        return new ColumnPair(identity(), columnAlias);
-    }
 
     @Override
     public boolean equals(Object o) {

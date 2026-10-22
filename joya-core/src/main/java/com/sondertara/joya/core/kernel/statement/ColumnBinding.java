@@ -1,6 +1,6 @@
 package com.sondertara.joya.core.kernel.statement;
 
-import com.sondertara.joya.core.jdbc.support.JdbcType;
+import com.sondertara.joya.core.kernel.executor.JdbcType;
 
 import java.util.Objects;
 

@@ -1,6 +1,6 @@
 package com.sondertara.joya.core.jdbc.dao.support;
 
-import com.sondertara.common.struct.Pair;
+import com.sondertara.joya.utils.Pair;
 import lombok.Getter;
 import org.jspecify.annotations.Nullable;
 

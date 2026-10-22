@@ -1,16 +1,16 @@
 package com.sondertara.joya.core.kernel;
 
-import com.sondertara.joya.core.JoyaSettings;
-import com.sondertara.joya.core.jdbc.callback.ConnectionCallback;
-import com.sondertara.joya.core.jdbc.executor.JdbcExecutor;
-import com.sondertara.joya.core.jdbc.resultset.mapper.ResultSetExtractor;
-import com.sondertara.joya.core.jdbc.resultset.mapper.RowMapper;
-import com.sondertara.joya.core.jdbc.resultset.mapper.SingleColumnRowMapper;
-import com.sondertara.joya.core.jdbc.resultset.mapper.SingleRowRecordExtractor;
-import com.sondertara.joya.core.jdbc.support.dialect.BoundSql;
+import com.sondertara.joya.core.kernel.connection.ConnectionCallback;
+import com.sondertara.joya.core.kernel.executor.JdbcExecutor;
+import com.sondertara.joya.core.kernel.executor.ResultSetExtractor;
+import com.sondertara.joya.core.kernel.executor.RowMapper;
+import com.sondertara.joya.core.kernel.executor.SingleColumnRowMapper;
+import com.sondertara.joya.core.kernel.executor.SingleRowRecordExtractor;
 import com.sondertara.joya.core.kernel.connection.ConnectionProvider;
 import com.sondertara.joya.core.kernel.connection.DataSourceConnectionProvider;
 import com.sondertara.joya.core.kernel.dialect.Dialect;
+import com.sondertara.joya.core.naming.NamingPolicy;
+import com.sondertara.joya.core.kernel.executor.BatchSlice;
 import com.sondertara.joya.core.kernel.dialect.DialectStrategy;
 import com.sondertara.joya.core.kernel.interceptor.DefaultChain;
 import com.sondertara.joya.core.kernel.interceptor.RewriteContext;
@@ -18,8 +18,6 @@ import com.sondertara.joya.core.kernel.interceptor.SqlInterceptor;
 import com.sondertara.joya.core.kernel.statement.BatchSqlStatement;
 import com.sondertara.joya.core.kernel.statement.SqlStatement;
 import com.sondertara.joya.core.kernel.statement.StatementMetadata;
-import com.sondertara.joya.core.query.PageResult;
-import com.sondertara.joya.core.query.pagination.PageRequest;
 
 import javax.sql.DataSource;
 import java.io.Reader;
@@ -35,7 +33,7 @@ import java.util.stream.Stream;
  * <p>
  * 职责边界：
  * <ul>
- *   <li>只认 {@link SqlStatement} / {@link BatchSqlStatement}，不 import Entity / NativeSqlQuery。</li>
+ *   <li>只认 {@link SqlStatement} / {@link BatchSqlStatement}，不感知上层查询 DSL 或实体门面。</li>
  *   <li><b>拦截器链唯一入口</b>：所有 public 执行方法都先经 {@link SqlInterceptor} 链改写，无旁路。</li>
  *   <li>不感知事务：连接来源由 {@link ConnectionProvider} 决定；事务视图通过 {@link #bind(ConnectionProvider)} 派生，
  *       与原模板共享拦截器链与方言。</li>
@@ -47,7 +45,8 @@ public final class JoyaTemplate {
     private final List<SqlInterceptor> interceptors;
     private final ConnectionProvider connections;
     private final DialectStrategy dialectStrategy;
-    private final JoyaSettings settings;
+    private final ExecutionOptions executionOptions;
+    private final NamingPolicy namingPolicy;
     private final JdbcExecutor executor;
 
     public JoyaTemplate(DataSource dataSource) {
@@ -64,7 +63,8 @@ public final class JoyaTemplate {
                 interceptors,
                 new DataSourceConnectionProvider(dataSource, queryTimeoutSeconds),
                 DialectStrategy.cached(dataSource),
-                JoyaSettings.DEFAULT.withQueryTimeoutSeconds(queryTimeoutSeconds)
+                ExecutionOptions.DEFAULT.withQueryTimeoutSeconds(queryTimeoutSeconds),
+                NamingPolicy.DEFAULT
         );
     }
 
@@ -73,18 +73,20 @@ public final class JoyaTemplate {
             List<SqlInterceptor> interceptors,
             ConnectionProvider connections,
             DialectStrategy dialectStrategy,
-            JoyaSettings settings
+            ExecutionOptions executionOptions,
+            NamingPolicy namingPolicy
     ) {
         this.dataSource = Objects.requireNonNull(dataSource, "dataSource must not be null");
         this.interceptors = sortInterceptors(interceptors);
         this.connections = Objects.requireNonNull(connections, "connections must not be null");
         this.dialectStrategy = dialectStrategy == null ? DialectStrategy.cached(dataSource) : dialectStrategy;
-        this.settings = settings == null ? JoyaSettings.DEFAULT : settings;
+        this.executionOptions = executionOptions == null ? ExecutionOptions.DEFAULT : executionOptions;
+        this.namingPolicy = namingPolicy == null ? NamingPolicy.DEFAULT : namingPolicy;
         this.executor = new JdbcExecutor(this.connections);
     }
 
     /**
-     * 派生一个使用指定连接来源的模板视图（共享数据源标识、拦截器链、方言策略与客户端配置）。
+     * 派生一个使用指定连接来源的模板视图（共享数据源标识、拦截器链、方言策略与配置）。
      * <p>事务视图即由此产生：{@code template.bind(txConnectionProvider)}。
      */
     public JoyaTemplate bind(ConnectionProvider provider) {
@@ -93,7 +95,8 @@ public final class JoyaTemplate {
                 interceptors,
                 Objects.requireNonNull(provider, "provider must not be null"),
                 dialectStrategy,
-                settings
+                executionOptions,
+                namingPolicy
         );
     }
 
@@ -179,8 +182,7 @@ public final class JoyaTemplate {
     /** 方言分页截取：offset 起的 limit 行。 */
     public <T> List<T> queryLimit(SqlStatement statement, RowMapper<T> mapper, long offset, long limit) {
         SqlStatement rewritten = rewrite(statement);
-        BoundSql page = dialect().pageSql(bound(rewritten), offset, limit);
-        return executor.queryList(SqlStatement.select(page.getSqlString(), page.getArgs()), mapper);
+        return executor.queryList(pageStatement(rewritten, offset, limit), mapper);
     }
 
     /** 方言 count 包装。 */
@@ -188,12 +190,12 @@ public final class JoyaTemplate {
         return count(rewrite(statement));
     }
 
-    public <T> PageResult<T> queryPage(SqlStatement statement, RowMapper<T> mapper, PageRequest page) {
+    public <T> PageSlice<T> queryPage(SqlStatement statement, RowMapper<T> mapper, long offset, long limit) {
         SqlStatement rewritten = rewrite(statement);
         long total = count(rewritten);
         List<T> rows = total == 0 ? List.of() : executor.queryList(
-                pageStatement(rewritten, page.getOffset(), page.getSize()), mapper);
-        return new PageResult<>(rows, total, page.getPage(), page.getSize());
+                pageStatement(rewritten, offset, limit), mapper);
+        return new PageSlice<>(rows, total);
     }
 
     /**
@@ -202,16 +204,17 @@ public final class JoyaTemplate {
      * @param statement      数据查询语句
      * @param countStatement 计数语句（单行单列）
      * @param mapper         行映射器
-     * @param page           分页请求
+     * @param offset         起始偏移量
+     * @param limit          每页条数
      */
-    public <T> PageResult<T> queryPage(SqlStatement statement, SqlStatement countStatement, RowMapper<T> mapper, PageRequest page) {
+    public <T> PageSlice<T> queryPage(SqlStatement statement, SqlStatement countStatement, RowMapper<T> mapper, long offset, long limit) {
         SqlStatement rewrittenCount = rewrite(countStatement);
         Long counted = executor.query(rewrittenCount,
                 new SingleRowRecordExtractor<>(new SingleColumnRowMapper<>(Long.class)));
         long total = counted == null ? 0L : counted;
         List<T> rows = total == 0 ? List.of() : executor.queryList(
-                pageStatement(rewrite(statement), page.getOffset(), page.getSize()), mapper);
-        return new PageResult<>(rows, total, page.getPage(), page.getSize());
+                pageStatement(rewrite(statement), offset, limit), mapper);
+        return new PageSlice<>(rows, total);
     }
 
     /** 方言分页截取的流式查询：返回的 Stream 必须关闭（try-with-resources）。 */
@@ -220,19 +223,14 @@ public final class JoyaTemplate {
     }
 
     private long count(SqlStatement rewritten) {
-        BoundSql countSql = dialect().countSql(bound(rewritten));
-        Long total = executor.query(SqlStatement.select(countSql.getSqlString(), countSql.getArgs()),
+        SqlStatement countStmt = dialect().countSql(rewritten);
+        Long total = executor.query(countStmt,
                 new SingleRowRecordExtractor<>(new SingleColumnRowMapper<>(Long.class)));
         return total == null ? 0L : total;
     }
 
     private SqlStatement pageStatement(SqlStatement rewritten, long offset, long limit) {
-        BoundSql page = dialect().pageSql(bound(rewritten), offset, limit);
-        return SqlStatement.select(page.getSqlString(), page.getArgs());
-    }
-
-    private static BoundSql bound(SqlStatement statement) {
-        return new BoundSql.BoundSqlObj(statement.sql(), statement.args().toArray());
+        return dialect().pageSql(rewritten, offset, limit);
     }
 
     // ===== 变更 =====
@@ -248,23 +246,31 @@ public final class JoyaTemplate {
 
     /** 列级绑定批量执行（SQL 文本同样经过拦截器链）。 */
     public int[] batchUpdate(BatchSqlStatement batch) {
-        if (batch.rowCount() == 0) {
-            return new int[0];
+        return batchExecute(batch).batchCounts();
+    }
+
+    /** 列级绑定批量执行（支持分片 Flush 与生成键收集，返回内核值类型）。 */
+    public BatchSlice batchExecute(BatchSqlStatement batch) {
+        if (batch == null || batch.rowCount() == 0) {
+            return BatchSlice.EMPTY;
         }
         String sql = rewriteBatchSql(batch.sql(), batch.metadata());
-        BatchSqlStatement effective = sql.equals(batch.sql())
-                ? batch
-                : new BatchSqlStatement(sql, batch.columns(), batch.rows(), batch.metadata());
-        return executor.batchUpdate(effective);
+        BatchSqlStatement effective = batch.withSql(sql);
+        return executor.batchExecute(effective);
     }
 
     /** 以 {@code template.sql()} 为模板，对每组参数各执行一次（SQL 文本同样经过拦截器链）。 */
     public int[] batchUpdate(SqlStatement template, List<Object[]> rows) {
+        return batchUpdate(template, rows, executionOptions.batchSize());
+    }
+
+    /** 以 {@code template.sql()} 为模板并按指定分片大小批量执行。 */
+    public int[] batchUpdate(SqlStatement template, List<Object[]> rows, int batchSize) {
         if (!template.parameters().isEmpty()) {
             throw new IllegalArgumentException("batch template must not carry parameters; pass them as rows");
         }
         String sql = rewriteBatchSql(template.sql(), template.metadata());
-        return executor.batchUpdate(template.withSql(sql), rows);
+        return executor.batchUpdate(template.withSql(sql), rows, batchSize);
     }
 
     // ===== 逃生舱 =====
@@ -290,8 +296,12 @@ public final class JoyaTemplate {
         return dialectStrategy;
     }
 
-    public JoyaSettings settings() {
-        return settings;
+    public ExecutionOptions executionOptions() {
+        return executionOptions;
+    }
+
+    public NamingPolicy namingPolicy() {
+        return namingPolicy;
     }
 
     public DataSource dataSource() {

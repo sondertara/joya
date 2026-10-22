@@ -1,9 +1,9 @@
 package com.sondertara.joya.spring.support;
 
 import com.sondertara.joya.core.kernel.JoyaTemplate;
-import com.sondertara.joya.core.kernel.tx.TxEngine;
 import com.sondertara.joya.core.tx.IllegalTxStateException;
 import com.sondertara.joya.core.tx.Tx;
+import com.sondertara.joya.core.tx.TxEngine;
 import com.sondertara.joya.core.tx.TxException;
 import com.sondertara.joya.core.tx.TxImpl;
 import com.sondertara.joya.core.tx.TxOptions;

@@ -6,7 +6,7 @@
  */
 package com.sondertara.joya.utils;
 
-import com.sondertara.common.convert.ConvertUtils;
+import com.sondertara.joya.utils.ConvertUtils;
 import com.sondertara.joya.exceptions.TaraException;
 import lombok.extern.slf4j.Slf4j;
 import org.jspecify.annotations.Nullable;

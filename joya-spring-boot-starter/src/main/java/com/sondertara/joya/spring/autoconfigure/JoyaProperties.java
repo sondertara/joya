@@ -1,7 +1,7 @@
 package com.sondertara.joya.spring.autoconfigure;
 
 import com.sondertara.joya.core.JoyaSettings;
-import com.sondertara.joya.core.jdbc.support.DbType;
+import com.sondertara.joya.core.kernel.dialect.DbType;
 import com.sondertara.joya.core.kernel.dialect.DialectStrategy;
 import org.springframework.boot.autoconfigure.jdbc.DataSourceProperties;
 import org.springframework.boot.context.properties.ConfigurationProperties;

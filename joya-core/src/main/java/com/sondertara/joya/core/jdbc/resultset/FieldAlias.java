@@ -1,8 +1,7 @@
 package com.sondertara.joya.core.jdbc.resultset;
 
 import com.fasterxml.jackson.annotation.JacksonAnnotation;
-import com.sondertara.common.convert.impl.NoopConverter;
-import com.sondertara.common.function.TypedConverter;
+import com.sondertara.joya.core.function.TypedConverter;
 
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
@@ -74,5 +73,5 @@ public @interface FieldAlias {
      */
     public String[] value() default {};
 
-    Class<? extends TypedConverter> converter() default NoopConverter.class;
+    Class<? extends TypedConverter> converter() default TypedConverter.Noop.class;
 }

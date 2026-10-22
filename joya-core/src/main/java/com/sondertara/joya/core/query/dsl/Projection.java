@@ -1,6 +1,6 @@
 package com.sondertara.joya.core.query.dsl;
 
-import com.sondertara.joya.core.jdbc.resultset.mapper.RowMapper;
+import com.sondertara.joya.core.kernel.executor.RowMapper;
 
 import java.util.List;
 

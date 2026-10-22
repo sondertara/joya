@@ -1,6 +1,6 @@
 package com.sondertara.joya.core.jdbc.dao;
 
-import com.sondertara.common.function.IGetter;
+import com.sondertara.joya.core.function.IGetter;
 import com.sondertara.joya.core.DataOps;
 import com.sondertara.joya.core.EntityOps;
 import com.sondertara.joya.core.query.PageResult;
@@ -52,6 +52,43 @@ public class JoyaMapperImpl<T> implements JoyaMapper<T> {
             list.add(e);
         }
         ops().saveAll(list);
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public <S extends T> MutationResult insertAll(Collection<S> entities) {
+        if (entities == null || entities.isEmpty()) {
+            return MutationResult.EMPTY;
+        }
+        return ops().insertAll((Collection<T>) entities);
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public <S extends T> MutationResult updateAll(Collection<S> entities) {
+        if (entities == null || entities.isEmpty()) {
+            return MutationResult.EMPTY;
+        }
+        return ops().updateAll((Collection<T>) entities);
+    }
+
+    @Override
+    @SafeVarargs
+    @SuppressWarnings("unchecked")
+    public final <S extends T> MutationResult updateAll(Collection<S> entities, IGetter<T, ?>... columns) {
+        if (entities == null || entities.isEmpty()) {
+            return MutationResult.EMPTY;
+        }
+        return ops().updateAll((Collection<T>) entities, columns);
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public <S extends T> MutationResult patchAll(Collection<S> entities) {
+        if (entities == null || entities.isEmpty()) {
+            return MutationResult.EMPTY;
+        }
+        return ops().patchAll((Collection<T>) entities);
     }
 
     @Override

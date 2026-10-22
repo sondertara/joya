@@ -1,11 +1,11 @@
 package com.sondertara.joya.core;
 
-import com.sondertara.common.function.IGetter;
+import com.sondertara.joya.core.function.IGetter;
 import com.sondertara.joya.core.kernel.JoyaTemplate;
 import com.sondertara.joya.core.kernel.statement.SqlStatement;
 import com.sondertara.joya.core.metadata.EntityMetadataContext;
 import com.sondertara.joya.core.metadata.EntitySnapshot;
-import com.sondertara.joya.core.metadata.MutationContext;
+import com.sondertara.joya.core.statement.MutationContext;
 import com.sondertara.joya.core.result.MutationResult;
 import com.sondertara.joya.core.statement.factory.InsertStatementFactory;
 import org.jspecify.annotations.Nullable;
@@ -80,7 +80,7 @@ public final class EntityInsert<T> {
             throw new IllegalStateException("Insert values must not be empty");
         }
         Set<String> declared = new LinkedHashSet<>(values.keySet());
-        MutationContext ctx = new MutationContext(meta, values, null, declared, ignoreNull, false, template.settings());
+        MutationContext ctx = new MutationContext(meta, values, null, declared, ignoreNull, false, template.namingPolicy());
         return InsertStatementFactory.create(ctx);
     }
 

@@ -1,20 +1,20 @@
 package com.sondertara.joya.core;
 
-import com.sondertara.joya.core.jdbc.callback.ConnectionCallback;
+import com.sondertara.joya.core.kernel.connection.ConnectionCallback;
 import com.sondertara.joya.core.jdbc.dao.JoyaMapper;
-import com.sondertara.joya.core.jdbc.support.DbType;
+import com.sondertara.joya.core.kernel.dialect.DbType;
 import com.sondertara.joya.core.kernel.JoyaTemplate;
 import com.sondertara.joya.core.kernel.connection.ConnectionProvider;
 import com.sondertara.joya.core.kernel.connection.DataSourceConnectionProvider;
 import com.sondertara.joya.core.kernel.dialect.DialectStrategy;
 import com.sondertara.joya.core.kernel.interceptor.SqlInterceptor;
 import com.sondertara.joya.core.kernel.statement.SqlStatement;
-import com.sondertara.joya.core.kernel.tx.TxEngine;
 import com.sondertara.joya.core.proxy.JdkMapperProxy;
 import com.sondertara.joya.core.query.dsl.Query;
 import com.sondertara.joya.core.tx.JdbcTxEngine;
 import com.sondertara.joya.core.tx.TxCallback;
 import com.sondertara.joya.core.tx.TxConsumer;
+import com.sondertara.joya.core.tx.TxEngine;
 import com.sondertara.joya.core.tx.TxStarter;
 
 import javax.sql.DataSource;
@@ -168,7 +168,7 @@ public final class JoyaClient implements DataOps {
 
     /** 获取当前客户端的实例级配置 {@link JoyaSettings}。 */
     public JoyaSettings settings() {
-        return template.settings();
+        return JoyaSettings.of(template.executionOptions(), template.namingPolicy());
     }
 
     /** 获取当前客户端使用的事务引擎 {@link TxEngine}。 */
@@ -260,7 +260,8 @@ public final class JoyaClient implements DataOps {
                     interceptors,
                     effectiveConnections,
                     effectiveDialect,
-                    effectiveSettings
+                    effectiveSettings.executionOptions(),
+                    effectiveSettings.namingPolicy()
             );
             return new JoyaClient(tpl, effectiveTxEngine);
         }

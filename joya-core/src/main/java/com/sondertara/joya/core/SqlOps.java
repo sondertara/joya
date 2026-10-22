@@ -1,10 +1,11 @@
 package com.sondertara.joya.core;
 
 import com.sondertara.joya.core.jdbc.resultset.mapper.BeanRowMapper;
-import com.sondertara.joya.core.jdbc.resultset.mapper.ResultSetExtractor;
-import com.sondertara.joya.core.jdbc.resultset.mapper.RowMapper;
-import com.sondertara.joya.core.jdbc.resultset.mapper.SingleColumnRowMapper;
+import com.sondertara.joya.core.kernel.executor.ResultSetExtractor;
+import com.sondertara.joya.core.kernel.executor.RowMapper;
+import com.sondertara.joya.core.kernel.executor.SingleColumnRowMapper;
 import com.sondertara.joya.core.kernel.JoyaTemplate;
+import com.sondertara.joya.core.kernel.PageSlice;
 import com.sondertara.joya.core.kernel.statement.Operation;
 import com.sondertara.joya.core.kernel.statement.SqlStatement;
 import com.sondertara.joya.core.kernel.statement.StatementMetadata;
@@ -21,6 +22,8 @@ import java.sql.Clob;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.time.temporal.Temporal;
+import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Date;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -28,6 +31,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.function.Function;
 import java.util.stream.Stream;
 
 /**
@@ -136,7 +140,7 @@ public final class SqlOps {
 
     /** 分页查询。 */
     public <T> PageResult<T> page(Class<T> type, PageRequest pageRequest) {
-        return template.queryPage(selectStmt(), mapperFor(type), pageRequest);
+        return page(mapperFor(type), pageRequest);
     }
 
     /** 分页查询（快捷页码与页大小）。 */
@@ -146,7 +150,18 @@ public final class SqlOps {
 
     /** 分页查询（自定义 RowMapper）。 */
     public <T> PageResult<T> page(RowMapper<T> rowMapper, PageRequest pageRequest) {
-        return template.queryPage(selectStmt(), rowMapper, pageRequest);
+        Objects.requireNonNull(pageRequest, "pageRequest must not be null");
+        PageSlice<T> slice = template.queryPage(
+                selectStmt(), rowMapper, pageRequest.getOffset(), pageRequest.getSize());
+        return PageResult.of(slice.rows())
+                .pagination(pageRequest.getPage(), pageRequest.getSize())
+                .total(slice.total())
+                .build();
+    }
+
+    /** 按方言偏移量与行数截取结果列表。 */
+    public <T> List<T> limit(Class<T> type, long offset, long limit) {
+        return template.queryLimit(selectStmt(), mapperFor(type), offset, limit);
     }
 
     /**
@@ -185,10 +200,40 @@ public final class SqlOps {
 
     /** 使用当前 SQL 模板执行批量参数更新。 */
     public int[] batch(List<Object[]> batchArgs) {
+        return batch(batchArgs, template.executionOptions().batchSize());
+    }
+
+    /** 使用当前 SQL 模板并按指定分片大小执行批量参数更新。 */
+    public int[] batch(List<Object[]> batchArgs, int batchSize) {
         SqlStatement batchTemplate = presetStatement != null
                 ? presetStatement
                 : SqlStatement.of(sql, List.of(), StatementMetadata.of(Operation.UPDATE));
-        return template.batchUpdate(batchTemplate, batchArgs);
+        return template.batchUpdate(batchTemplate, batchArgs, batchSize);
+    }
+
+    /**
+     * 对业务集合直接执行批量 SQL（使用映射函数提取每行参数数组）。
+     *
+     * @param items         业务对象集合
+     * @param argsExtractor 将单个业务对象转换为参数数组的函数
+     */
+    public <T> int[] batch(Collection<T> items, Function<T, Object[]> argsExtractor) {
+        return batch(items, template.executionOptions().batchSize(), argsExtractor);
+    }
+
+    /**
+     * 对业务集合按指定分片大小执行批量 SQL。
+     */
+    public <T> int[] batch(Collection<T> items, int batchSize, Function<T, Object[]> argsExtractor) {
+        Objects.requireNonNull(argsExtractor, "argsExtractor must not be null");
+        if (items == null || items.isEmpty()) {
+            return new int[0];
+        }
+        List<Object[]> rows = new ArrayList<>(items.size());
+        for (T item : items) {
+            rows.add(argsExtractor.apply(item));
+        }
+        return batch(rows, batchSize);
     }
 
     public static <T> RowMapper<T> mapperFor(Class<T> type) {

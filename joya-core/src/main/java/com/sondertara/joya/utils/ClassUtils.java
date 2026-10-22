@@ -94,4 +94,69 @@ public final class ClassUtils {
             throw new RuntimeException("Failed to instantiate " + clazz.getName(), e);
         }
     }
+
+    public static Object getFieldValue(Object target, String fieldName) {
+        if (target == null || Strings.isBlank(fieldName)) {
+            return null;
+        }
+        for (Field field : getFieldsByCache(target.getClass())) {
+            if (field.getName().equals(fieldName)) {
+                try {
+                    field.setAccessible(true);
+                    return field.get(target);
+                } catch (IllegalAccessException e) {
+                    throw new RuntimeException("Failed to read field [" + fieldName + "] on " + target.getClass().getName(), e);
+                }
+            }
+        }
+        return null;
+    }
+
+    public static void setFieldValue(Object target, String fieldName, Object value) {
+        if (target == null || Strings.isBlank(fieldName)) {
+            return;
+        }
+        for (Field field : getFieldsByCache(target.getClass())) {
+            if (field.getName().equals(fieldName)) {
+                try {
+                    field.setAccessible(true);
+                    field.set(target, value);
+                    return;
+                } catch (IllegalAccessException e) {
+                    throw new RuntimeException("Failed to write field [" + fieldName + "] on " + target.getClass().getName(), e);
+                }
+            }
+        }
+    }
+
+    public static void copyProperties(Object source, Object target) {
+        if (source == null || target == null) {
+            return;
+        }
+        List<Field> sourceFields = getFieldsByCache(source.getClass());
+        List<Field> targetFields = getFieldsByCache(target.getClass());
+        for (Field targetField : targetFields) {
+            if (Modifier.isFinal(targetField.getModifiers())) {
+                continue;
+            }
+            for (Field sourceField : sourceFields) {
+                if (sourceField.getName().equals(targetField.getName())) {
+                    try {
+                        sourceField.setAccessible(true);
+                        targetField.setAccessible(true);
+                        Object val = sourceField.get(source);
+                        if (val != null) {
+                            if (TypeUtils.getWrapClass(targetField.getType()).isInstance(val)) {
+                                targetField.set(target, val);
+                            } else {
+                                targetField.set(target, ConvertUtils.convert(val, targetField.getType()));
+                            }
+                        }
+                    } catch (Exception ignored) {
+                    }
+                    break;
+                }
+            }
+        }
+    }
 }

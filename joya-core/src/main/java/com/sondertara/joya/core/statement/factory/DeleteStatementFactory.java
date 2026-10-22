@@ -7,7 +7,7 @@ import com.sondertara.joya.core.kernel.statement.SqlStatement;
 import com.sondertara.joya.core.kernel.statement.StatementMetadata;
 import com.sondertara.joya.core.kernel.statement.TableRef;
 import com.sondertara.joya.core.metadata.EntityMetadataContext;
-import com.sondertara.joya.core.metadata.MutationContext;
+import com.sondertara.joya.core.statement.MutationContext;
 import com.sondertara.joya.core.query.RenderContext;
 import com.sondertara.joya.core.query.criterion.WhereCriterion;
 
@@ -30,7 +30,7 @@ public final class DeleteStatementFactory {
     public static SqlStatement create(MutationContext ctx) {
         EntityMetadataContext meta = ctx.metadata();
         WhereCriterion where = ctx.where();
-        var settings = ctx.settings();
+        var namingPolicy = ctx.namingPolicy();
 
         if ((where == null || where.isEmpty()) && !ctx.allowAll()) {
             throw new IllegalStateException("DELETE without WHERE is not allowed; use allowAll() explicitly");
@@ -39,13 +39,12 @@ public final class DeleteStatementFactory {
         SqlParameterList params = new SqlParameterList();
         StringBuilder whereSql = new StringBuilder();
         if (where != null && !where.isEmpty()) {
-            RenderContext renderContext = RenderContext.forSingleTable(meta, settings);
+            RenderContext renderContext = RenderContext.forSingleTable(meta, namingPolicy);
             where.render(renderContext, whereSql, params, ParameterSource.WHERE);
         }
 
-        String tableName = meta.qualifiedTableName(settings);
-        String sql = "DELETE FROM " + tableName
-                + (whereSql.isEmpty() ? "" : " WHERE " + whereSql);
+        String tableName = meta.qualifiedTableName(namingPolicy);
+        String sql = SqlRenderer.renderDelete(tableName, whereSql.toString());
 
         Set<TableRef> tables = new LinkedHashSet<>();
         tables.add(TableRef.of(tableName));

@@ -57,9 +57,9 @@
                 <version>1.7.36</version>
             </dependency>
             <dependency>
-                <groupId>com.sondertara</groupId>
-                <artifactId>common-tara-core</artifactId>
-                <version>1.1.5-SNAPSHOT</version>
+                <groupId>org.jspecify</groupId>
+                <artifactId>jspecify</artifactId>
+                <version>1.0.0</version>
             </dependency>
         </dependencies>
     </dependencyManagement>

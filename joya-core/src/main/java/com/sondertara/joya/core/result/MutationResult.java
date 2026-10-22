@@ -1,25 +1,30 @@
 package com.sondertara.joya.core.result;
 
-import com.sondertara.common.convert.ConvertUtils;
+import com.sondertara.joya.utils.ConvertUtils;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 
+import java.sql.Statement;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
 /**
- * 变更操作结果 —— 统一承载 INSERT/UPDATE/DELETE/UPSERT 的执行结果。
+ * 变更操作结果 —— 统一承载单条与批量 INSERT/UPDATE/DELETE/UPSERT 的执行结果。
  *
  * @author huangxiaohu
  */
 public record MutationResult(
-        long affectedRows,                              // 影响行数
-        @Nullable List<Object> generatedKeys,           // 生成键（自增 ID、序列、RETURNING 单列）
-        @Nullable Map<String, Object> serverInfo,       // 数据库特有诊断信息（PG oid、MySQL info 等）
+        long affectedRows,                              // 影响行数（自动归一 JDBC SUCCESS_NO_INFO）
+        @Nullable List<Object> generatedKeys,           // 生成键（自增 ID、序列、RETURNING）
+        @Nullable Map<String, Object> serverInfo,       // 数据库特有诊断信息（含 batchCounts 等）
         boolean success                                 // 无异常即 true
 ) {
+
+    public static final String KEY_BATCH_COUNTS = "batchCounts";
+    private static final int[] EMPTY_COUNTS = new int[0];
 
     /**
      * 空结果单例。
@@ -39,6 +44,96 @@ public record MutationResult(
     public static MutationResult ofInsert(long affectedRows, @Nullable Object generatedKey) {
         List<Object> keys = generatedKey == null ? Collections.emptyList() : List.of(generatedKey);
         return new MutationResult(affectedRows, keys, Collections.emptyMap(), true);
+    }
+
+    /**
+     * 构造批量变更结果（自动处理 JDBC {@link Statement#SUCCESS_NO_INFO} 即 {@code -2} 的影响行数汇总）。
+     */
+    public static MutationResult ofBatch(int[] batchCounts) {
+        return ofBatch(batchCounts, Collections.emptyList());
+    }
+
+    /**
+     * 构造带生成键列表的批量变更结果。
+     */
+    public static MutationResult ofBatch(int[] batchCounts, @Nullable List<Object> generatedKeys) {
+        int[] safeCounts = batchCounts == null ? EMPTY_COUNTS : batchCounts;
+        long totalAffected = sumBatchCounts(safeCounts);
+        List<Object> safeKeys = (generatedKeys == null || generatedKeys.isEmpty())
+                ? Collections.emptyList()
+                : List.copyOf(generatedKeys);
+        Map<String, Object> info = safeCounts.length == 0
+                ? Collections.emptyMap()
+                : Map.of(KEY_BATCH_COUNTS, safeCounts);
+        return new MutationResult(totalAffected, safeKeys, info, true);
+    }
+
+    /**
+     * 合并两个变更结果（用于多分组批处理或 Upsert 汇总）。
+     */
+    public MutationResult merge(@Nullable MutationResult other) {
+        if (other == null || (other.affectedRows == 0 && !other.hasGeneratedKeys() && other.batchCounts().length == 0)) {
+            return this;
+        }
+        if (this.affectedRows == 0 && !this.hasGeneratedKeys() && this.batchCounts().length == 0) {
+            return other;
+        }
+        List<Object> mergedKeys;
+        if (!this.hasGeneratedKeys()) {
+            mergedKeys = other.generatedKeys;
+        } else if (!other.hasGeneratedKeys()) {
+            mergedKeys = this.generatedKeys;
+        } else {
+            mergedKeys = new ArrayList<>(this.generatedKeys.size() + other.generatedKeys.size());
+            mergedKeys.addAll(this.generatedKeys);
+            mergedKeys.addAll(other.generatedKeys);
+        }
+        int[] c1 = this.batchCounts();
+        int[] c2 = other.batchCounts();
+        int[] mergedCounts;
+        if (c1.length == 0) {
+            mergedCounts = c2;
+        } else if (c2.length == 0) {
+            mergedCounts = c1;
+        } else {
+            mergedCounts = new int[c1.length + c2.length];
+            System.arraycopy(c1, 0, mergedCounts, 0, c1.length);
+            System.arraycopy(c2, 0, mergedCounts, c1.length, c2.length);
+        }
+        Map<String, Object> info = mergedCounts.length == 0
+                ? Collections.emptyMap()
+                : Map.of(KEY_BATCH_COUNTS, mergedCounts);
+        return new MutationResult(
+                this.affectedRows + other.affectedRows,
+                mergedKeys == null ? Collections.emptyList() : Collections.unmodifiableList(mergedKeys),
+                info,
+                this.success && other.success
+        );
+    }
+
+    /**
+     * 获取底层 JDBC 批处理逐行计数数组（无批处理计数时返回空数组）。
+     */
+    public int[] batchCounts() {
+        if (serverInfo != null && serverInfo.get(KEY_BATCH_COUNTS) instanceof int[] counts) {
+            return counts;
+        }
+        return EMPTY_COUNTS;
+    }
+
+    public static long sumBatchCounts(int[] counts) {
+        if (counts == null || counts.length == 0) {
+            return 0L;
+        }
+        long sum = 0L;
+        for (int c : counts) {
+            if (c >= 0) {
+                sum += c;
+            } else if (c == Statement.SUCCESS_NO_INFO) {
+                sum += 1L;
+            }
+        }
+        return sum;
     }
 
     // ========== 生成键便捷访问 ==========

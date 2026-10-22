@@ -1,8 +1,6 @@
 package com.sondertara.joya.exceptions;
 
 
-import com.sondertara.joya.utils.Strings;
-
 import java.util.Arrays;
 
 /**
@@ -29,9 +27,40 @@ public class TaraException extends RuntimeException {
     static String arrayFormat(String format, Object[] argArray) {
         Throwable candidate = getThrowableCandidate(argArray);
         if (null == candidate) {
-            return Strings.format(format, argArray);
+            return format(format, argArray);
         }
-        return Strings.format(format, Arrays.copyOf(argArray, argArray.length - 1));
+        return format(format, Arrays.copyOf(argArray, argArray.length - 1));
+    }
+
+    /**
+     * 内联的 {@code {}} 占位符替换。
+     *
+     * <p>异常类必须保持为零依赖叶子（{@code utils} 反过来依赖本包），
+     * 因此不引用 {@code utils.Strings}，避免 {@code exceptions ↔ utils} 的循环。
+     */
+    private static String format(String template, Object[] args) {
+        if (template == null) {
+            return null;
+        }
+        if (args == null || args.length == 0) {
+            return template;
+        }
+        StringBuilder sb = new StringBuilder(template.length() + args.length * 10);
+        int argIndex = 0;
+        for (int i = 0; i < template.length(); i++) {
+            char c = template.charAt(i);
+            if (c == '{' && i + 1 < template.length() && template.charAt(i + 1) == '}') {
+                if (argIndex < args.length) {
+                    sb.append(args[argIndex++]);
+                } else {
+                    sb.append("{}");
+                }
+                i++;
+            } else {
+                sb.append(c);
+            }
+        }
+        return sb.toString();
     }
 
     static Throwable getThrowableCandidate(Object[] argArray) {

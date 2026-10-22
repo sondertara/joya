@@ -74,7 +74,7 @@ public final class TxImpl implements Tx {
 
     @Override
     public JoyaSettings settings() {
-        return template.settings();
+        return JoyaSettings.of(template.executionOptions(), template.namingPolicy());
     }
 
     // ===== 保存点（Savepoint） =====

@@ -1,11 +1,14 @@
 package com.sondertara.joya.core.query;
 
-import com.sondertara.joya.core.JoyaSettings;
 import com.sondertara.joya.core.cache.CacheHolder;
+import com.sondertara.joya.core.naming.NamingPolicy;
+import com.sondertara.joya.core.kernel.statement.ParameterSource;
+import com.sondertara.joya.core.kernel.statement.SqlParameterList;
 import com.sondertara.joya.core.kernel.statement.TableRef;
 import com.sondertara.joya.core.metadata.EntityMetadataContext;
 import com.sondertara.joya.core.model.ColumnAlias;
-import com.sondertara.joya.core.model.JoinPart;
+import com.sondertara.joya.core.query.JoinPart;
+import com.sondertara.joya.core.query.criterion.WhereCriterion;
 import com.sondertara.joya.exceptions.DbException;
 import com.sondertara.joya.utils.Strings;
 import org.jspecify.annotations.Nullable;
@@ -43,31 +46,31 @@ public final class RenderContext {
     private final Class<?> rootType;
     private final boolean aliased;
     private final List<JoinPart> joins;
-    private final JoyaSettings settings;
+    private final NamingPolicy namingPolicy;
     private final Map<Class<?>, TableBinding> tableBindings = new LinkedHashMap<>();
 
     private record TableBinding(Class<?> entityClass, EntityMetadataContext meta, @Nullable String alias) {
     }
 
-    private RenderContext(Class<?> rootType, boolean aliased, List<JoinPart> joins, JoyaSettings settings) {
+    private RenderContext(Class<?> rootType, boolean aliased, List<JoinPart> joins, NamingPolicy namingPolicy) {
         this.rootType = Objects.requireNonNull(rootType, "rootType must not be null");
         this.aliased = aliased;
         this.joins = joins == null ? List.of() : List.copyOf(joins);
-        this.settings = Objects.requireNonNullElse(settings, JoyaSettings.DEFAULT);
+        this.namingPolicy = Objects.requireNonNullElse(namingPolicy, NamingPolicy.DEFAULT);
     }
 
     /**
      * 构造多表查询渲染上下文（带表别名 {@code t0, t1...}，严格按 {@code rootType + joins} 顺序绑定）。
      */
     public static RenderContext forQuery(Class<?> rootType, List<JoinPart> joins) {
-        return forQuery(rootType, joins, JoyaSettings.DEFAULT);
+        return forQuery(rootType, joins, NamingPolicy.DEFAULT);
     }
 
     /**
-     * 构造多表查询渲染上下文（支持传入实例级 {@link JoyaSettings} 控制最大联表数与大小写策略）。
+     * 构造多表查询渲染上下文（支持传入实例级 {@link NamingPolicy} 控制最大联表数与大小写策略）。
      */
-    public static RenderContext forQuery(Class<?> rootType, List<JoinPart> joins, JoyaSettings settings) {
-        RenderContext ctx = new RenderContext(rootType, true, joins, settings);
+    public static RenderContext forQuery(Class<?> rootType, List<JoinPart> joins, NamingPolicy namingPolicy) {
+        RenderContext ctx = new RenderContext(rootType, true, joins, namingPolicy);
         ctx.registerQueryTable(rootType);
         if (joins != null) {
             for (JoinPart join : joins) {
@@ -81,7 +84,7 @@ public final class RenderContext {
                 }
             }
         }
-        int maxJoinedTables = ctx.settings.maxJoinTable();
+        int maxJoinedTables = ctx.namingPolicy.maxJoinTable();
         if (ctx.tableBindings.size() > maxJoinedTables) {
             throw new DbException("The maximum number of tables that can be joined is " + maxJoinedTables);
         }
@@ -92,16 +95,16 @@ public final class RenderContext {
      * 构造单表语句渲染上下文（无表别名，直接输出列名，适用于单表 UPDATE / DELETE / SELECT）。
      */
     public static RenderContext forSingleTable(EntityMetadataContext meta) {
-        return forSingleTable(meta, JoyaSettings.DEFAULT);
+        return forSingleTable(meta, NamingPolicy.DEFAULT);
     }
 
     /**
-     * 构造单表语句渲染上下文（支持传入实例级 {@link JoyaSettings}）。
+     * 构造单表语句渲染上下文（支持传入实例级 {@link NamingPolicy}）。
      */
-    public static RenderContext forSingleTable(EntityMetadataContext meta, JoyaSettings settings) {
+    public static RenderContext forSingleTable(EntityMetadataContext meta, NamingPolicy namingPolicy) {
         Objects.requireNonNull(meta, "meta must not be null");
         Class<?> entityType = meta.entityType() != null ? meta.entityType() : Object.class;
-        RenderContext ctx = new RenderContext(entityType, false, List.of(), settings);
+        RenderContext ctx = new RenderContext(entityType, false, List.of(), namingPolicy);
         ctx.tableBindings.put(entityType, new TableBinding(entityType, meta, null));
         return ctx;
     }
@@ -112,11 +115,11 @@ public final class RenderContext {
     public static RenderContext forSingleTable(Class<?> entityClass) {
         Objects.requireNonNull(entityClass, "entityClass must not be null");
         EntityMetadataContext meta = CacheHolder.tableMetaCache().getMetadataContext(entityClass);
-        return forSingleTable(meta, JoyaSettings.DEFAULT);
+        return forSingleTable(meta, NamingPolicy.DEFAULT);
     }
 
-    public JoyaSettings settings() {
-        return settings;
+    public NamingPolicy namingPolicy() {
+        return namingPolicy;
     }
 
     private void registerQueryTable(Class<?> entityClass) {
@@ -126,7 +129,7 @@ public final class RenderContext {
         EntityMetadataContext meta = CacheHolder.tableMetaCache().getMetadataContext(entityClass);
         // 若不同实体类映射到同一物理表，复用同一别名
         for (TableBinding existing : tableBindings.values()) {
-            if (existing.meta().tableName().equalsIgnoreCase(meta.tableName())) {
+            if (existing.meta().qualifiedTableName().equalsIgnoreCase(meta.qualifiedTableName())) {
                 tableBindings.put(entityClass, new TableBinding(entityClass, meta, existing.alias()));
                 return;
             }
@@ -162,9 +165,7 @@ public final class RenderContext {
     public ColumnAlias resolveGetterColumn(Class<?> entityClass, String propertyName) {
         TableBinding binding = tableBindings.get(entityClass);
         if (binding == null) {
-            throw new IllegalStateException("Entity [" + entityClass.getSimpleName()
-                    + "] (referenced via property '" + propertyName
-                    + "') is not registered in FROM / JOIN of query rooted at [" + rootType.getSimpleName() + "]");
+            throw unjoinedEntityError(entityClass, propertyName);
         }
         String columnName = binding.meta().columnByField(propertyName);
         if (columnName == null) {
@@ -172,6 +173,28 @@ public final class RenderContext {
                     "Can not find column for property [{}] on entity [{}]", propertyName, entityClass.getName()));
         }
         return buildColumnAlias(binding, columnName, propertyName);
+    }
+
+    private IllegalStateException unjoinedEntityError(Class<?> entityClass, @Nullable String propertyName) {
+        String unjoinedTable = entityClass.getSimpleName();
+        try {
+            EntityMetadataContext unjoinedMeta = CacheHolder.tableMetaCache().getMetadataContext(entityClass);
+            if (unjoinedMeta != null && unjoinedMeta.qualifiedTableName() != null) {
+                unjoinedTable = unjoinedMeta.qualifiedTableName(namingPolicy);
+            }
+        } catch (Exception ignored) {
+        }
+        List<String> availableTables = new ArrayList<>(tableBindings.size());
+        for (TableBinding b : tableBindings.values()) {
+            availableTables.add(b.entityClass().getSimpleName() + "(" + b.meta().qualifiedTableName(namingPolicy) + ")");
+        }
+        String refDesc = propertyName != null
+                ? entityClass.getSimpleName() + "::" + propertyName
+                : entityClass.getSimpleName();
+        return new IllegalStateException("Entity [" + entityClass.getSimpleName()
+                + "] (referenced via '" + refDesc + "', table '" + unjoinedTable
+                + "') is not registered in FROM / JOIN of query rooted at [" + rootType.getSimpleName()
+                + "]. Available tables: " + availableTables);
     }
 
     /**
@@ -221,8 +244,7 @@ public final class RenderContext {
     public List<ColumnAlias> getAllColumns(Class<?> entityClass) {
         TableBinding binding = tableBindings.get(entityClass);
         if (binding == null) {
-            throw new IllegalStateException("Entity [" + entityClass.getSimpleName()
-                    + "] is not registered in FROM / JOIN of query rooted at [" + rootType.getSimpleName() + "]");
+            throw unjoinedEntityError(entityClass, null);
         }
         List<String> colNames = binding.meta().columnNames();
         List<ColumnAlias> result = new ArrayList<>(colNames.size());
@@ -236,8 +258,15 @@ public final class RenderContext {
      * 渲染 FROM 与 JOIN 子句（不含前导 {@code FROM } 关键字）。
      */
     public String renderFromClause() {
+        return renderFromClause(new SqlParameterList());
+    }
+
+    /**
+     * 渲染 FROM 与 JOIN 子句（不含前导 {@code FROM } 关键字），并将 {@code JOIN ... ON} 附加条件中的参数写入 {@code params}。
+     */
+    public String renderFromClause(SqlParameterList params) {
         TableBinding root = tableBindings.get(rootType);
-        String rootTableName = root.meta().tableName(settings);
+        String rootTableName = root.meta().qualifiedTableName(namingPolicy);
         if (joins.isEmpty()) {
             return root.alias() == null
                     ? rootTableName
@@ -270,6 +299,21 @@ public final class RenderContext {
                         .append(last.getTableName()).append(' ').append(last.getTableAlias())
                         .append(" ON ").append(first.identity()).append(" = ").append(last.identity());
             }
+            WhereCriterion onCriterion = segment.getOnCriterion();
+            if (onCriterion != null && !onCriterion.isEmpty()) {
+                StringBuilder onSql = new StringBuilder();
+                onCriterion.render(this, onSql, params, ParameterSource.WHERE);
+                if (!onSql.isEmpty()) {
+                    boolean wrapParens = onCriterion.getCurrentOpt() == LinkType.OR
+                            && onCriterion.getPredicates().size() > 1;
+                    sb.append(" AND ");
+                    if (wrapParens) {
+                        sb.append('(').append(onSql).append(')');
+                    } else {
+                        sb.append(onSql);
+                    }
+                }
+            }
             joinedTables.add(firstTableKey);
             joinedTables.add(lastTableKey);
             sj.add(sb.toString());
@@ -284,7 +328,7 @@ public final class RenderContext {
     public Set<TableRef> extractTables() {
         Set<TableRef> result = new LinkedHashSet<>();
         for (TableBinding binding : tableBindings.values()) {
-            result.add(TableRef.of(binding.meta().tableName(settings), binding.alias()));
+            result.add(TableRef.of(binding.meta().qualifiedTableName(namingPolicy), binding.alias()));
         }
         return result;
     }
@@ -294,14 +338,16 @@ public final class RenderContext {
             TableBinding single = tableBindings.values().iterator().next();
             if ("t0".equalsIgnoreCase(prefix)
                     || prefix.equalsIgnoreCase(single.entityClass().getSimpleName())
-                    || prefix.equalsIgnoreCase(single.meta().tableName())) {
+                    || prefix.equalsIgnoreCase(single.meta().tableName())
+                    || prefix.equalsIgnoreCase(single.meta().qualifiedTableName())) {
                 return single;
             }
         }
         for (TableBinding binding : tableBindings.values()) {
             if ((binding.alias() != null && prefix.equalsIgnoreCase(binding.alias()))
                     || prefix.equalsIgnoreCase(binding.entityClass().getSimpleName())
-                    || prefix.equalsIgnoreCase(binding.meta().tableName())) {
+                    || prefix.equalsIgnoreCase(binding.meta().tableName())
+                    || prefix.equalsIgnoreCase(binding.meta().qualifiedTableName())) {
                 return binding;
             }
         }
@@ -324,11 +370,9 @@ public final class RenderContext {
     }
 
     private ColumnAlias buildColumnAlias(TableBinding binding, String columnName, @Nullable String fieldName) {
-        String formattedCol = settings.columnUppercase()
-                ? columnName.toUpperCase(Locale.ROOT)
-                : columnName.toLowerCase(Locale.ROOT);
+        String formattedCol = binding.meta().formatColumn(columnName, namingPolicy);
         ColumnAlias alias = new ColumnAlias();
-        alias.setTableName(binding.meta().tableName(settings));
+        alias.setTableName(binding.meta().qualifiedTableName(namingPolicy));
         alias.setTableAlias(binding.alias());
         alias.setColumnName(formattedCol);
         alias.setColumnAlias(fieldName);

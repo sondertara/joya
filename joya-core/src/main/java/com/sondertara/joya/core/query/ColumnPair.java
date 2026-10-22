@@ -1,8 +1,8 @@
 package com.sondertara.joya.core.query;
 
-import com.sondertara.common.base.ObjectUtils;
-import com.sondertara.common.struct.Pair;
+import com.sondertara.joya.utils.Pair;
 
+import java.util.Objects;
 import java.util.Optional;
 
 /**
@@ -59,7 +59,7 @@ public class ColumnPair extends Pair<String, String> {
         if (null == getKey() && null == getValue()) {
             return 0;
         }
-        return ObjectUtils.hashCode(getKey());
+        return Objects.hashCode(getKey());
     }
 
     @Override

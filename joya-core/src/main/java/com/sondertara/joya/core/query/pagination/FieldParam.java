@@ -1,6 +1,6 @@
 package com.sondertara.joya.core.query.pagination;
 
-import com.sondertara.common.struct.Pair;
+import com.sondertara.joya.utils.Pair;
 import lombok.Data;
 
 /**
