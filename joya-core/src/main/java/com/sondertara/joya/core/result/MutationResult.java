@@ -19,8 +19,7 @@ import java.util.Objects;
 public record MutationResult(
         long affectedRows,                              // 影响行数（自动归一 JDBC SUCCESS_NO_INFO）
         @Nullable List<Object> generatedKeys,           // 生成键（自增 ID、序列、RETURNING）
-        @Nullable Map<String, Object> serverInfo,       // 数据库特有诊断信息（含 batchCounts 等）
-        boolean success                                 // 无异常即 true
+        @Nullable Map<String, Object> serverInfo        // 数据库特有诊断信息（含 batchCounts 等）
 ) {
 
     public static final String KEY_BATCH_COUNTS = "batchCounts";
@@ -29,13 +28,13 @@ public record MutationResult(
     /**
      * 空结果单例。
      */
-    public static final MutationResult EMPTY = new MutationResult(0, Collections.emptyList(), Collections.emptyMap(), true);
+    public static final MutationResult EMPTY = new MutationResult(0, Collections.emptyList(), Collections.emptyMap());
 
     /**
      * 构造仅包含影响行数的变更结果（UPDATE / DELETE 常用）。
      */
     public static MutationResult ofAffected(long affectedRows) {
-        return new MutationResult(affectedRows, Collections.emptyList(), Collections.emptyMap(), true);
+        return new MutationResult(affectedRows, Collections.emptyList(), Collections.emptyMap());
     }
 
     /**
@@ -43,7 +42,7 @@ public record MutationResult(
      */
     public static MutationResult ofInsert(long affectedRows, @Nullable Object generatedKey) {
         List<Object> keys = generatedKey == null ? Collections.emptyList() : List.of(generatedKey);
-        return new MutationResult(affectedRows, keys, Collections.emptyMap(), true);
+        return new MutationResult(affectedRows, keys, Collections.emptyMap());
     }
 
     /**
@@ -65,7 +64,7 @@ public record MutationResult(
         Map<String, Object> info = safeCounts.length == 0
                 ? Collections.emptyMap()
                 : Map.of(KEY_BATCH_COUNTS, safeCounts);
-        return new MutationResult(totalAffected, safeKeys, info, true);
+        return new MutationResult(totalAffected, safeKeys, info);
     }
 
     /**
@@ -106,8 +105,7 @@ public record MutationResult(
         return new MutationResult(
                 this.affectedRows + other.affectedRows,
                 mergedKeys == null ? Collections.emptyList() : Collections.unmodifiableList(mergedKeys),
-                info,
-                this.success && other.success
+                info
         );
     }
 
@@ -174,30 +172,5 @@ public record MutationResult(
 
     public boolean hasGeneratedKeys() {
         return generatedKeys != null && !generatedKeys.isEmpty();
-    }
-
-    @Override
-    public boolean equals(Object o) {
-        if (this == o) return true;
-        if (!(o instanceof MutationResult that)) return false;
-        return affectedRows == that.affectedRows &&
-                success == that.success &&
-                Objects.equals(generatedKeys, that.generatedKeys) &&
-                Objects.equals(serverInfo, that.serverInfo);
-    }
-
-    @Override
-    public int hashCode() {
-        return Objects.hash(affectedRows, generatedKeys, serverInfo, success);
-    }
-
-    @Override
-    public String toString() {
-        return "MutationResult{" +
-                "affectedRows=" + affectedRows +
-                ", generatedKeys=" + generatedKeys +
-                ", serverInfo=" + serverInfo +
-                ", success=" + success +
-                '}';
     }
 }

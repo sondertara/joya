@@ -9,7 +9,7 @@ import java.sql.SQLException;
 import java.util.Objects;
 
 /**
- * 数据库方言解析策略：支持固定方言（零探测）、按 {@link DataSource} 惰性缓存（默认）、以及按连接动态解析（动态路由数据源场景）。
+ * 数据库方言解析策略：支持固定方言（零探测）、按策略实例惰性缓存（默认）、以及按连接动态解析（动态路由数据源场景）。
  */
 @FunctionalInterface
 public interface DialectStrategy {
@@ -44,7 +44,24 @@ public interface DialectStrategy {
      */
     static DialectStrategy cached(DataSource dataSource) {
         Objects.requireNonNull(dataSource, "dataSource must not be null");
-        return connections -> DialectResolver.resolve(dataSource);
+        return new DialectStrategy() {
+            private volatile Dialect resolved;
+
+            @Override
+            public Dialect resolve(ConnectionProvider connections) {
+                Dialect local = resolved;
+                if (local == null) {
+                    synchronized (this) {
+                        local = resolved;
+                        if (local == null) {
+                            local = DialectResolver.resolve(dataSource);
+                            resolved = local;
+                        }
+                    }
+                }
+                return local;
+            }
+        };
     }
 
     /**

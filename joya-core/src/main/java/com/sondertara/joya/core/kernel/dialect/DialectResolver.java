@@ -1,12 +1,12 @@
 package com.sondertara.joya.core.kernel.dialect;
 
-import com.sondertara.joya.core.kernel.dialect.DbType;
 
 import javax.sql.DataSource;
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.util.Collections;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.WeakHashMap;
 
 /**
  * 方言解析器（工厂 + 缓存）：从 {@link DataSource} 惰性探测数据库类型并映射到无状态 {@link Dialect} 实例，
@@ -14,7 +14,12 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public final class DialectResolver {
 
-    private static final Map<DataSource, Dialect> CACHE = new ConcurrentHashMap<>();
+    /**
+     * 弱键缓存：DataSource 被回收后条目可被 GC，避免动态数据源场景下的静态内存泄漏。
+     * 并发安全由 {@link Collections#synchronizedMap} 提供。
+     */
+    private static final Map<DataSource, Dialect> CACHE =
+            Collections.synchronizedMap(new WeakHashMap<>());
 
     private DialectResolver() {
     }
