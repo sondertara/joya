@@ -54,7 +54,7 @@
             <dependency>
                 <groupId>org.slf4j</groupId>
                 <artifactId>slf4j-api</artifactId>
-                <version>1.7.36</version>
+                <version>2.0.16</version>
             </dependency>
             <dependency>
                 <groupId>org.jspecify</groupId>
@@ -94,7 +94,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
-                <version>2.22.1</version>
+                <version>3.5.6</version>
                 <!--
                   阶段 0 变更：移除全局 <skipTests>true</skipTests>。
                   该配置是"全仓零测试"的根因 —— 测试被硬编码跳过，任何测试都不会执行。
