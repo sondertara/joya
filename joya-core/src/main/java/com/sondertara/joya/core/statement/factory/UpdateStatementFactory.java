@@ -1,5 +1,7 @@
 package com.sondertara.joya.core.statement.factory;
 
+import com.sondertara.joya.core.kernel.statement.SqlRenderer;
+
 import com.sondertara.joya.core.naming.NamingPolicy;
 import com.sondertara.joya.core.kernel.statement.BatchSqlStatement;
 import com.sondertara.joya.core.kernel.statement.ColumnBinding;
@@ -73,13 +75,13 @@ public final class UpdateStatementFactory {
 
         // 5. 元数据
         Set<TableRef> tables = new LinkedHashSet<>();
-        tables.add(TableRef.of(tableName));
+        tables.add(TableRef.ofQualified(tableName, ""));
         StatementMetadata metadata = StatementMetadata.builder(Operation.UPDATE)
                 .tables(tables)
                 .entityType(meta.entityType())
                 .build();
 
-        return SqlStatement.of(sql, params.toList(), metadata, true);
+        return SqlStatement.of(sql, params.toList(), metadata);
     }
 
     /**
@@ -120,7 +122,7 @@ public final class UpdateStatementFactory {
         String formattedPk = meta.formatColumn(pk, namingPolicy);
         String tableName = meta.qualifiedTableName(namingPolicy);
         StatementMetadata metadata = StatementMetadata.builder(Operation.UPDATE)
-                .table(TableRef.of(tableName))
+                .table(TableRef.ofQualified(tableName, ""))
                 .entityType(meta.entityType())
                 .build();
         List<ColumnBinding> bindings = new ArrayList<>(setColumns.size() + 1);

@@ -2,68 +2,95 @@ package com.sondertara.joya.core;
 
 import com.sondertara.joya.core.kernel.ExecutionOptions;
 import com.sondertara.joya.core.naming.NamingPolicy;
+import com.sondertara.joya.core.naming.TableNameResolver;
+
+import java.util.Objects;
 
 /**
  * 实例级客户端配置（1 {@link JoyaClient} = 1 {@code JoyaSettings}），多数据源下各客户端互不干扰。
  *
- * <p>内部聚合 {@link ExecutionOptions}（内核执行期超时与批大小）与 {@link NamingPolicy}（渲染层大小写与联表上限）。
+ * <p>由两个语义独立的配置对象组合而成，不再扁平复制字段：
+ * <ul>
+ *   <li>{@link ExecutionOptions}：执行期行为（查询超时、批处理分片大小）</li>
+ *   <li>{@link NamingPolicy}：SQL 渲染命名（大小写、联表上限、动态表名解析）</li>
+ * </ul>
  *
- * @param queryTimeoutSeconds 默认查询超时秒数（{@code <= 0} 表示不限制）
- * @param batchSize           批量保存/更新分片大小（默认 1000）
- * @param maxJoinTable        联表最大表数限制（默认 10）
- * @param columnUppercase     列名大写开关
- * @param tableUppercase      表名大写开关
+ * <p>为兼容既有代码，保留 5 参构造器与 5 个委托访问器。
  */
 public record JoyaSettings(
-        int queryTimeoutSeconds,
-        int batchSize,
-        int maxJoinTable,
-        boolean columnUppercase,
-        boolean tableUppercase
+        ExecutionOptions executionOptions,
+        NamingPolicy namingPolicy
 ) {
 
     public static final int DEFAULT_BATCH_SIZE = ExecutionOptions.DEFAULT_BATCH_SIZE;
     public static final int DEFAULT_MAX_JOIN_TABLE = NamingPolicy.DEFAULT_MAX_JOIN_TABLE;
 
-    public static final JoyaSettings DEFAULT = new JoyaSettings(
-            0,
-            DEFAULT_BATCH_SIZE,
-            DEFAULT_MAX_JOIN_TABLE,
-            false,
-            false
-    );
+    public static final JoyaSettings DEFAULT =
+            new JoyaSettings(ExecutionOptions.DEFAULT, NamingPolicy.DEFAULT);
 
     public JoyaSettings {
-        if (batchSize <= 0) {
-            batchSize = DEFAULT_BATCH_SIZE;
-        }
-        if (maxJoinTable <= 0) {
-            maxJoinTable = DEFAULT_MAX_JOIN_TABLE;
-        }
+        executionOptions = Objects.requireNonNullElse(executionOptions, ExecutionOptions.DEFAULT);
+        namingPolicy = Objects.requireNonNullElse(namingPolicy, NamingPolicy.DEFAULT);
     }
 
-    public static JoyaSettings of(ExecutionOptions executionOptions, NamingPolicy namingPolicy) {
-        ExecutionOptions exec = executionOptions == null ? ExecutionOptions.DEFAULT : executionOptions;
-        NamingPolicy naming = namingPolicy == null ? NamingPolicy.DEFAULT : namingPolicy;
-        return new JoyaSettings(
-                exec.queryTimeoutSeconds(),
-                exec.batchSize(),
-                naming.maxJoinTable(),
-                naming.columnUppercase(),
-                naming.tableUppercase()
+    /** 兼容构造：按 5 个原始字段构建（表名解析为恒等）。 */
+    public JoyaSettings(
+            int queryTimeoutSeconds,
+            int batchSize,
+            int maxJoinTable,
+            boolean columnUppercase,
+            boolean tableUppercase
+    ) {
+        this(
+                new ExecutionOptions(queryTimeoutSeconds, batchSize),
+                new NamingPolicy(maxJoinTable, columnUppercase, tableUppercase)
         );
     }
 
-    public ExecutionOptions executionOptions() {
-        return new ExecutionOptions(queryTimeoutSeconds, batchSize);
+    // ===== 兼容访问器：委托到组合对象 =====
+
+    public int queryTimeoutSeconds() {
+        return executionOptions.queryTimeoutSeconds();
     }
 
-    public NamingPolicy namingPolicy() {
-        return new NamingPolicy(maxJoinTable, columnUppercase, tableUppercase);
+    public int batchSize() {
+        return executionOptions.batchSize();
+    }
+
+    public int maxJoinTable() {
+        return namingPolicy.maxJoinTable();
+    }
+
+    public boolean columnUppercase() {
+        return namingPolicy.columnUppercase();
+    }
+
+    public boolean tableUppercase() {
+        return namingPolicy.tableUppercase();
+    }
+
+    public static JoyaSettings of(ExecutionOptions executionOptions, NamingPolicy namingPolicy) {
+        return new JoyaSettings(executionOptions, namingPolicy);
     }
 
     public JoyaSettings withQueryTimeoutSeconds(int queryTimeoutSeconds) {
-        return new JoyaSettings(queryTimeoutSeconds, batchSize, maxJoinTable, columnUppercase, tableUppercase);
+        return new JoyaSettings(
+                executionOptions.withQueryTimeoutSeconds(queryTimeoutSeconds),
+                namingPolicy
+        );
+    }
+
+    public JoyaSettings withNamingPolicy(NamingPolicy newNamingPolicy) {
+        return new JoyaSettings(executionOptions, newNamingPolicy);
+    }
+
+    public JoyaSettings withTableNameResolver(TableNameResolver tableNameResolver) {
+        return withNamingPolicy(new NamingPolicy(
+                namingPolicy.maxJoinTable(),
+                namingPolicy.columnUppercase(),
+                namingPolicy.tableUppercase(),
+                tableNameResolver
+        ));
     }
 
     public static Builder builder() {
@@ -76,6 +103,7 @@ public record JoyaSettings(
         private int maxJoinTable = DEFAULT_MAX_JOIN_TABLE;
         private boolean columnUppercase = false;
         private boolean tableUppercase = false;
+        private TableNameResolver tableNameResolver = TableNameResolver.IDENTITY;
 
         private Builder() {
         }
@@ -105,13 +133,16 @@ public record JoyaSettings(
             return this;
         }
 
+        /** 动态表名解析策略（按月分表 / schema 切换 / 租户表名）。 */
+        public Builder tableNameResolver(TableNameResolver tableNameResolver) {
+            this.tableNameResolver = Objects.requireNonNullElse(tableNameResolver, TableNameResolver.IDENTITY);
+            return this;
+        }
+
         public JoyaSettings build() {
             return new JoyaSettings(
-                    queryTimeoutSeconds,
-                    batchSize,
-                    maxJoinTable,
-                    columnUppercase,
-                    tableUppercase
+                    new ExecutionOptions(queryTimeoutSeconds, batchSize),
+                    new NamingPolicy(maxJoinTable, columnUppercase, tableUppercase, tableNameResolver)
             );
         }
     }

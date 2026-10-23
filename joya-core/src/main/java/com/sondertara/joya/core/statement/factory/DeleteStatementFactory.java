@@ -1,5 +1,7 @@
 package com.sondertara.joya.core.statement.factory;
 
+import com.sondertara.joya.core.kernel.statement.SqlRenderer;
+
 import com.sondertara.joya.core.kernel.statement.Operation;
 import com.sondertara.joya.core.kernel.statement.ParameterSource;
 import com.sondertara.joya.core.kernel.statement.SqlParameterList;
@@ -47,12 +49,12 @@ public final class DeleteStatementFactory {
         String sql = SqlRenderer.renderDelete(tableName, whereSql.toString());
 
         Set<TableRef> tables = new LinkedHashSet<>();
-        tables.add(TableRef.of(tableName));
+        tables.add(TableRef.ofQualified(tableName, ""));
         StatementMetadata metadata = StatementMetadata.builder(Operation.DELETE)
                 .tables(tables)
                 .entityType(meta.entityType())
                 .build();
 
-        return SqlStatement.of(sql, params.toList(), metadata, true);
+        return SqlStatement.of(sql, params.toList(), metadata);
     }
 }

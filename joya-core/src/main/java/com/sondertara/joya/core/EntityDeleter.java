@@ -94,9 +94,9 @@ final class EntityDeleter<T> {
     void truncate() {
         String tableName = meta.qualifiedTableName(template.namingPolicy());
         StatementMetadata metadata = StatementMetadata.builder(Operation.DELETE)
-                .table(TableRef.of(tableName))
+                .table(TableRef.ofQualified(tableName, ""))
                 .entityType(entityType)
                 .build();
-        template.update(SqlStatement.of("TRUNCATE TABLE " + tableName, List.of(), metadata, false));
+        template.update(SqlStatement.of("TRUNCATE TABLE " + tableName, List.of(), metadata));
     }
 }

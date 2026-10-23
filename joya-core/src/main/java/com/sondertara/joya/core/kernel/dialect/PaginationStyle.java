@@ -30,7 +30,7 @@ public enum PaginationStyle {
                 sql.append(" OFFSET ?");
                 appendPageParam(params, offset);
             }
-            return new SqlStatement(sql.toString(), params, statement.metadata(), statement.tablesResolved());
+            return new SqlStatement(sql.toString(), params, statement.metadata());
         }
     },
 
@@ -50,7 +50,7 @@ public enum PaginationStyle {
                 appendPageParam(params, offset);
                 appendPageParam(params, limit);
             }
-            return new SqlStatement(sql.toString(), params, statement.metadata(), statement.tablesResolved());
+            return new SqlStatement(sql.toString(), params, statement.metadata());
         }
     },
 
@@ -69,7 +69,7 @@ public enum PaginationStyle {
             List<SqlParameter> params = new ArrayList<>(statement.parameters());
             appendPageParam(params, Math.max(0L, offset));
             appendPageParam(params, limit);
-            return new SqlStatement(sql.toString(), params, statement.metadata(), statement.tablesResolved());
+            return new SqlStatement(sql.toString(), params, statement.metadata());
         }
     },
 
@@ -101,7 +101,7 @@ public enum PaginationStyle {
             List<SqlParameter> params = new ArrayList<>(statement.parameters());
             appendPageParam(params, offset + 1);
             appendPageParam(params, offset + limit);
-            return new SqlStatement(pagedSql, params, statement.metadata(), statement.tablesResolved());
+            return new SqlStatement(pagedSql, params, statement.metadata());
         }
     },
 
@@ -117,7 +117,7 @@ public enum PaginationStyle {
             List<SqlParameter> params = new ArrayList<>(statement.parameters());
             appendPageParam(params, offset + limit);
             appendPageParam(params, offset);
-            return new SqlStatement(pagedSql, params, statement.metadata(), statement.tablesResolved());
+            return new SqlStatement(pagedSql, params, statement.metadata());
         }
     },
 
@@ -133,7 +133,7 @@ public enum PaginationStyle {
             List<SqlParameter> params = new ArrayList<>(statement.parameters());
             appendPageParam(params, offset + 1);
             appendPageParam(params, offset + limit);
-            return new SqlStatement(pagedSql, params, statement.metadata(), statement.tablesResolved());
+            return new SqlStatement(pagedSql, params, statement.metadata());
         }
     },
 
@@ -166,7 +166,7 @@ public enum PaginationStyle {
                 merged.add(new SqlParameter(
                         idx, existing.name(), existing.value(), existing.source(), existing.binder()));
             }
-            return new SqlStatement(sql.toString(), merged, statement.metadata(), statement.tablesResolved());
+            return new SqlStatement(sql.toString(), merged, statement.metadata());
         }
     },
 

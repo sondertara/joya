@@ -326,7 +326,9 @@ class DialectBatchAndMappingTest {
                 .toSqlStatement();
         assertTrue(schemaStmt.sql().contains("FROM sec_schema.t_audit t0"), "Actual SQL: " + schemaStmt.sql());
         assertTrue(schemaStmt.metadata().tables().stream()
-                .anyMatch(t -> "sec_schema.t_audit".equals(t.name())));
+                .anyMatch(t -> "t_audit".equals(t.name())
+                        && "sec_schema".equals(t.schema())
+                        && "sec_schema.t_audit".equals(t.qualifiedName())));
     }
 
     @Test

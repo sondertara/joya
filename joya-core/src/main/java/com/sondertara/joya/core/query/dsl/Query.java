@@ -8,6 +8,7 @@ import com.sondertara.joya.core.kernel.PageSlice;
 import com.sondertara.joya.core.kernel.statement.Operation;
 import com.sondertara.joya.core.kernel.statement.ParameterSource;
 import com.sondertara.joya.core.kernel.statement.SqlParameterList;
+import com.sondertara.joya.core.kernel.statement.SqlRenderer;
 import com.sondertara.joya.core.kernel.statement.SqlStatement;
 import com.sondertara.joya.core.kernel.statement.StatementMetadata;
 import com.sondertara.joya.core.query.ColumnMetaProvider;
@@ -18,6 +19,7 @@ import com.sondertara.joya.core.query.criterion.JoinCriterion;
 import com.sondertara.joya.core.query.criterion.WhereCriterion;
 import com.sondertara.joya.core.query.pagination.OrderParam;
 import com.sondertara.joya.core.query.pagination.PageRequest;
+import org.jspecify.annotations.Nullable;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -468,47 +470,48 @@ public final class Query<T> implements QueryScope {
 
     private SqlStatement renderStatement(List<String> selectColumns, boolean includeOrderBy, RenderContext ctx) {
         SqlParameterList params = new SqlParameterList();
-        StringBuilder sql = new StringBuilder("SELECT ");
-        if (distinct) {
-            sql.append("DISTINCT ");
-        }
-        sql.append(String.join(", ", selectColumns));
-        sql.append(" FROM ").append(ctx.renderFromClause(params));
+        String fromClause = ctx.renderFromClause(params);
 
-        if (!whereCriterion.isEmpty()) {
-            StringBuilder whereSql = new StringBuilder();
-            whereCriterion.render(ctx, whereSql, params, ParameterSource.WHERE);
-            if (!whereSql.isEmpty()) {
-                sql.append(" WHERE ").append(whereSql);
-            }
-        }
-        if (!groupByColumns.isEmpty()) {
-            List<String> groups = new ArrayList<>(groupByColumns.size());
-            for (ColumnMetaProvider col : groupByColumns) {
-                groups.add(col.resolveSql(ctx));
-            }
-            sql.append(" GROUP BY ").append(String.join(", ", groups));
-        }
-        if (!havingCriterion.isEmpty()) {
-            StringBuilder havingSql = new StringBuilder();
-            havingCriterion.render(ctx, havingSql, params, ParameterSource.WHERE);
-            if (!havingSql.isEmpty()) {
-                sql.append(" HAVING ").append(havingSql);
-            }
-        }
-        if (includeOrderBy && !orderSpecs.isEmpty()) {
-            List<String> orders = new ArrayList<>(orderSpecs.size());
-            for (OrderSpec spec : orderSpecs) {
-                orders.add(spec.column().resolveSql(ctx) + " " + spec.direction().name());
-            }
-            sql.append(" ORDER BY ").append(String.join(", ", orders));
-        }
+        // 参数收集仍在本层完成；SqlRenderer 只接收已渲染片段，不感知参数
+        String whereSql = renderCriterion(whereCriterion, ctx, params);
+        String groupBySql = groupByColumns.isEmpty() ? null : joinGroupBy(ctx);
+        String havingSql = renderCriterion(havingCriterion, ctx, params);
+        String orderBySql = (!includeOrderBy || orderSpecs.isEmpty()) ? null : joinOrderBy(ctx);
+
+        String sql = SqlRenderer.renderSelect(distinct, String.join(", ", selectColumns), fromClause,
+                whereSql, groupBySql, havingSql, orderBySql);
 
         StatementMetadata meta = StatementMetadata.builder(Operation.SELECT)
                 .tables(ctx.extractTables())
                 .entityType(rootType)
                 .build();
-        return SqlStatement.of(sql.toString(), params.toList(), meta);
+        return SqlStatement.of(sql, params.toList(), meta);
+    }
+
+    private static @Nullable String renderCriterion(WhereCriterion criterion, RenderContext ctx,
+                                                    SqlParameterList params) {
+        if (criterion.isEmpty()) {
+            return null;
+        }
+        StringBuilder fragment = new StringBuilder();
+        criterion.render(ctx, fragment, params, ParameterSource.WHERE);
+        return fragment.isEmpty() ? null : fragment.toString();
+    }
+
+    private String joinGroupBy(RenderContext ctx) {
+        List<String> groups = new ArrayList<>(groupByColumns.size());
+        for (ColumnMetaProvider col : groupByColumns) {
+            groups.add(col.resolveSql(ctx));
+        }
+        return String.join(", ", groups);
+    }
+
+    private String joinOrderBy(RenderContext ctx) {
+        List<String> orders = new ArrayList<>(orderSpecs.size());
+        for (OrderSpec spec : orderSpecs) {
+            orders.add(spec.column().resolveSql(ctx) + " " + spec.direction().name());
+        }
+        return String.join(", ", orders);
     }
 
     private SqlStatement renderCountStatement(List<String> selectColumns, RenderContext ctx) {
@@ -516,7 +519,7 @@ public final class Query<T> implements QueryScope {
             return renderStatement(List.of("COUNT(*)"), false, ctx);
         }
         SqlStatement inner = renderStatement(distinct ? selectColumns : List.of("1"), false, ctx);
-        return inner.withSql("SELECT COUNT(*) FROM (" + inner.sql() + ") TEMP_T");
+        return inner.withSql(SqlRenderer.renderCountSubquery(inner.sql()));
     }
 
     private JoyaTemplate requireTemplate() {

@@ -39,13 +39,12 @@ class SqlStatementTest {
     }
 
     @Test
-    void of_marksTablesResolved_andCarriesMetadata() {
+    void of_carriesMetadata() {
         SqlStatement s = SqlStatement.of("SELECT 1", List.of(),
                 StatementMetadata.of(Operation.SELECT, DbType.oracle));
 
         assertEquals("SELECT 1", s.sql());
         assertTrue(s.parameters().isEmpty());
-        assertTrue(s.tablesResolved(), "of(...) 工厂应标记表引用已解析");
         assertEquals(Operation.SELECT, s.metadata().operation());
         assertEquals(DbType.oracle, s.metadata().dbType());
     }
@@ -64,26 +63,6 @@ class SqlStatementTest {
         assertEquals(DbType.mysql, rewritten.metadata().dbType());
         assertEquals(Operation.SELECT, rewritten.op(), "改写不应丢失操作类型");
         assertEquals(List.of(1), rewritten.args(), "改写不应丢失参数");
-    }
-
-    @Test
-    void withTable_rewritesSqlAndTableMetadata() {
-        SqlStatement s = SqlStatement.of("SELECT * FROM t_user WHERE id = ?",
-                List.of(SqlParameter.of(1, "id", 1, ParameterSource.WHERE)),
-                StatementMetadata.of(Operation.SELECT, Set.of(TableRef.of("t_user"))));
-
-        SqlStatement rewritten = s.withTable("t_user", "t_user_0");
-
-        assertEquals("SELECT * FROM t_user_0 WHERE id = ?", rewritten.sql());
-        assertTrue(rewritten.tables().contains(TableRef.of("t_user_0")),
-                "tables 元数据应同步改写，供下游分片拦截器识别");
-        assertEquals("SELECT * FROM t_user WHERE id = ?", s.sql(), "原实例不应被改写");
-    }
-
-    @Test
-    void withTable_sameNameIsNoOp() {
-        SqlStatement s = SqlStatement.select("SELECT 1");
-        assertEquals(s, s.withTable("t_user", "t_user"), "同名改写应返回原实例");
     }
 
     @Test

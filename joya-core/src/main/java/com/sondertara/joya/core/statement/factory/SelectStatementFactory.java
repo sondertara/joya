@@ -1,5 +1,7 @@
 package com.sondertara.joya.core.statement.factory;
 
+import com.sondertara.joya.core.kernel.statement.SqlRenderer;
+
 import com.sondertara.joya.core.naming.NamingPolicy;
 import com.sondertara.joya.core.kernel.statement.Operation;
 import com.sondertara.joya.core.kernel.statement.ParameterSource;
@@ -64,13 +66,13 @@ public final class SelectStatementFactory {
 
         // 4. 元数据：表引用 + 实体类型
         Set<TableRef> tables = new LinkedHashSet<>();
-        tables.add(TableRef.of(tableName));
+        tables.add(TableRef.ofQualified(tableName, ""));
         StatementMetadata metadata = StatementMetadata.builder(Operation.SELECT)
                 .tables(tables)
                 .entityType(meta.entityType())
                 .build();
 
-        return SqlStatement.of(sql, params.toList(), metadata, true);
+        return SqlStatement.of(sql, params.toList(), metadata);
     }
 
     /** 便捷构造：无 extPart。 */

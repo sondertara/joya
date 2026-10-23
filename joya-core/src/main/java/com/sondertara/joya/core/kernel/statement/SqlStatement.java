@@ -20,13 +20,11 @@ import java.util.Set;
  * @param sql            JDBC 风格 SQL（{@code ?} 占位符）
  * @param parameters     有序参数列表，与 SQL 中 ? 一一对应
  * @param metadata       语句级元数据（操作类型、表引用、实体类型等）
- * @param tablesResolved 表引用是否已由渲染层可靠解析；false 时拦截器遇空 tables 必须告警/报错
  */
 public record SqlStatement(
         String sql,
         List<SqlParameter> parameters,
-        StatementMetadata metadata,
-        boolean tablesResolved
+        StatementMetadata metadata
 ) {
 
     public SqlStatement {
@@ -47,19 +45,13 @@ public record SqlStatement(
         this(
                 sql,
                 toParameters(args),
-                StatementMetadata.builder(op).dbType(dbType).tables(tables).build(),
-                !tables.isEmpty()
+                StatementMetadata.builder(op).dbType(dbType).tables(tables).build()
         );
     }
 
     /** 从有序参数列表构建（推荐）。 */
     public static SqlStatement of(String sql, List<SqlParameter> parameters, StatementMetadata metadata) {
-        return new SqlStatement(sql, parameters, metadata, true);
-    }
-
-    /** 从有序参数列表构建，并标记表引用是否已解析。 */
-    public static SqlStatement of(String sql, List<SqlParameter> parameters, StatementMetadata metadata, boolean tablesResolved) {
-        return new SqlStatement(sql, parameters, metadata, tablesResolved);
+        return new SqlStatement(sql, parameters, metadata);
     }
 
     // ===== 兼容访问器 =====
@@ -86,40 +78,22 @@ public record SqlStatement(
 
     /** 改写 SQL 文本，返回新实例。 */
     public SqlStatement withSql(String newSql) {
-        return new SqlStatement(newSql, parameters, metadata, tablesResolved);
+        return new SqlStatement(newSql, parameters, metadata);
     }
 
     /** 改写参数列表，返回新实例。 */
     public SqlStatement withParameters(List<SqlParameter> newParameters) {
-        return new SqlStatement(sql, newParameters, metadata, tablesResolved);
+        return new SqlStatement(sql, newParameters, metadata);
     }
 
     /** 改写元数据，返回新实例。 */
     public SqlStatement withMetadata(StatementMetadata newMetadata) {
-        return new SqlStatement(sql, parameters, newMetadata, tablesResolved);
+        return new SqlStatement(sql, parameters, newMetadata);
     }
 
     /** 改写数据库类型，返回新实例。 */
     public SqlStatement withDbType(DbType newDbType) {
-        return new SqlStatement(sql, parameters, metadata.withDbType(newDbType), tablesResolved);
-    }
-
-    /**
-     * 改写表名（同时替换 SQL 文本与 tables 元数据），返回新实例。
-     * 用于分库分表拦截器，基于标识符边界匹配，避免 {@code order} 误伤 {@code order_id} 或 {@code t_user} 误伤 {@code t_user_log}。
-     */
-    public SqlStatement withTable(String from, String to) {
-        if (from.equals(to)) {
-            return this;
-        }
-        java.util.regex.Pattern boundaryPattern = java.util.regex.Pattern.compile(
-                "(?<![\\w.])" + java.util.regex.Pattern.quote(from) + "(?![\\w])",
-                java.util.regex.Pattern.CASE_INSENSITIVE);
-        String newSql = boundaryPattern.matcher(sql).replaceAll(java.util.regex.Matcher.quoteReplacement(to));
-        Set<TableRef> newTables = metadata.tables().stream()
-                .map(t -> t.name().equalsIgnoreCase(from) ? t.withName(to) : t)
-                .collect(java.util.stream.Collectors.toUnmodifiableSet());
-        return new SqlStatement(newSql, parameters, metadata.withTables(newTables), tablesResolved);
+        return new SqlStatement(sql, parameters, metadata.withDbType(newDbType));
     }
 
     /** 追加参数（如租户拦截器追加 {@code tenant_id = ?}），自动重排 index，返回新实例。 */
@@ -127,7 +101,7 @@ public record SqlStatement(
         List<SqlParameter> newParams = new java.util.ArrayList<>(parameters);
         int index = newParams.size() + 1;
         newParams.add(SqlParameter.of(index, name, value, source));
-        return new SqlStatement(sql, newParams, metadata, tablesResolved);
+        return new SqlStatement(sql, newParams, metadata);
     }
 
     /** 替换指定 index 处的参数，返回新实例。 */
@@ -138,7 +112,7 @@ public record SqlStatement(
             throw new IndexOutOfBoundsException("parameter index out of range: " + index);
         }
         newParams.set(target, SqlParameter.of(index, parameter.name(), parameter.value(), parameter.source()));
-        return new SqlStatement(sql, newParams, metadata, tablesResolved);
+        return new SqlStatement(sql, newParams, metadata);
     }
 
     // ===== 静态工厂：提升调用可读性，并强制表达操作类型 =====
@@ -177,11 +151,11 @@ public record SqlStatement(
 
     private static SqlStatement fromArgs(String sql, Operation op, Object... args) {
         return new SqlStatement(sql, toParameters(args == null ? List.of() : java.util.Arrays.asList(args)),
-                StatementMetadata.of(op), false);
+                StatementMetadata.of(op));
     }
 
     private static SqlStatement fromArgs(String sql, Operation op, List<Object> args) {
-        return new SqlStatement(sql, toParameters(args), StatementMetadata.of(op), false);
+        return new SqlStatement(sql, toParameters(args), StatementMetadata.of(op));
     }
 
     private static List<SqlParameter> toParameters(List<Object> args) {

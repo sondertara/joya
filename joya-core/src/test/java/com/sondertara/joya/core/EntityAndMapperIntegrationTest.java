@@ -399,18 +399,6 @@ class EntityAndMapperIntegrationTest {
     }
 
     @Test
-    void sqlStatement_withTable_replacesOnlyWholeTableIdentifiers() {
-        SqlStatement stmt = SqlStatement.select(
-                "SELECT order_id, user_order FROM order WHERE order.order_id = ?",
-                List.of(1L))
-                .withMetadata(StatementMetadata.of(Operation.SELECT, java.util.Set.of(TableRef.of("order"))));
-
-        SqlStatement rewritten = stmt.withTable("order", "order_2026");
-        assertEquals("SELECT order_id, user_order FROM order_2026 WHERE order_2026.order_id = ?", rewritten.sql());
-        assertTrue(rewritten.metadata().tables().contains(TableRef.of("order_2026")));
-    }
-
-    @Test
     void inheritedFields_andNullTemporals_andBigDecimalScalarMapping_workEndToEnd() {
         Account charlie = joya.of(Account.class).findById(3L).orElseThrow();
         assertEquals(3L, charlie.getId());
@@ -450,8 +438,7 @@ class EntityAndMapperIntegrationTest {
         SqlStatement stmt = SqlStatement.of(
                 "SELECT count(*) FROM t_account WHERE UPPER(user_name) = ?",
                 List.of(param),
-                StatementMetadata.of(Operation.SELECT),
-                false);
+                StatementMetadata.of(Operation.SELECT));
         assertEquals(1L, joya.sql(stmt).count());
         assertTrue(customBinderCalled.get(), "JdbcExecutor 应调用 SqlParameter 自定义 ParameterBinder");
 

@@ -1,5 +1,7 @@
 package com.sondertara.joya.core.statement.factory;
 
+import com.sondertara.joya.core.kernel.statement.SqlRenderer;
+
 import com.sondertara.joya.core.naming.NamingPolicy;
 import com.sondertara.joya.core.kernel.statement.BatchSqlStatement;
 import com.sondertara.joya.core.kernel.statement.ColumnBinding;
@@ -53,13 +55,13 @@ public final class InsertStatementFactory {
 
         // 4. 元数据：表引用 + 实体类型
         Set<TableRef> tables = new LinkedHashSet<>();
-        tables.add(TableRef.of(tableName));
+        tables.add(TableRef.ofQualified(tableName, ""));
         StatementMetadata metadata = StatementMetadata.builder(Operation.INSERT)
                 .tables(tables)
                 .entityType(meta.entityType())
                 .build();
 
-        return SqlStatement.of(sql, params.toList(), metadata, true);
+        return SqlStatement.of(sql, params.toList(), metadata);
     }
 
     /**
@@ -78,7 +80,7 @@ public final class InsertStatementFactory {
                 .toList();
         String tableName = meta.qualifiedTableName(namingPolicy);
         StatementMetadata metadata = StatementMetadata.builder(Operation.INSERT)
-                .table(TableRef.of(tableName))
+                .table(TableRef.ofQualified(tableName, ""))
                 .entityType(meta.entityType())
                 .build();
         List<ColumnBinding> bindings = new ArrayList<>(columns.size());

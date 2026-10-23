@@ -1,7 +1,7 @@
 package com.sondertara.joya.core;
 
 import com.sondertara.joya.core.kernel.JoyaTemplate;
-import com.sondertara.joya.core.statement.factory.SqlRenderer;
+import com.sondertara.joya.core.kernel.statement.SqlRenderer;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
@@ -26,7 +26,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <ul>
  *   <li>{@code kernel} 只允许依赖 {@code kernel} 自身、{@code utils}、{@code exceptions}。</li>
  *   <li>{@code JoyaTemplate} 公开签名不得暴露 {@code PageResult} / {@code PageRequest}。</li>
- *   <li>"INSERT INTO / UPDATE ... SET / DELETE FROM" 只允许 {@link SqlRenderer} 拼接。</li>
+ *   <li>DQL / DML 文本只允许 {@link SqlRenderer} 拼接（方言层的分页语法除外）。</li>
  * </ul>
  */
 class ArchitectureGuardTest {
@@ -98,12 +98,16 @@ class ArchitectureGuardTest {
     }
 
     @Test
-    void dmlTextMustOnlyBeBuiltInsideSqlRenderer() throws IOException {
+    void sqlTextMustOnlyBeBuiltInsideSqlRendererOrDialectLayer() throws IOException {
         List<String> violations = new ArrayList<>();
-        try (Stream<Path> paths = Files.walk(resolveMainJavaRoot())) {
+        Path mainRoot = resolveMainJavaRoot();
+        try (Stream<Path> paths = Files.walk(mainRoot)) {
             for (Path file : paths.filter(p -> p.toString().endsWith(".java")).toList()) {
                 String content = stripComments(Files.readString(file));
-                if (file.getFileName().toString().equals("SqlRenderer.java")) {
+                String relative = mainRoot.relativize(file).toString().replace('\\', '/');
+                boolean allowedRenderer = file.getFileName().toString().equals("SqlRenderer.java");
+                boolean allowedDialect = relative.contains("kernel/dialect/");
+                if (allowedRenderer || allowedDialect) {
                     continue;
                 }
                 if (content.contains("append(\"INSERT INTO ")
@@ -111,13 +115,15 @@ class ArchitectureGuardTest {
                         || content.contains("append(\"UPDATE \")")
                         || content.contains("\"UPDATE \" +")
                         || content.contains("append(\"DELETE FROM ")
-                        || content.contains("\"DELETE FROM \" +")) {
-                    violations.add(file.getFileName().toString());
+                        || content.contains("\"DELETE FROM \" +")
+                        || content.contains("\"SELECT ")) {
+                    violations.add(relative);
                 }
             }
         }
         assertEquals(List.of(), violations,
-                "Only " + SqlRenderer.class.getSimpleName() + ".java may assemble DML text; violations: " + violations);
+                "Only SqlRenderer.java (plus kernel/dialect pagination syntax) may assemble SQL text; violations: "
+                        + violations);
     }
 
     @Test

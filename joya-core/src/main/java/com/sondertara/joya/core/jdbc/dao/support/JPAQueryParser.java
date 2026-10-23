@@ -9,6 +9,7 @@ import com.sondertara.joya.core.metadata.EntitySnapshot;
 import com.sondertara.joya.core.statement.MutationContext;
 import com.sondertara.joya.core.query.LinkType;
 import com.sondertara.joya.core.query.criterion.WhereCriterion;
+import com.sondertara.joya.core.kernel.statement.SqlRenderer;
 import com.sondertara.joya.core.statement.factory.DeleteStatementFactory;
 import com.sondertara.joya.core.statement.factory.SelectStatementFactory;
 import com.sondertara.joya.core.statement.factory.UpdateStatementFactory;
@@ -238,8 +239,8 @@ public class JPAQueryParser<T> extends AbstractQueryParser {
             String limitClause = subject.getMaxResults().map(limit -> "LIMIT " + limit).orElse(null);
             String extPart = joinClauses(orderByClause, limitClause);
             sql = SelectStatementFactory.create(meta, whereCriterion, null, extPart, namingPolicy).sql();
-            if (subject.isDistinct() && sql.regionMatches(true, 0, "SELECT ", 0, 7)) {
-                sql = "SELECT DISTINCT " + sql.substring(7);
+            if (subject.isDistinct()) {
+                sql = SqlRenderer.renderDistinct(sql);
             }
         }
 

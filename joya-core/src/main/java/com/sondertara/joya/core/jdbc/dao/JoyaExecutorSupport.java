@@ -275,7 +275,7 @@ public class JoyaExecutorSupport {
                             ? Operation.DELETE
                             : (stripped.startsWith("insert") ? Operation.INSERT : Operation.UPDATE));
             StatementMetadata metadata = StatementMetadata.builder(op)
-                    .table(TableRef.of(meta.qualifiedTableName(joyaClient.settings().namingPolicy())))
+                    .table(TableRef.ofQualified(meta.qualifiedTableName(joyaClient.settings().namingPolicy()), ""))
                     .entityType(entityClass)
                     .build();
             SqlStatement stmt = (query ? SqlStatement.select(sql, parameters) : SqlStatement.update(sql, parameters))

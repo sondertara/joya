@@ -328,7 +328,7 @@ public final class RenderContext {
     public Set<TableRef> extractTables() {
         Set<TableRef> result = new LinkedHashSet<>();
         for (TableBinding binding : tableBindings.values()) {
-            result.add(TableRef.of(binding.meta().qualifiedTableName(namingPolicy), binding.alias()));
+            result.add(TableRef.ofQualified(binding.meta().qualifiedTableName(namingPolicy), binding.alias()));
         }
         return result;
     }

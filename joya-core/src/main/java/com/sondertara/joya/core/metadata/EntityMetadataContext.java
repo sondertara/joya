@@ -139,16 +139,17 @@ public final class EntityMetadataContext {
         return qualifiedTableName(null);
     }
 
-    /** 按命名策略格式化后的限定表名（支持 {@link NamingPolicy#tableUppercase()}）。 */
+    /**
+     * 按命名策略解析最终写入 SQL 的限定表名。
+     *
+     * <p>格式化与动态表名解析统一由 {@link NamingPolicy#resolveTable(String, String)} 完成：
+     * 大小写策略先生效，随后交给 {@code TableNameResolver}（默认恒等解析）。
+     */
     public String qualifiedTableName(@Nullable NamingPolicy namingPolicy) {
-        String tbl = tableName(namingPolicy);
-        if (schemaName == null || schemaName.isBlank()) {
-            return tbl;
+        if (namingPolicy == null) {
+            return schemaName == null || schemaName.isBlank() ? tableName : schemaName + "." + tableName;
         }
-        String sch = namingPolicy != null
-                ? namingPolicy.formatTable(schemaName)
-                : schemaName;
-        return sch + "." + tbl;
+        return namingPolicy.resolveTable(schemaName, tableName);
     }
 
     /** 按命名策略格式化列名（默认原样保留 {@code @Column(name)} 注解原文，开启 {@link NamingPolicy#columnUppercase()} 时转为大写）。 */
