@@ -1,5 +1,8 @@
 # 04 多数据源
 
+> **历史方案说明（2026-10）**：文中依赖的 `ShardingInterceptor` 已移除，执行期改表不再受支持；动态表名改由 `NamingPolicy.tableNameResolver` 在渲染期完成。
+
+
 ## 现状
 
 不支持，且 starter 主动拒绝：`@ConditionalOnSingleCandidate(DataSource.class)`（`JoyaJdbcAutoConfiguration.java:33`）—— 容器里有多个 `DataSource` 时**整个自动配置静默失效**。

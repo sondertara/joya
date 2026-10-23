@@ -11,7 +11,8 @@
 - **旁路集成，零侵入共存**：在 Spring Boot 3 中直接复用原生 `spring.datasource` 与 `@Transactional` 事务连接（支持与 JPA / MyBatis 共享同一事务连接），扩展数据源通过 `joya.datasources` 数组独立配置，不污染全局 `DataSource` Bean
 - **免扫描跨库 `JoyaMapper`**：通过 `joya.mapper(UserMapper.class)` 即拿即用 JPA 方法名派生查询与 `@Query` 原生 SQL，同一个实体与 Mapper 接口可在任意多个数据源上无缝复用
 - **显式值事务（`Tx`）**：事务是可传递的一等公民值（`1 Tx = 1 Connection`），支持嵌套于 Spring `@Transactional` 内执行 `savepoint` 局部回滚与 `afterCommit` 钩子
-- **动态条件零样板与默认安全**：`WhereCriterion` 默认自动跳过 `null`、空白字符串与空集合；`Update/Delete` 强制非空 `WHERE`；外部动态筛选参数通过 `PageQueryParams` 强制实体元数据白名单防注入
+- **动态条件零样板与默认安全**：`WhereCriterion` 比较条件默认严格非空（传 `null` 立即抛异常），需要"为空则跳过"时使用 `eqIfPresent` / `containsIfNotBlank` / `inIfNotEmpty`；`Update/Delete` 强制非空 `WHERE`；外部动态筛选参数通过 `PageQueryParams` 强制实体元数据白名单防注入
+- **渲染期动态表名**：通过 `NamingPolicy.tableNameResolver` 在生成 SQL 时直接决定物理表名，覆盖按月分表、租户分表与 schema 切换；不做执行期字符串改写，因此不会误伤同名列或字符串常量
 
 ---
 

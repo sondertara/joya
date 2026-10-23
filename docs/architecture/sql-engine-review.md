@@ -1,5 +1,8 @@
 # SQL 语句内核重构方案 —— 评审
 
+> **历史方案说明（2026-10）**：文中提到的 `ShardingInterceptor` 与执行期 `withTable` 改写已从代码库移除。动态表名改由 `NamingPolicy.tableNameResolver` 在 SQL 渲染期完成，详见 `AGENTS.md`。
+
+
 > 评审对象：[sql-engine-refactoring.md](sql-engine-refactoring.md)（883 行）
 > 评审方法：所有结论均以可执行探针在 `joya-core/target/classes` 上实测，非代码走读推测。
 

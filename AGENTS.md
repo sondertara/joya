@@ -30,7 +30,7 @@ joya-parent                             父 POM，聚合以下模块
 core/
 ├── DataOps.java                        统一数据操作契约：from(Class<T>) / of(Class<T>) / sql(...) / mapper(Class<M>)
 ├── JoyaClient.java                     单数据源客户端门面（1 JoyaClient = 1 DataSource），暴露 from / of / sql / mapper / tx / txCall / script / withConnection
-├── JoyaSettings.java                   实例级客户端配置（queryTimeoutSeconds / batchSize / maxJoinTable / columnUppercase / tableUppercase）
+├── JoyaSettings.java                   实例级客户端配置（组合 ExecutionOptions + NamingPolicy，保留 5 个兼容委托访问器）
 ├── EntityOps.java                      实体域门面：命令式写（insert/update/patch/save/delete）+ 列级变更构建器（insert/update/delete）+ 按主键快捷读
 ├── EntityInsert.java                   实体流式插入构建器（value / values / ignoreNulls → execute）
 ├── EntityUpdate.java                   实体流式条件更新构建器（set / where / allowAll → execute）
@@ -83,7 +83,7 @@ core/
 │   │   ├── BatchSlice.java            批量执行内核值类型（计数 + 生成键）
 │   │   └── JdbcType.java              JDBC 类型码枚举
 │   ├── interceptor/                    SqlInterceptor / RewriteContext / DefaultChain
-│   ├── statement/                      SqlStatement / BatchSqlStatement / 参数与表引用契约
+│   ├── statement/                      SqlStatement / BatchSqlStatement / SqlRenderer（唯一 SQL 文本组装点）/ 参数契约
 │   ├── dialect/                        Dialect / DialectStrategy / DialectResolver / DbType
 │   └── support/                        ScriptRunner / LoggingOutputStream
 │
@@ -91,7 +91,6 @@ core/
 │   └── MutationContext.java            变更操作上下文（metadata + values + where + naming）
 │
 ├── statement/factory/                  语句工厂（只决定列与参数，不写 SQL 文本）
-│   ├── SqlRenderer.java                全仓唯一 DML 文本渲染器（INSERT / UPDATE / DELETE）
 │   ├── SelectStatementFactory.java     单表 SELECT 渲染
 │   ├── InsertStatementFactory.java     INSERT 渲染
 │   ├── UpdateStatementFactory.java     UPDATE 渲染（强制非空 WHERE 或显式 allowAll）
@@ -102,8 +101,9 @@ core/
 │   ├── EntityMetadataContext.java      不可变实体表结构元数据（保留注解原文）
 │   └── EntitySnapshot.java             单次操作实体字段值快照
 │
-├── naming/                             命名策略值对象（零内部依赖）
-│   └── NamingPolicy.java               formatTable / formatColumn / maxJoinTable
+├── naming/                             命名与表名解析（零内部依赖）
+│   ├── NamingPolicy.java               formatTable / formatColumn / maxJoinTable / resolveTable
+│   └── TableNameResolver.java          渲染期动态表名扩展点（分表 / schema 切换；默认恒等）
 │
 └── jdbc/                               JDBC 上层适配（依赖 kernel，不被 kernel 依赖）
     ├── dao/                            JoyaMapper 接口、JoyaMapperImpl、方法名派生解析
@@ -131,6 +131,7 @@ core/
    - 需要"值为空则跳过该条件"时，显式使用 `eqIfPresent` / `gtIfPresent` 等 `*IfPresent` 系列；空白字符串过滤使用 `containsIfNotBlank`；`in` / `notIn` 同样拒绝 `null` 或空集合，可选过滤使用 `inIfNotEmpty` / `notInIfNotEmpty`；`IS NULL` 使用显式 `isNull` / `isNotNull`。
    - `EntityUpdate` 与 `EntityDelete` 默认强制要求非空 `WHERE` 条件，全表操作必须显式调用 `.allowAll()`。
    - 外部动态筛选协议通过 `QueryCustomizer` 插件（`PageQueryParams.of(param)`）接入，强制执行标识符正则与实体元数据白名单校验，杜绝 SQL 注入。
+   - 动态表名（按月分表 / 租户分表 / schema 切换）在**渲染期**由 `NamingPolicy.tableNameResolver` 决定：SQL 生成时就是最终表名，不存在执行期字符串改写。原生 SQL（`joya.sql(...)`）不携带表元数据，也不在该保证范围内。
 4. **拦截器链无旁路与现代 Java 17 映射**：
    - `JoyaTemplate` 是所有 SQL 执行的唯一收口，所有查询、变更、原生 SQL 与批处理 100% 经过 `SqlInterceptor` 链并携带完整 `StatementMetadata`。
 5. **Spring Boot 3 旁路（Sidecar）与多数据源原生镜像（`joya-spring-boot-starter`）**：

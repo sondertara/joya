@@ -15,9 +15,11 @@
 |---|---|---|
 | **分层边界** | `kernel` 只允许依赖 `kernel` / `naming` / `utils` / `exceptions`；`naming` 与 `model` 零内部依赖；`metadata` 不依赖 `query` / `kernel` | `ArchitectureGuardTest#kernelMayOnlyDependOnKernelNamingUtilsAndExceptions`、`#namingMayNotDependOnAnyOtherProjectPackage`、`#modelMayNotDependOnQueryOrKernel`、`#metadataMayNotDependOnQueryOrKernel` |
 | **内核签名** | `JoyaTemplate` 公开方法签名不暴露 `PageResult` / `PageRequest`，仅返回内核 `PageSlice<T>` | `ArchitectureGuardTest#joyaTemplatePublicSignaturesMustNotExposePageResultOrPageRequest` |
-| **DML 单一真相源** | 全库仅 `SqlRenderer` 一处负责拼接 `INSERT INTO` / `UPDATE ... SET` / `DELETE FROM` 文本（DQL 尚未收敛，边界见该类 javadoc） | `ArchitectureGuardTest#dmlTextMustOnlyBeBuiltInsideSqlRenderer` |
+| **DML 单一真相源** | 全库仅 `SqlRenderer` 一处负责拼接 `INSERT INTO` / `UPDATE ... SET` / `DELETE FROM` 文本（DQL 尚未收敛，边界见该类 javadoc） | `ArchitectureGuardTest#sqlTextMustOnlyBeBuiltInsideSqlRendererOrDialectLayer` |
 | **读写职责分离** | `BatchPlanner` 只做批量写；读/删分别由 `EntityFinder` / `EntityDeleter` 承担且不反向依赖写规划器；`EntityOps` 不自行组装语句 | `ArchitectureGuardTest#batchPlannerMustStayWriteOnly`、`#readAndDeleteCollaboratorsMustNotDependOnBatchPlanner`、`#entityOpsFacadeMustNotAssembleStatements` |
 | **SQL 文本快照** | 单表/联表/部分列/分组聚合/DISTINCT 查询与 DML 文本、参数顺序、命名策略转换保持稳定 | `SqlGoldenTest#selectStatements`、`#mutationStatements` |
+| **渲染期动态表名** | 动态表名由 `NamingPolicy.tableNameResolver` 在渲染期决定，覆盖 DQL / DML / 批处理 / schema；原生 SQL 不承诺表元数据 | `TableNameResolverTest#tableNameResolver_appliesToDqlRendering`、`#tableNameResolver_appliesToDmlRendering`、`#tableNameResolver_appliesToBatchRendering`、`#rawSqlCarriesNoTableMetadata_byDesign` |
+| **表名解析单一入口** | 所有框架生成的 SQL 均经 `EntityMetadataContext.qualifiedTableName(policy)` → `NamingPolicy.resolveTable` | `TableNameResolverTest#tableNameResolver_receivesAlreadyFormattedNames` |
 | **命名策略隔离** | `@Column(name = "OrderNo")` 原样保留大小写；不同 `NamingPolicy` 的多个 `JoyaClient` 共享同一实体类时互不污染 | `EntityAndMapperIntegrationTest#joyaSettings_instanceLevelMaxJoinTable_andDualClientNamingPolicyIsolation` |
 | **未关联表防护** | 引用未 join 的实体列时，异常消息明确指出未关联表名与当前已注册可用表 | `EntityAndMapperIntegrationTest#lateBinding_whereBeforeJoin_unjoinedEntityGuard_andReusableWhereCriterion` |
 | **子句顺序正交** | `where` / `orderBy` 可写在 `join` 之前，渲染期统一解析表别名 | `EntityAndMapperIntegrationTest#lateBinding_whereBeforeJoin_unjoinedEntityGuard_andReusableWhereCriterion` |

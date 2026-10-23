@@ -1,5 +1,8 @@
 # SQL 语句内核重构方案
 
+> **历史方案说明（2026-10）**：文中的 `SqlCreator` / `TableMetaContext` 等结构已在重构中移除，执行期 `withTable` 改写亦不再支持；动态表名改由 `NamingPolicy.tableNameResolver` 在渲染期完成。
+
+
 ## 1. 背景与目标
 
 当前项目同时存在两套 SQL 生成与执行模型：
