@@ -28,10 +28,26 @@ public interface Executor {
      */
     <T> Stream<T> queryStream(SqlStatement statement, RowMapper<T> mapper);
 
+    /**
+     * 按指定方言游标 {@code fetchSize} 执行流式查询。
+     */
+    default <T> Stream<T> queryStream(SqlStatement statement, RowMapper<T> mapper, int fetchSize) {
+        return queryStream(statement, mapper);
+    }
+
     int update(SqlStatement statement);
 
     /** 插入并返回首个生成键；无生成键时返回 {@code null}。 */
     Object insert(SqlStatement statement);
+
+    /** 单条 INSERT 执行结果切片（受影响行数 + 首个生成键）。 */
+    record InsertSlice(int affectedRows, Object generatedKey) {
+    }
+
+    /** 执行 INSERT 并返回真实受影响行数与首个生成键。 */
+    default InsertSlice insertExecute(SqlStatement statement) {
+        return new InsertSlice(1, insert(statement));
+    }
 
     /** 列级绑定的批量执行（返回逐行计数数组）。 */
     int[] batchUpdate(BatchSqlStatement batch);

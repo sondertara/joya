@@ -145,7 +145,7 @@ class KernelIntegrationTest {
         SqlInterceptor probe = new SqlInterceptor() {
             @Override
             public SqlStatement intercept(RewriteContext ctx, Chain chain) {
-                ops.add(ctx.statement().op());
+                ops.add(ctx.statement().metadata().operation());
                 return chain.proceed(ctx);
             }
         };

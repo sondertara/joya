@@ -51,10 +51,26 @@ final class BatchPlanner {
                     rowsWithKey.add(row);
                 }
             }
+            if (!rowsWithoutKey.isEmpty() && meta.insertableColumns().isEmpty()) {
+                throw new IllegalStateException("INSERT statement has no insertable columns");
+            }
+            if (!rowsWithKey.isEmpty() && meta.insertableColumnsWithPrimaryKey().isEmpty()) {
+                throw new IllegalStateException("INSERT statement has no insertable columns");
+            }
             MutationResult r1 = GeneratedKeyWriter.executeInsertBatchWithKeys(
                     template, meta, rowsWithoutKey, meta.insertableColumns(), pkGenerated);
+            for (T row : rowsWithoutKey) {
+                if (row instanceof EntityListener listener) {
+                    listener.postPersist(row);
+                }
+            }
             MutationResult r2 = GeneratedKeyWriter.executeInsertBatchWithKeys(
-                    template, meta, rowsWithKey, meta.columnNames(), false);
+                    template, meta, rowsWithKey, meta.insertableColumnsWithPrimaryKey(), false);
+            for (T row : rowsWithKey) {
+                if (row instanceof EntityListener listener) {
+                    listener.postPersist(row);
+                }
+            }
             return r1.merge(r2);
         }
 
@@ -65,7 +81,7 @@ final class BatchPlanner {
                 listener.prePersist(row);
             }
             Object pkVal = pk == null ? null : meta.readFieldValue(row, pk);
-            List<String> candidateCols = pkVal != null ? meta.columnNames() : meta.insertableColumns();
+            List<String> candidateCols = pkVal != null ? meta.insertableColumnsWithPrimaryKey() : meta.insertableColumns();
             List<String> nonNullCols = new ArrayList<>(candidateCols.size());
             for (String col : candidateCols) {
                 if (meta.readFieldValue(row, col) != null) {
@@ -75,12 +91,20 @@ final class BatchPlanner {
             groups.computeIfAbsent(List.copyOf(nonNullCols), k -> new ArrayList<>()).add(row);
         }
 
+        if (groups.containsKey(List.of())) {
+            throw new IllegalStateException("INSERT statement has no insertable columns");
+        }
         MutationResult total = MutationResult.EMPTY;
         for (Map.Entry<List<String>, List<T>> entry : groups.entrySet()) {
             List<String> cols = entry.getKey();
             boolean wantKeys = pkGenerated && !cols.contains(pk);
             total = total.merge(GeneratedKeyWriter.executeInsertBatchWithKeys(
                     template, meta, entry.getValue(), cols, wantKeys));
+            for (T row : entry.getValue()) {
+                if (row instanceof EntityListener listener) {
+                    listener.postPersist(row);
+                }
+            }
         }
         return total;
     }
@@ -98,7 +122,13 @@ final class BatchPlanner {
         for (T row : list) {
             prepareUpdateRow(meta, row, pk);
         }
-        return executeBatch(template, buildUpdateBatch(template, meta, list, setColumns, pk));
+        MutationResult result = executeBatch(template, buildUpdateBatch(template, meta, list, setColumns, pk));
+        for (T row : list) {
+            if (row instanceof EntityListener listener) {
+                listener.postUpdate(row);
+            }
+        }
+        return result;
     }
 
     static <T> MutationResult executeUpdateAllByColumns(
@@ -113,6 +143,10 @@ final class BatchPlanner {
         java.util.Set<String> uniqueCols = new java.util.LinkedHashSet<>();
         for (String colOrField : columns) {
             String resolved = EntityOps.resolveColumnName(meta, colOrField);
+            if (meta.nonUpdatableColumns().contains(resolved)) {
+                throw new IllegalArgumentException(
+                        "Column '" + resolved + "' is marked as updatable=false on entity " + meta.entityType().getName());
+            }
             if (!resolved.equals(pk)) {
                 uniqueCols.add(resolved);
             }
@@ -142,14 +176,20 @@ final class BatchPlanner {
                     nonNullCols.add(col);
                 }
             }
-            if (!nonNullCols.isEmpty()) {
-                groups.computeIfAbsent(List.copyOf(nonNullCols), k -> new ArrayList<>()).add(row);
+            if (nonNullCols.isEmpty()) {
+                throw new IllegalStateException("UPDATE statement has no columns to set");
             }
+            groups.computeIfAbsent(List.copyOf(nonNullCols), k -> new ArrayList<>()).add(row);
         }
         MutationResult result = MutationResult.EMPTY;
         for (Map.Entry<List<String>, List<T>> entry : groups.entrySet()) {
             result = result.merge(executeBatch(
                     template, buildUpdateBatch(template, meta, entry.getValue(), entry.getKey(), pk)));
+            for (T row : entry.getValue()) {
+                if (row instanceof EntityListener listener) {
+                    listener.postUpdate(row);
+                }
+            }
         }
         return result;
     }
@@ -178,8 +218,11 @@ final class BatchPlanner {
             List<T> rows,
             List<String> setColumns,
             String pk) {
-        if (rows == null || rows.isEmpty() || setColumns.isEmpty()) {
+        if (rows == null || rows.isEmpty()) {
             return null;
+        }
+        if (setColumns == null || setColumns.isEmpty()) {
+            throw new IllegalStateException("UPDATE statement has no columns to set");
         }
         List<String> allColumns = new ArrayList<>(setColumns.size() + 1);
         allColumns.addAll(setColumns);

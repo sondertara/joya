@@ -17,19 +17,37 @@ import java.util.stream.StreamSupport;
  */
 public  class ResultSetSpliterator<T> implements Spliterator<T> {
 
+		/** 事务流访问守卫；普通非事务流不安装守卫。 */
+		public interface StreamAccess {
+			void checkStreamAccess();
+
+			void registerStream(Runnable closeAction);
+
+			default void onStreamClosed() {
+			}
+		}
+
 		private final ResultSet rs;
 
 		private final RowMapper<T> rowMapper;
 
-
+		private final StreamAccess streamAccess;
 
 		public ResultSetSpliterator(ResultSet rs, RowMapper<T> rowMapper) {
+			this(rs, rowMapper, null);
+		}
+
+		public ResultSetSpliterator(ResultSet rs, RowMapper<T> rowMapper, StreamAccess streamAccess) {
 			this.rs = rs;
 			this.rowMapper = rowMapper;
+			this.streamAccess = streamAccess;
 		}
 
 		@Override
 		public boolean tryAdvance(Consumer<? super T> action) {
+			if (streamAccess != null) {
+				streamAccess.checkStreamAccess();
+			}
 			try {
 				if (this.rs.next()) {
 					action.accept(this.rowMapper.map(this.rs));

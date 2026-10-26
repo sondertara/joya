@@ -39,6 +39,15 @@ public interface Dialect {
         return quoteStyle().quote(identifier);
     }
 
+    /**
+     * 流式查询（{@code queryStream}）的游标 {@code fetchSize}：
+     * MySQL 系使用 {@link Integer#MIN_VALUE} 开启逐行流式读取，其余方言默认 {@code 2000}。
+     */
+    default int streamFetchSize() {
+        DbType type = dbType();
+        return type != null && type.isLikeMysql() ? Integer.MIN_VALUE : 2000;
+    }
+
     /** 基于原查询语句生成 {@code SELECT COUNT(*)} 包装语句（保留原参数列表与元数据）。 */
     SqlStatement countSql(SqlStatement statement);
 

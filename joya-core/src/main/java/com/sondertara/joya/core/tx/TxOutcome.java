@@ -5,5 +5,7 @@ public enum TxOutcome {
     /** 已提交 */
     COMMITTED,
     /** 已回滚 */
-    ROLLED_BACK
+    ROLLED_BACK,
+    /** 结果未知（如提交或回滚自身发生底层故障，无法确认最终状态） */
+    UNKNOWN
 }

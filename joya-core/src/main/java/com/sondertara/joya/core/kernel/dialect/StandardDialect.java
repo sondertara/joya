@@ -32,14 +32,15 @@ public record StandardDialect(
         if (paginationStyle == PaginationStyle.UNSUPPORTED) {
             throw new UnsupportedOperationException("Count wrapping is not supported for dialect: " + dbType);
         }
-        String aliasClause = supportsSubqueryAliasAs ? ") AS TEMP_T" : ") TEMP_T";
-        String wrappedSql = "SELECT COUNT(*) FROM (" + statement.sql() + aliasClause;
+        String wrappedSql = PaginationStyle.renderCountSql(
+                statement.sql(), dbType.isLikeSqlServer(), supportsSubqueryAliasAs);
         return statement.withSql(wrappedSql);
     }
 
     @Override
     public SqlStatement pageSql(SqlStatement statement, long offset, long limit) {
         Objects.requireNonNull(statement, "statement must not be null");
+        PaginationStyle.validatePageBounds(offset, limit);
         return paginationStyle.paginate(statement, offset, limit);
     }
 }

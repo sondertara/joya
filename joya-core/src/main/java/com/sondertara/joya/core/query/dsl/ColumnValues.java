@@ -26,6 +26,9 @@ final class ColumnValues {
                 return raw;
             }
             Class<?> target = LambdaUtils.boxed(declaredType);
+            if (raw instanceof Number num) {
+                verifyIntegralRange(num, target, index);
+            }
             if (target.isInstance(raw)) {
                 return raw;
             }
@@ -62,5 +65,27 @@ final class ColumnValues {
         if (type == byte.class) return (byte) 0;
         if (type == char.class) return '\0';
         return null;
+    }
+
+    private static void verifyIntegralRange(Number num, Class<?> target, int index) {
+        if (target == Integer.class) {
+            long val = num.longValue();
+            if (val > Integer.MAX_VALUE || val < Integer.MIN_VALUE) {
+                throw new DbException("Numeric overflow at column " + index + ": value [" + num
+                        + "] overflows Integer; use Long or BigDecimal");
+            }
+        } else if (target == Short.class) {
+            long val = num.longValue();
+            if (val > Short.MAX_VALUE || val < Short.MIN_VALUE) {
+                throw new DbException("Numeric overflow at column " + index + ": value [" + num
+                        + "] overflows Short; use Integer, Long, or BigDecimal");
+            }
+        } else if (target == Byte.class) {
+            long val = num.longValue();
+            if (val > Byte.MAX_VALUE || val < Byte.MIN_VALUE) {
+                throw new DbException("Numeric overflow at column " + index + ": value [" + num
+                        + "] overflows Byte; use Integer, Long, or BigDecimal");
+            }
+        }
     }
 }

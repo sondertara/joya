@@ -2,7 +2,6 @@ package com.sondertara.joya.spring;
 
 import com.sondertara.joya.core.JoyaClient;
 import com.sondertara.joya.core.kernel.interceptor.SqlInterceptor;
-import com.sondertara.joya.spring.autoconfigure.JoyaAutoConfiguration;
 import com.sondertara.joya.spring.autoconfigure.JoyaClientCustomizer;
 import com.sondertara.joya.spring.autoconfigure.JoyaClientRegistry;
 import com.sondertara.joya.spring.test.order.OrderRecord;
@@ -13,11 +12,9 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
-import org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration;
-import org.springframework.boot.autoconfigure.jdbc.DataSourceTransactionManagerAutoConfiguration;
-import org.springframework.boot.autoconfigure.jdbc.JdbcTemplateAutoConfiguration;
+import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -32,11 +29,13 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -71,12 +70,7 @@ class JoyaSpringSidecarIntegrationTest {
 
     @Configuration
     @EnableTransactionManagement
-    @ImportAutoConfiguration({
-            DataSourceAutoConfiguration.class,
-            DataSourceTransactionManagerAutoConfiguration.class,
-            JdbcTemplateAutoConfiguration.class,
-            JoyaAutoConfiguration.class
-    })
+    @EnableAutoConfiguration
     static class TestConfig {
 
         static final List<String> GLOBAL_SQL_LOG = new CopyOnWriteArrayList<>();
@@ -108,6 +102,76 @@ class JoyaSpringSidecarIntegrationTest {
         @Bean
         public UserTxCollaborator userTxCollaborator() {
             return new UserTxCollaborator();
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableAutoConfiguration
+    static class AutoDiscoveryConfig {
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class FailingCustomizerConfig {
+
+        static final AtomicReference<RuntimeException> FAILURE = new AtomicReference<>();
+
+        @Bean
+        JoyaClientCustomizer failingJoyaClientCustomizer() {
+            return (clientName, dataSource, builder) -> {
+                if ("order".equals(clientName)) {
+                    RuntimeException failure = new IllegalStateException("Intentional Joya registry build failure");
+                    FAILURE.set(failure);
+                    throw failure;
+                }
+            };
+        }
+    }
+
+    public static class TrackedDataSource extends org.springframework.jdbc.datasource.AbstractDataSource
+            implements AutoCloseable {
+
+        static final AtomicInteger CREATED_COUNT = new AtomicInteger();
+        static final List<String> CLOSE_ORDER = new CopyOnWriteArrayList<>();
+
+        private String url;
+
+        public TrackedDataSource() {
+            CREATED_COUNT.incrementAndGet();
+        }
+
+        public void setDriverClassName(String driverClassName) {
+        }
+
+        public void setUrl(String url) {
+            this.url = url;
+        }
+
+        public void setUsername(String username) {
+        }
+
+        public void setPassword(String password) {
+        }
+
+        static void reset() {
+            CREATED_COUNT.set(0);
+            CLOSE_ORDER.clear();
+        }
+
+        @Override
+        public java.sql.Connection getConnection() throws java.sql.SQLException {
+            throw new java.sql.SQLException("TrackedDataSource does not provide connections");
+        }
+
+        @Override
+        public java.sql.Connection getConnection(String username, String password) throws java.sql.SQLException {
+            return getConnection();
+        }
+
+        @Override
+        public void close() throws Exception {
+            String name = url != null && url.contains("cleanup_order") ? "order" : "primary";
+            CLOSE_ORDER.add(name);
+            throw new Exception("close-" + name);
         }
     }
 
@@ -169,6 +233,19 @@ class JoyaSpringSidecarIntegrationTest {
 
                 // 此时外层 @Transactional 尚未提交，afterCommit 还不应触发
                 assertEquals(0, afterCommitCounter.get());
+
+                // 在读写 @Transactional 中尝试开启 readOnly=true 的内层 joya.tx 必须快速拒绝
+                assertThrows(com.sondertara.joya.core.tx.TxException.class,
+                        () -> joyaClient.tx().readOnly().run(roTx -> {}));
+            });
+        }
+
+        @Transactional
+        public void joinedJoyaTxMustNotRetryOnDeadlock(AtomicInteger attempts) {
+            joyaClient.tx().retryOnDeadlock(3).run(tx -> {
+                attempts.incrementAndGet();
+                throw new com.sondertara.joya.exceptions.DbException(
+                        new java.sql.SQLException("deadlock inside joined spring tx", "40001"));
             });
         }
     }
@@ -215,6 +292,111 @@ class JoyaSpringSidecarIntegrationTest {
 
         TestConfig.GLOBAL_SQL_LOG.clear();
         TestConfig.ORDER_ONLY_SQL_LOG.clear();
+    }
+
+    private static ApplicationContextRunner autoDiscoveryRunner() {
+        return new ApplicationContextRunner().withUserConfiguration(AutoDiscoveryConfig.class);
+    }
+
+    private static Throwable rootCause(Throwable failure) {
+        Throwable current = failure;
+        while (current.getCause() != null && current.getCause() != current) {
+            current = current.getCause();
+        }
+        return current;
+    }
+
+    @Test
+    void bootAutoConfigurationDiscovery_loadsJoyaAndAcceptsInheritedDefaults() {
+        autoDiscoveryRunner()
+                .withPropertyValues(
+                        "spring.datasource.url=jdbc:h2:mem:auto_discovery_db;MODE=MYSQL;DB_CLOSE_DELAY=-1",
+                        "spring.datasource.username=sa",
+                        "spring.datasource.password=",
+                        "spring.datasource.type=org.h2.jdbcx.JdbcDataSource")
+                .run(context -> {
+                    assertNull(context.getStartupFailure());
+                    JoyaClientRegistry registry = context.getBean(JoyaClientRegistry.class);
+                    assertSame(registry.primary(), context.getBean(JoyaClient.class));
+                    assertEquals(Set.of(JoyaClientRegistry.PRIMARY), registry.names());
+                    assertEquals(1000, registry.primary().settings().batchSize());
+                });
+    }
+
+    @Test
+    void selfManagedPrimary_rejectsJndiAndXaBeforeCreatingDataSource() {
+        TrackedDataSource.reset();
+        autoDiscoveryRunner()
+                .withPropertyValues(
+                        "joya.primary.use-spring=false",
+                        "joya.primary.type=" + TrackedDataSource.class.getName(),
+                        "joya.primary.url=jdbc:h2:mem:unsupported_primary",
+                        "joya.primary.jndi-name=java:comp/env/jdbc/primary",
+                        "joya.primary.xa.data-source-class-name=org.example.UnsupportedXaDataSource")
+                .run(context -> {
+                    Throwable startupFailure = context.getStartupFailure();
+                    assertNotNull(startupFailure);
+                    String message = rootCause(startupFailure).getMessage();
+                    assertTrue(message.contains("joya.primary.jndi-name"), message);
+                    assertTrue(message.contains("joya.primary.xa.data-source-class-name"), message);
+                    assertTrue(message.contains("not implemented"), message);
+                    assertEquals(0, TrackedDataSource.CREATED_COUNT.get());
+                });
+    }
+
+    @Test
+    void selfManagedExtra_rejectsJndiAndXaBeforeCreatingDataSource() {
+        TrackedDataSource.reset();
+        autoDiscoveryRunner()
+                .withPropertyValues(
+                        "spring.datasource.url=jdbc:h2:mem:extra_validation_db;MODE=MYSQL;DB_CLOSE_DELAY=-1",
+                        "spring.datasource.username=sa",
+                        "spring.datasource.password=",
+                        "spring.datasource.type=org.h2.jdbcx.JdbcDataSource",
+                        "joya.primary.use-spring=true",
+                        "joya.datasources[0].name=order",
+                        "joya.datasources[0].type=" + TrackedDataSource.class.getName(),
+                        "joya.datasources[0].url=jdbc:h2:mem:unsupported_order",
+                        "joya.datasources[0].jndi-name=java:comp/env/jdbc/order",
+                        "joya.datasources[0].xa.data-source-class-name=org.example.UnsupportedXaDataSource")
+                .run(context -> {
+                    Throwable startupFailure = context.getStartupFailure();
+                    assertNotNull(startupFailure);
+                    String message = rootCause(startupFailure).getMessage();
+                    assertTrue(message.contains("joya.datasources[0].jndi-name"), message);
+                    assertTrue(message.contains("joya.datasources[0].xa.data-source-class-name"), message);
+                    assertTrue(message.contains("not implemented"), message);
+                    assertEquals(0, TrackedDataSource.CREATED_COUNT.get());
+                });
+    }
+
+    @Test
+    void registryBuildFailure_closesResourcesInReverseOrderAndPreservesAllFailures() {
+        TrackedDataSource.reset();
+        FailingCustomizerConfig.FAILURE.set(null);
+        autoDiscoveryRunner()
+                .withUserConfiguration(FailingCustomizerConfig.class)
+                .withPropertyValues(
+                        "joya.primary.use-spring=false",
+                        "joya.primary.type=" + TrackedDataSource.class.getName(),
+                        "joya.primary.url=jdbc:h2:mem:cleanup_primary",
+                        "joya.primary.username=sa",
+                        "joya.datasources[0].name=order",
+                        "joya.datasources[0].type=" + TrackedDataSource.class.getName(),
+                        "joya.datasources[0].url=jdbc:h2:mem:cleanup_order",
+                        "joya.datasources[0].username=sa")
+                .run(context -> {
+                    Throwable startupFailure = context.getStartupFailure();
+                    assertNotNull(startupFailure);
+                    RuntimeException failure = FailingCustomizerConfig.FAILURE.get();
+                    assertNotNull(failure);
+                    assertSame(failure, rootCause(startupFailure));
+                    assertEquals(2, TrackedDataSource.CREATED_COUNT.get());
+                    assertEquals(List.of("order", "primary"), TrackedDataSource.CLOSE_ORDER);
+                    assertEquals(2, failure.getSuppressed().length);
+                    assertEquals("close-order", failure.getSuppressed()[0].getMessage());
+                    assertEquals("close-primary", failure.getSuppressed()[1].getMessage());
+                });
     }
 
     @Test
@@ -343,6 +525,12 @@ class JoyaSpringSidecarIntegrationTest {
         assertTrue(joyaClient.of(UserAccount.class).existsById(20L));
         assertTrue(joyaClient.of(UserAccount.class).existsById(21L));
         assertFalse(joyaClient.of(UserAccount.class).existsById(22L));
+
+        // 加入外层 @Transactional 的内层 joya.tx 回滚仅设置 rollback-only，未经物理回滚确认严禁触发死锁重试
+        AtomicInteger joinedRetryAttempts = new AtomicInteger(0);
+        assertThrows(com.sondertara.joya.exceptions.DbException.class,
+                () -> txCollaborator.joinedJoyaTxMustNotRetryOnDeadlock(joinedRetryAttempts));
+        assertEquals(1, joinedRetryAttempts.get(), "加入外层 Spring 事务的内层 joya.tx 严禁自动重试");
     }
 
     @Test

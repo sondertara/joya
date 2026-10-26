@@ -1,6 +1,6 @@
 package com.sondertara.joya.core;
 
-import com.sondertara.joya.core.jdbc.dao.JoyaMapper;
+import com.sondertara.joya.core.kernel.dialect.DbType;
 import com.sondertara.joya.core.kernel.statement.SqlStatement;
 import com.sondertara.joya.core.query.dsl.Query;
 
@@ -35,13 +35,17 @@ public interface DataOps {
     SqlOps sql(SqlStatement statement);
 
     /**
-     * 获取自定义 {@link JoyaMapper} 子接口的动态代理（支持 {@code @Query} 注解、JPA 方法名派生查询与基础 CRUD）。
+     * 获取自定义 {@code JoyaMapper} 子接口的动态代理（支持 {@code @Query} 注解、JPA 方法名派生查询与基础 CRUD）。
      */
-    @SuppressWarnings("rawtypes")
-    <M extends JoyaMapper> M mapper(Class<M> mapperType);
+    <M> M mapper(Class<M> mapperType);
 
     /** 获取当前数据操作上下文的客户端配置（默认返回 {@link JoyaSettings#DEFAULT}）。 */
     default JoyaSettings settings() {
         return JoyaSettings.DEFAULT;
+    }
+
+    /** 获取当前数据操作上下文绑定的数据库方言类型（默认返回 {@link DbType#other}）。 */
+    default DbType dbType() {
+        return DbType.other;
     }
 }

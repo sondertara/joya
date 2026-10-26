@@ -5,7 +5,8 @@ import com.sondertara.joya.core.query.criterion.WhereCriterion;
 import com.sondertara.joya.core.query.dsl.QueryCustomizer;
 import com.sondertara.joya.exceptions.TaraException;
 
-import java.util.Arrays;
+import java.lang.reflect.Array;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Objects;
@@ -83,7 +84,12 @@ public final class PageQueryParams {
                 case LTE -> w.lteIfPresent(fieldName, val);
                 case IN -> {
                     if (val != null && val.getClass().isArray()) {
-                        w.inIfNotEmpty(fieldName, Arrays.asList((Object[]) val));
+                        int length = Array.getLength(val);
+                        List<Object> values = new ArrayList<>(length);
+                        for (int i = 0; i < length; i++) {
+                            values.add(Array.get(val, i));
+                        }
+                        w.inIfNotEmpty(fieldName, values);
                     } else if (val instanceof Collection<?> col) {
                         w.inIfNotEmpty(fieldName, (Collection<Object>) col);
                     } else if (val != null) {

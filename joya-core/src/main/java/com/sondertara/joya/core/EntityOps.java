@@ -175,13 +175,17 @@ public final class EntityOps<T> {
         Map<String, Object> values = EntitySnapshot.snapshot(meta, entity).values();
         String pk = meta.primaryKey();
         Object existingPkVal = pk == null ? null : values.get(pk);
-        Set<String> declared = new LinkedHashSet<>(existingPkVal != null ? meta.columnNames() : meta.insertableColumns());
+        Set<String> declared = new LinkedHashSet<>(existingPkVal != null ? meta.insertableColumnsWithPrimaryKey() : meta.insertableColumns());
         MutationContext ctx = new MutationContext(meta, values, null, declared, ignoreNull, false, template.namingPolicy());
-        Object generatedKey = template.insert(InsertStatementFactory.create(ctx));
+        var slice = template.insertExecute(InsertStatementFactory.create(ctx));
+        Object generatedKey = slice.generatedKey();
         if (existingPkVal == null && generatedKey != null) {
             GeneratedKeyWriter.writeBackPrimaryKey(meta, entity, generatedKey);
         }
-        return MutationResult.ofInsert(1, generatedKey != null ? generatedKey : existingPkVal);
+        if (entity instanceof EntityListener listener) {
+            listener.postPersist(entity);
+        }
+        return MutationResult.ofInsert(slice.affectedRows(), generatedKey != null ? generatedKey : existingPkVal);
     }
 
     private MutationResult doUpdateByPrimaryKey(T entity, boolean ignoreNull) {
@@ -199,7 +203,11 @@ public final class EntityOps<T> {
         setColumns.remove(pk);
         MutationContext ctx = new MutationContext(meta, values, WhereCriterion.create().eq(pk, pkValue),
                 new LinkedHashSet<>(setColumns), ignoreNull, false, template.namingPolicy());
-        return MutationResult.ofAffected(template.update(UpdateStatementFactory.create(ctx)));
+        long affected = template.update(UpdateStatementFactory.create(ctx));
+        if (entity instanceof EntityListener listener) {
+            listener.postUpdate(entity);
+        }
+        return MutationResult.ofAffected(affected);
     }
 
     String requirePrimaryKey() {

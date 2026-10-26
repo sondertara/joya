@@ -155,6 +155,6 @@ class InterceptorChainTest {
 
         assertEquals(List.of("99"), seen, "下游拦截器应能读到上游写入的 attrs");
         assertEquals(List.of(99L), result.args());
-        assertEquals(Operation.SELECT, result.op());
+        assertEquals(Operation.SELECT, result.metadata().operation());
     }
 }

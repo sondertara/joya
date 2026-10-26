@@ -21,13 +21,16 @@ import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.autoconfigure.jdbc.DataSourceProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
+import org.springframework.core.InfrastructureProxy;
 import org.springframework.core.annotation.MergedAnnotation;
 import org.springframework.core.annotation.MergedAnnotations;
 import org.springframework.core.type.MethodMetadata;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
+import org.springframework.jdbc.datasource.DelegatingDataSource;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.ResourceTransactionManager;
 
@@ -69,71 +72,75 @@ public class JoyaAutoConfiguration {
         Map<String, JoyaClient> clients = new LinkedHashMap<>();
         List<AutoCloseable> managedResources = new ArrayList<>();
 
-        // 1. 构建主库客户端（joya.primary）
-        PrimaryDataSourceProperties primaryProps = properties.getPrimary();
-        String primaryName = (primaryProps.getName() == null || primaryProps.getName().isBlank())
-                ? JoyaClientRegistry.PRIMARY
-                : primaryProps.getName().trim();
+        try {
+            // 1. 构建主库客户端（joya.primary）
+            PrimaryDataSourceProperties primaryProps = properties.getPrimary();
+            String primaryName = (primaryProps.getName() == null || primaryProps.getName().isBlank())
+                    ? JoyaClientRegistry.PRIMARY
+                    : primaryProps.getName().trim();
 
-        DataSource primaryDataSource;
-        PlatformTransactionManager primaryTxManager;
-        if (primaryProps.isUseSpring()) {
-            if (hasCustomConnectionConfig(primaryProps)) {
-                log.warn("[Joya] 'joya.primary.use-spring' is true: custom connection properties under 'joya.primary' "
-                        + "(url/username/password/driver-class-name) will be ignored and Spring's native DataSource will be used instead. "
-                        + "Set 'joya.primary.use-spring=false' if you want to use the custom primary datasource.");
+            DataSource primaryDataSource;
+            PlatformTransactionManager primaryTxManager;
+            if (primaryProps.isUseSpring()) {
+                if (hasCustomConnectionConfig(primaryProps)) {
+                    log.warn("[Joya] 'joya.primary.use-spring' is true: custom connection properties under 'joya.primary' "
+                            + "(url/username/password/driver-class-name) will be ignored and Spring's native DataSource will be used instead. "
+                            + "Set 'joya.primary.use-spring=false' if you want to use the custom primary datasource.");
+                }
+                primaryDataSource = resolvePrimaryDataSource(primaryName, springDataSourceProvider, beanFactory);
+                primaryTxManager = resolvePrimaryTransactionManager(primaryDataSource, txManagerProvider);
+            } else {
+                validateSelfManagedDataSource("joya.primary", primaryProps);
+                primaryDataSource = primaryProps.initializeDataSourceBuilder().build();
+                if (primaryDataSource instanceof AutoCloseable closeable) {
+                    managedResources.add(closeable);
+                }
+                primaryTxManager = new DataSourceTransactionManager(primaryDataSource);
             }
-            primaryDataSource = springDataSourceProvider.getIfAvailable();
-            if (primaryDataSource == null) {
-                throw new IllegalStateException(
-                        "joya.primary.use-spring is true, but no Spring DataSource bean was found. "
-                                + "Configure spring.datasource.* or set joya.primary.use-spring=false with joya.primary.url.");
-            }
-            primaryTxManager = resolvePrimaryTransactionManager(primaryDataSource, txManagerProvider);
-        } else {
-            primaryDataSource = primaryProps.initializeDataSourceBuilder().build();
-            if (primaryDataSource instanceof AutoCloseable closeable) {
-                managedResources.add(closeable);
-            }
-            primaryTxManager = new DataSourceTransactionManager(primaryDataSource);
-        }
 
-        clients.put(primaryName, buildClient(
-                primaryName,
-                primaryProps,
-                primaryDataSource,
-                primaryTxManager,
-                properties,
-                beanFactory,
-                customizers
-        ));
-
-        // 2. 用完全相同的构建流程创建扩展数据源列表（joya.datasources）
-        for (JoyaDataSourceProperties dsProps : properties.getDatasources()) {
-            String name = dsProps.getName() == null ? "" : dsProps.getName().trim();
-            if (name.isEmpty()) {
-                throw new IllegalArgumentException("Each item in joya.datasources must specify a non-empty 'name'.");
-            }
-            if (clients.containsKey(name)) {
-                throw new IllegalArgumentException("Duplicate Joya datasource name '" + name + "'.");
-            }
-            DataSource extraDataSource = dsProps.initializeDataSourceBuilder().build();
-            if (extraDataSource instanceof AutoCloseable closeable) {
-                managedResources.add(closeable);
-            }
-            PlatformTransactionManager extraTxManager = new DataSourceTransactionManager(extraDataSource);
-            clients.put(name, buildClient(
-                    name,
-                    dsProps,
-                    extraDataSource,
-                    extraTxManager,
+            clients.put(primaryName, buildClient(
+                    primaryName,
+                    primaryProps,
+                    primaryDataSource,
+                    primaryTxManager,
                     properties,
                     beanFactory,
                     customizers
             ));
-        }
 
-        return new JoyaClientRegistry(primaryName, clients, managedResources);
+            // 2. 用完全相同的构建流程创建扩展数据源列表（joya.datasources）
+            List<JoyaDataSourceProperties> extraDataSources = properties.getDatasources();
+            for (int index = 0; index < extraDataSources.size(); index++) {
+                JoyaDataSourceProperties dsProps = extraDataSources.get(index);
+                String name = dsProps.getName() == null ? "" : dsProps.getName().trim();
+                if (name.isEmpty()) {
+                    throw new IllegalArgumentException("Each item in joya.datasources must specify a non-empty 'name'.");
+                }
+                if (clients.containsKey(name)) {
+                    throw new IllegalArgumentException("Duplicate Joya datasource name '" + name + "'.");
+                }
+                validateSelfManagedDataSource("joya.datasources[" + index + "]", dsProps);
+                DataSource extraDataSource = dsProps.initializeDataSourceBuilder().build();
+                if (extraDataSource instanceof AutoCloseable closeable) {
+                    managedResources.add(closeable);
+                }
+                PlatformTransactionManager extraTxManager = new DataSourceTransactionManager(extraDataSource);
+                clients.put(name, buildClient(
+                        name,
+                        dsProps,
+                        extraDataSource,
+                        extraTxManager,
+                        properties,
+                        beanFactory,
+                        customizers
+                ));
+            }
+
+            return new JoyaClientRegistry(primaryName, clients, managedResources);
+        } catch (RuntimeException | Error failure) {
+            closeManagedResourcesAfterFailure(managedResources, failure);
+            throw failure;
+        }
     }
 
     @Bean
@@ -145,9 +152,13 @@ public class JoyaAutoConfiguration {
 
     @Bean
     @ConditionalOnProperty(prefix = "joya", name = "sql-log", havingValue = "true")
-    public SqlInterceptor joyaSqlLogInterceptor() {
+    public SqlInterceptor joyaSqlLogInterceptor(JoyaProperties properties) {
         return (context, chain) -> {
-            log.info("[Joya SQL] {} | args={}", context.statement().sql(), context.statement().args());
+            if (properties.isSqlLogPrintArgs()) {
+                log.info("[Joya SQL] {} | args={}", context.statement().sql(), context.statement().args());
+            } else {
+                log.info("[Joya SQL] {} | paramCount={}", context.statement().sql(), context.statement().args().size());
+            }
             return chain.proceed(context);
         };
     }
@@ -180,6 +191,46 @@ public class JoyaAutoConfiguration {
         return builder.build();
     }
 
+    private static void validateSelfManagedDataSource(
+            String propertyPath,
+            JoyaDataSourceProperties props) {
+        List<String> unsupportedProperties = new ArrayList<>();
+        if (isNotBlank(props.getJndiName())) {
+            unsupportedProperties.add(propertyPath + ".jndi-name");
+        }
+        DataSourceProperties.Xa xa = props.getXa();
+        if (xa != null) {
+            if (isNotBlank(xa.getDataSourceClassName())) {
+                unsupportedProperties.add(propertyPath + ".xa.data-source-class-name");
+            }
+            if (xa.getProperties() != null && !xa.getProperties().isEmpty()) {
+                unsupportedProperties.add(propertyPath + ".xa.properties");
+            }
+        }
+        if (!unsupportedProperties.isEmpty()) {
+            throw new IllegalStateException(
+                    "Unsupported self-managed Joya DataSource configuration: "
+                            + String.join(", ", unsupportedProperties)
+                            + ". JNDI and XA are not implemented for DataSources created by Joya; "
+                            + "remove these properties and configure JDBC 'url'/'type' instead. "
+                            + "To reuse a Spring-managed primary DataSource, set 'joya.primary.use-spring=true'.");
+        }
+    }
+
+    private static void closeManagedResourcesAfterFailure(
+            List<AutoCloseable> managedResources,
+            Throwable failure) {
+        for (int index = managedResources.size() - 1; index >= 0; index--) {
+            try {
+                managedResources.get(index).close();
+            } catch (Throwable closeFailure) {
+                if (closeFailure != failure) {
+                    failure.addSuppressed(closeFailure);
+                }
+            }
+        }
+    }
+
     private static boolean hasCustomConnectionConfig(PrimaryDataSourceProperties props) {
         return isNotBlank(props.getUrl())
                 || isNotBlank(props.getUsername())
@@ -192,19 +243,82 @@ public class JoyaAutoConfiguration {
         return value != null && !value.isBlank();
     }
 
-    private static PlatformTransactionManager resolvePrimaryTransactionManager(
-            DataSource primaryDataSource,
-            ObjectProvider<PlatformTransactionManager> txManagerProvider) {
-        PlatformTransactionManager ifUnique = txManagerProvider.getIfUnique();
+    private static DataSource resolvePrimaryDataSource(
+            String primaryName,
+            ObjectProvider<DataSource> springDataSourceProvider,
+            ConfigurableListableBeanFactory beanFactory) {
+        DataSource ifUnique = springDataSourceProvider.getIfUnique();
         if (ifUnique != null) {
             return ifUnique;
         }
+        String[] dsBeanNames = beanFactory.getBeanNamesForType(DataSource.class);
+        if (dsBeanNames.length == 0) {
+            throw new IllegalStateException(
+                    "joya.primary.use-spring is true, but no Spring DataSource bean was found. "
+                            + "Configure spring.datasource.* or set joya.primary.use-spring=false with joya.primary.url.");
+        }
+        for (String candidateName : List.of(primaryName, "dataSource")) {
+            for (String beanName : dsBeanNames) {
+                if (beanName.equals(candidateName)) {
+                    return beanFactory.getBean(beanName, DataSource.class);
+                }
+            }
+        }
+        throw new IllegalStateException(
+                "joya.primary.use-spring is true, but multiple Spring DataSource beans were found ("
+                        + String.join(", ", dsBeanNames)
+                        + ") without a @Primary bean or a bean named '" + primaryName + "' / 'dataSource'. "
+                        + "Mark your primary DataSource with @Primary or set joya.primary.use-spring=false.");
+    }
+
+    private static PlatformTransactionManager resolvePrimaryTransactionManager(
+            DataSource primaryDataSource,
+            ObjectProvider<PlatformTransactionManager> txManagerProvider) {
         for (PlatformTransactionManager tm : txManagerProvider) {
-            if (tm instanceof ResourceTransactionManager rtm && rtm.getResourceFactory() == primaryDataSource) {
+            if (tm instanceof ResourceTransactionManager rtm
+                    && matchesDataSource(rtm.getResourceFactory(), primaryDataSource)) {
                 return tm;
             }
         }
+        PlatformTransactionManager ifUnique = txManagerProvider.getIfUnique();
+        if (ifUnique != null && !(ifUnique instanceof ResourceTransactionManager)) {
+            return ifUnique;
+        }
         return new DataSourceTransactionManager(primaryDataSource);
+    }
+
+    private static boolean matchesDataSource(Object resourceFactory, DataSource targetDataSource) {
+        if (resourceFactory == null || targetDataSource == null) {
+            return false;
+        }
+        if (resourceFactory == targetDataSource || resourceFactory.equals(targetDataSource)) {
+            return true;
+        }
+        Object unwrappedFactory = unwrapResourceFactory(resourceFactory);
+        Object unwrappedTarget = unwrapResourceFactory(targetDataSource);
+        return unwrappedFactory == unwrappedTarget || unwrappedFactory.equals(unwrappedTarget);
+    }
+
+    private static Object unwrapResourceFactory(Object candidate) {
+        Object current = candidate;
+        while (current != null) {
+            if (current instanceof InfrastructureProxy proxy) {
+                Object unwrapped = proxy.getWrappedObject();
+                if (unwrapped != null && unwrapped != current) {
+                    current = unwrapped;
+                    continue;
+                }
+            }
+            if (current instanceof DelegatingDataSource delegating) {
+                DataSource target = delegating.getTargetDataSource();
+                if (target != null && target != current) {
+                    current = target;
+                    continue;
+                }
+            }
+            break;
+        }
+        return current;
     }
 
     private static List<SqlInterceptor> resolveInterceptorsForClient(

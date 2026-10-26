@@ -106,9 +106,14 @@ public class JoinCriterion {
             @Nullable UnaryOperator<WhereCriterion> onCondition) {
         ColumnMetaProvider columnLeft = ColumnMetaProvider.fromGetter(left);
         ColumnMetaProvider columnRight = ColumnMetaProvider.fromGetter(right);
-        if (columnLeft.entityClass() != null && Objects.equals(columnLeft.entityClass(), columnRight.entityClass())) {
+        if (columnLeft.entityClass() == null || columnRight.entityClass() == null) {
+            String side = columnLeft.entityClass() == null ? "left" : "right";
+            throw new IllegalArgumentException("JOIN " + side
+                    + " column must reference an entity table; SQL expressions without a table role are not supported");
+        }
+        if (Objects.equals(columnLeft.canonicalKey(), columnRight.canonicalKey())) {
             throw new DbException(
-                    "The join tables are same; review your code: [" + columnLeft.entityClass().getName() + "]");
+                    "The join columns are identical; review your code: [" + columnLeft.canonicalKey() + "]");
         }
         WhereCriterion onCriterion = null;
         if (onCondition != null) {

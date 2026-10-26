@@ -28,7 +28,7 @@ public record TxStatus(
 
     /** 退出一层嵌套。 */
     public TxStatus exit() {
-        return new TxStatus(state, depth - 1, globalRollbackOnly, startedAtNanos, statementCount);
+        return new TxStatus(state, Math.max(0, depth - 1), globalRollbackOnly, startedAtNanos, statementCount);
     }
 
     /** 标记全局仅回滚。 */

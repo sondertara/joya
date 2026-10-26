@@ -8,9 +8,10 @@ import com.sondertara.joya.utils.SqlFormatUtils;
 import com.sondertara.joya.utils.Strings;
 import org.jspecify.annotations.Nullable;
 
+import java.util.Collections;
 import java.util.Map;
 import java.util.Objects;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.WeakHashMap;
 import java.util.regex.Pattern;
 
 /**
@@ -35,8 +36,8 @@ public sealed interface ColumnMetaProvider
     /** 合法的列或字段标识符正则（可选一段前缀：alias.col 或 Table.field）。 */
     Pattern SAFE_IDENTIFIER = Pattern.compile("^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)?$");
 
-    /** 无捕获 Getter 合成类到 ColumnMetaProvider 的全局缓存。 */
-    Map<Class<?>, ColumnMetaProvider> GETTER_PROVIDER_CACHE = new ConcurrentHashMap<>();
+    /** 无捕获 Getter 合成类到 ColumnMetaProvider 的全局弱引用缓存（避免热重载场景 ClassLoader 泄漏）。 */
+    Map<Class<?>, ColumnMetaProvider> GETTER_PROVIDER_CACHE = Collections.synchronizedMap(new WeakHashMap<>());
 
     /**
      * 所属实体类型（若为字符串列名或聚合表达式则为 {@code null}）。

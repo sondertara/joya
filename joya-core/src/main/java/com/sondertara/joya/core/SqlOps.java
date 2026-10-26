@@ -1,6 +1,7 @@
 package com.sondertara.joya.core;
 
 import com.sondertara.joya.core.jdbc.resultset.mapper.BeanRowMapper;
+import com.sondertara.joya.core.jdbc.resultset.mapper.MapRowMapper;
 import com.sondertara.joya.core.kernel.executor.ResultSetExtractor;
 import com.sondertara.joya.core.kernel.executor.RowMapper;
 import com.sondertara.joya.core.kernel.executor.SingleColumnRowMapper;
@@ -12,20 +13,15 @@ import com.sondertara.joya.core.kernel.statement.StatementMetadata;
 import com.sondertara.joya.core.query.PageResult;
 import com.sondertara.joya.core.query.pagination.PageRequest;
 import com.sondertara.joya.core.result.MutationResult;
-import com.sondertara.joya.exceptions.DbException;
-import com.sondertara.joya.utils.SqlDataUtils;
 
 import java.net.URI;
 import java.net.URL;
 import java.sql.Blob;
 import java.sql.Clob;
-import java.sql.ResultSetMetaData;
-import java.sql.SQLException;
 import java.time.temporal.Temporal;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Date;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -79,20 +75,7 @@ public final class SqlOps {
 
     /** 查询多行并映射为列名到列值的有序 Map 列表。 */
     public List<Map<String, Object>> listMap() {
-        return list(rs -> {
-            try {
-                ResultSetMetaData metaData = rs.getMetaData();
-                int count = metaData.getColumnCount();
-                Map<String, Object> row = new LinkedHashMap<>(count);
-                for (int i = 1; i <= count; i++) {
-                    String colName = SqlDataUtils.lookupColumnName(metaData, i);
-                    row.put(colName, rs.getObject(i));
-                }
-                return row;
-            } catch (SQLException e) {
-                throw new DbException("Failed to map row to Map", e);
-            }
-        });
+        return list(new MapRowMapper());
     }
 
     /**
@@ -152,7 +135,7 @@ public final class SqlOps {
     public <T> PageResult<T> page(RowMapper<T> rowMapper, PageRequest pageRequest) {
         Objects.requireNonNull(pageRequest, "pageRequest must not be null");
         PageSlice<T> slice = template.queryPage(
-                selectStmt(), rowMapper, pageRequest.getOffset(), pageRequest.getSize());
+                selectStmt(), rowMapper, pageRequest.getOffsetAsLong(), pageRequest.getSize());
         return PageResult.of(slice.rows())
                 .pagination(pageRequest.getPage(), pageRequest.getSize())
                 .total(slice.total())
@@ -191,11 +174,11 @@ public final class SqlOps {
         return template.update(stmt);
     }
 
-    /** 执行 INSERT 语句，返回包含生成键与影响行数的 {@link MutationResult}。 */
+    /** 执行 INSERT 语句，返回包含生成键与真实影响行数的 {@link MutationResult}。 */
     public MutationResult insert() {
         SqlStatement stmt = presetStatement != null ? presetStatement : SqlStatement.insert(sql, args);
-        Object key = template.insert(stmt);
-        return MutationResult.ofInsert(1, key);
+        var slice = template.insertExecute(stmt);
+        return MutationResult.ofInsert(slice.affectedRows(), slice.generatedKey());
     }
 
     /** 使用当前 SQL 模板执行批量参数更新。 */

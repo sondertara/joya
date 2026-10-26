@@ -25,7 +25,7 @@ public class JdkMapperProxy {
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
-    public <T extends JoyaMapper> T create(Class<T> mapperInterface) {
+    public <T> T create(Class<T> mapperInterface) {
         Class<?> entityClass = resolveEntityClass(mapperInterface);
         JoyaMapperImpl<?> baseMapper = new JoyaMapperImpl<>(dataOps, (Class) entityClass);
         JoyaExecutorSupport executorSupport = new JoyaExecutorSupport(dataOps, entityClass);

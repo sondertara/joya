@@ -25,10 +25,10 @@ class SqlStatementTest {
 
     @Test
     void staticFactories_setOperation() {
-        assertEquals(Operation.SELECT, SqlStatement.select("SELECT 1").op());
-        assertEquals(Operation.INSERT, SqlStatement.insert("INSERT INTO t VALUES (?)", 1).op());
-        assertEquals(Operation.UPDATE, SqlStatement.update("UPDATE t SET a = ?", 1).op());
-        assertEquals(Operation.DELETE, SqlStatement.delete("DELETE FROM t WHERE id = ?", 1).op());
+        assertEquals(Operation.SELECT, SqlStatement.select("SELECT 1").metadata().operation());
+        assertEquals(Operation.INSERT, SqlStatement.insert("INSERT INTO t VALUES (?)", 1).metadata().operation());
+        assertEquals(Operation.UPDATE, SqlStatement.update("UPDATE t SET a = ?", 1).metadata().operation());
+        assertEquals(Operation.DELETE, SqlStatement.delete("DELETE FROM t WHERE id = ?", 1).metadata().operation());
     }
 
     @Test
@@ -61,7 +61,7 @@ class SqlStatementTest {
         assertEquals("SELECT * FROM t_user", original.sql(), "原实例不应被改写");
         assertEquals("SELECT * FROM t_user_0", rewritten.sql());
         assertEquals(DbType.mysql, rewritten.metadata().dbType());
-        assertEquals(Operation.SELECT, rewritten.op(), "改写不应丢失操作类型");
+        assertEquals(Operation.SELECT, rewritten.metadata().operation(), "改写不应丢失操作类型");
         assertEquals(List.of(1), rewritten.args(), "改写不应丢失参数");
     }
 

@@ -6,8 +6,6 @@ import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 反射工具，补充 ReflectUtils 缺失功能。
@@ -16,7 +14,23 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public final class ClassUtils {
 
-    private static final Map<Class<?>, List<Field>> FIELD_CACHE = new ConcurrentHashMap<>();
+    private static final ClassValue<List<Field>> FIELD_CACHE = new ClassValue<>() {
+        @Override
+        protected List<Field> computeValue(Class<?> k) {
+            List<Field> fields = new ArrayList<>();
+            Class<?> current = k;
+            while (current != null && current != Object.class) {
+                for (Field field : current.getDeclaredFields()) {
+                    if (Modifier.isStatic(field.getModifiers())) {
+                        continue;
+                    }
+                    fields.add(field);
+                }
+                current = current.getSuperclass();
+            }
+            return Collections.unmodifiableList(fields);
+        }
+    };
 
     private ClassUtils() {
     }
@@ -34,20 +48,7 @@ public final class ClassUtils {
     }
 
     public static List<Field> getFieldsByCache(Class<?> clazz) {
-        return FIELD_CACHE.computeIfAbsent(clazz, k -> {
-            List<Field> fields = new ArrayList<>();
-            Class<?> current = k;
-            while (current != null && current != Object.class) {
-                for (Field field : current.getDeclaredFields()) {
-                    if (Modifier.isStatic(field.getModifiers())) {
-                        continue;
-                    }
-                    fields.add(field);
-                }
-                current = current.getSuperclass();
-            }
-            return Collections.unmodifiableList(fields);
-        });
+        return FIELD_CACHE.get(clazz);
     }
 
     public static Class<?> getClass(String className) throws ClassNotFoundException {

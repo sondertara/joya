@@ -335,64 +335,97 @@ public class WhereCriterion {
 
     // ==================== LIKE / NOT LIKE ====================
 
+    public static String escapeLikeCharacters(Object value) {
+        String raw = value.toString();
+        StringBuilder sb = new StringBuilder(raw.length() + 4);
+        for (int i = 0; i < raw.length(); i++) {
+            char c = raw.charAt(i);
+            if (c == '\\' || c == '%' || c == '_') {
+                sb.append('\\');
+            }
+            sb.append(c);
+        }
+        return sb.toString();
+    }
+
+    private static boolean containsLikeMetaChar(String raw) {
+        for (int i = 0; i < raw.length(); i++) {
+            char c = raw.charAt(i);
+            if (c == '\\' || c == '%' || c == '_') {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private WhereCriterion addLikeComparison(
+            ColumnMetaProvider col, boolean negated, boolean prefix, boolean suffix, Object rawValue) {
+        String str = rawValue.toString();
+        boolean escaped = containsLikeMetaChar(str);
+        String body = escaped ? escapeLikeCharacters(str) : str;
+        String pattern = (prefix ? "%" : "") + body + (suffix ? "%" : "");
+        String op = (negated ? " NOT LIKE ?" : " LIKE ?") + (escaped ? " ESCAPE '\\'" : "");
+        return addBinaryComparison(col, op, pattern);
+    }
+
     public <T> WhereCriterion contains(IGetter<T, ?> fn, Object value) {
         Object v = requireValue("contains", value);
-        return addBinaryComparison(ColumnMetaProvider.fromGetter(fn), " LIKE ?", "%" + v + "%");
+        return addLikeComparison(ColumnMetaProvider.fromGetter(fn), false, true, true, v);
     }
 
     public WhereCriterion contains(String columnName, Object value) {
         Object v = requireValue("contains", value);
-        return addBinaryComparison(ColumnMetaProvider.fromName(columnName), " LIKE ?", "%" + v + "%");
+        return addLikeComparison(ColumnMetaProvider.fromName(columnName), false, true, true, v);
     }
 
     public <T> WhereCriterion startsWith(IGetter<T, ?> fn, Object value) {
         Object v = requireValue("startsWith", value);
-        return addBinaryComparison(ColumnMetaProvider.fromGetter(fn), " LIKE ?", v + "%");
+        return addLikeComparison(ColumnMetaProvider.fromGetter(fn), false, false, true, v);
     }
 
     public WhereCriterion startsWith(String columnName, Object value) {
         Object v = requireValue("startsWith", value);
-        return addBinaryComparison(ColumnMetaProvider.fromName(columnName), " LIKE ?", v + "%");
+        return addLikeComparison(ColumnMetaProvider.fromName(columnName), false, false, true, v);
     }
 
     public <T> WhereCriterion endsWith(IGetter<T, ?> fn, Object value) {
         Object v = requireValue("endsWith", value);
-        return addBinaryComparison(ColumnMetaProvider.fromGetter(fn), " LIKE ?", "%" + v);
+        return addLikeComparison(ColumnMetaProvider.fromGetter(fn), false, true, false, v);
     }
 
     public WhereCriterion endsWith(String columnName, Object value) {
         Object v = requireValue("endsWith", value);
-        return addBinaryComparison(ColumnMetaProvider.fromName(columnName), " LIKE ?", "%" + v);
+        return addLikeComparison(ColumnMetaProvider.fromName(columnName), false, true, false, v);
     }
 
     public <T> WhereCriterion notContains(IGetter<T, ?> fn, Object value) {
         Object v = requireValue("notContains", value);
-        return addBinaryComparison(ColumnMetaProvider.fromGetter(fn), " NOT LIKE ?", "%" + v + "%");
+        return addLikeComparison(ColumnMetaProvider.fromGetter(fn), true, true, true, v);
     }
 
     public WhereCriterion notContains(String columnName, Object value) {
         Object v = requireValue("notContains", value);
-        return addBinaryComparison(ColumnMetaProvider.fromName(columnName), " NOT LIKE ?", "%" + v + "%");
+        return addLikeComparison(ColumnMetaProvider.fromName(columnName), true, true, true, v);
     }
 
     public <T> WhereCriterion notStartsWith(IGetter<T, ?> fn, Object value) {
         Object v = requireValue("notStartsWith", value);
-        return addBinaryComparison(ColumnMetaProvider.fromGetter(fn), " NOT LIKE ?", v + "%");
+        return addLikeComparison(ColumnMetaProvider.fromGetter(fn), true, false, true, v);
     }
 
     public WhereCriterion notStartsWith(String columnName, Object value) {
         Object v = requireValue("notStartsWith", value);
-        return addBinaryComparison(ColumnMetaProvider.fromName(columnName), " NOT LIKE ?", v + "%");
+        return addLikeComparison(ColumnMetaProvider.fromName(columnName), true, false, true, v);
     }
 
     public <T> WhereCriterion notEndsWith(IGetter<T, ?> fn, Object value) {
         Object v = requireValue("notEndsWith", value);
-        return addBinaryComparison(ColumnMetaProvider.fromGetter(fn), " NOT LIKE ?", "%" + v);
+        return addLikeComparison(ColumnMetaProvider.fromGetter(fn), true, true, false, v);
     }
 
     public WhereCriterion notEndsWith(String columnName, Object value) {
         Object v = requireValue("notEndsWith", value);
-        return addBinaryComparison(ColumnMetaProvider.fromName(columnName), " NOT LIKE ?", "%" + v);
+        return addLikeComparison(ColumnMetaProvider.fromName(columnName), true, true, false, v);
     }
 
     public <T> WhereCriterion containsIfNotBlank(IGetter<T, ?> fn, @Nullable Object value) {
@@ -601,7 +634,14 @@ public class WhereCriterion {
         if (values.size() > MAX_IN_SIZE) {
             throw new DbException("The size of in params cannot be greater than " + MAX_IN_SIZE);
         }
-        List<Object> snapshot = new ArrayList<>(values);
+        List<Object> snapshot = new ArrayList<>(values.size());
+        for (Object val : values) {
+            if (val == null) {
+                throw new IllegalArgumentException("WhereCriterion." + (notIn ? "notIn" : "in")
+                        + " collection must not contain null elements (use isNull or isNotNull explicitly)");
+            }
+            snapshot.add(val);
+        }
         String prefix = notIn ? " NOT IN " : " IN ";
         predicates.add((ctx, sql, params, source) -> {
             ColumnAlias alias = provider.resolveAlias(ctx);

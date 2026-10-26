@@ -154,6 +154,7 @@ public class JPAQueryParser<T> extends AbstractQueryParser {
         List<String> updateSetColumns = new ArrayList<>();
         Map<String, Object> updateSetValues = new LinkedHashMap<>();
         boolean updateIgnoreNull = false;
+        Runnable postUpdateAction = null;
 
         if (subject.isUpdate()) {
             String updateBody = subject.getUpdateBody();
@@ -168,6 +169,7 @@ public class JPAQueryParser<T> extends AbstractQueryParser {
                 Object entityArg = runtimeArgs[entityPos - 1];
                 if (entityArg instanceof EntityListener listener) {
                     listener.preUpdate(entityArg);
+                    postUpdateAction = () -> listener.postUpdate(entityArg);
                 }
                 EntitySnapshot snapshot = EntitySnapshot.snapshot(meta, entityArg);
                 updateIgnoreNull = isIgnoreNullKeyword;
@@ -236,15 +238,16 @@ public class JPAQueryParser<T> extends AbstractQueryParser {
             sql = SelectStatementFactory.create(meta, whereCriterion, countColumns, null, namingPolicy).sql();
         } else {
             String orderByClause = parseOrderByClause(meta, orderBySource);
-            String limitClause = subject.getMaxResults().map(limit -> "LIMIT " + limit).orElse(null);
-            String extPart = joinClauses(orderByClause, limitClause);
-            sql = SelectStatementFactory.create(meta, whereCriterion, null, extPart, namingPolicy).sql();
+            sql = SelectStatementFactory.create(meta, whereCriterion, null, orderByClause, namingPolicy).sql();
             if (subject.isDistinct()) {
                 sql = SqlRenderer.renderDistinct(sql);
             }
         }
 
-        return new DefaultEntityBasedBoundSql(returnType, sql, bindings, cacheable);
+        java.util.OptionalInt maxResults = subject.getMaxResults()
+                .map(java.util.OptionalInt::of)
+                .orElseGet(java.util.OptionalInt::empty);
+        return new DefaultEntityBasedBoundSql(returnType, sql, bindings, cacheable, maxResults, postUpdateAction);
     }
 
     private List<String> parseUpdateSetColumns(EntityMetadataContext meta, String updateSubjectBody) {
@@ -262,6 +265,16 @@ public class JPAQueryParser<T> extends AbstractQueryParser {
             }
             String col = resolveColumn(meta, candidate.toString());
             if (col != null) {
+                if (meta.nonUpdatableColumns().contains(col)) {
+                    throw new IllegalSqlException(
+                            "Column [{}] is marked as updatable=false and cannot be updated in method [{}]",
+                            col, statementMethod.getName());
+                }
+                if (columns.contains(col)) {
+                    throw new IllegalSqlException(
+                            "Duplicate update column [{}] in method [{}]",
+                            col, statementMethod.getName());
+                }
                 columns.add(col);
                 candidate.setLength(0);
             }
@@ -309,17 +322,7 @@ public class JPAQueryParser<T> extends AbstractQueryParser {
             }
             orderItems.add(meta.formatColumn(col, namingPolicy) + " ASC");
         }
-        return orderItems.isEmpty() ? null : "ORDER BY " + String.join(", ", orderItems);
-    }
-
-    private static @Nullable String joinClauses(@Nullable String first, @Nullable String second) {
-        if (first == null || first.isBlank()) {
-            return second;
-        }
-        if (second == null || second.isBlank()) {
-            return first;
-        }
-        return first + " " + second;
+        return orderItems.isEmpty() ? null : SqlRenderer.renderOrderBy(String.join(", ", orderItems));
     }
 
     private static @Nullable String resolveColumn(EntityMetadataContext meta, String fieldOrColumn) {

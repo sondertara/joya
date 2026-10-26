@@ -29,9 +29,11 @@ public class MapRowMapper implements RowMapper<Map<String, Object>> {
             int count = metaData.getColumnCount();
             for (int i = 1; i <= count; i++) {
                 String key = SqlDataUtils.lookupColumnName(metaData, i);
-                //if the name has alias
                 if (key.contains(".")) {
-                    key = Strings.subAfter(key, ".");
+                    String stripped = Strings.subAfter(key, ".");
+                    if (!map.containsKey(stripped)) {
+                        key = stripped;
+                    }
                 }
                 Object value = SqlDataUtils.getResultSetValue(row, i);
                 map.put(key, value);

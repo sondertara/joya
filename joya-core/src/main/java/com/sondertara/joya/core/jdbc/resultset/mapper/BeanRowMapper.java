@@ -107,7 +107,7 @@ public class BeanRowMapper<T> implements RowMapper<T> {
             initializeRecord();
             return;
         }
-        if (type == null || type.isInterface() || type.isPrimitive() || SqlFormatUtils.isPrimitive(type)) {
+        if (type == null || type.isInterface() || isSimpleValueType(type)) {
             return;
         }
         try {
@@ -265,17 +265,16 @@ public class BeanRowMapper<T> implements RowMapper<T> {
                 String jsonProp = extractJsonPropertyValue(field);
                 if (Strings.isNotBlank(jsonProp)) {
                     tmp.put(jsonProp.toLowerCase(), field.getName());
-                } else if (field.isAnnotationPresent(FieldAlias.class)) {
+                }
+                PersistenceAnnotations.findColumnName(field)
+                        .ifPresent(colName -> tmp.put(colName.toLowerCase(), field.getName()));
+                if (field.isAnnotationPresent(FieldAlias.class)) {
                     FieldAlias fieldAlias = field.getAnnotation(FieldAlias.class);
                     TypedConverter typeConverter = ClassUtils.newInstance(fieldAlias.converter());
                     fieldTypeConverterMap.put(field.getName(), typeConverter);
                     for (String s : fieldAlias.value()) {
                         aliasTmpMap.put(s.trim(), field.getName());
                     }
-
-                } else {
-                    PersistenceAnnotations.findColumnName(field)
-                            .ifPresent(colName -> tmp.put(colName.toLowerCase(), field.getName()));
                 }
             }
             tmp.putAll(aliasTmpMap);
@@ -285,6 +284,19 @@ public class BeanRowMapper<T> implements RowMapper<T> {
         } catch (Exception e) {
             log.error("Get fields for class[{}] error", type, e);
         }
+    }
+
+    private static boolean isSimpleValueType(Class<?> clazz) {
+        return clazz.isPrimitive()
+                || SqlFormatUtils.isPrimitive(clazz)
+                || CharSequence.class.isAssignableFrom(clazz)
+                || Date.class.isAssignableFrom(clazz)
+                || java.time.temporal.Temporal.class.isAssignableFrom(clazz)
+                || Blob.class.isAssignableFrom(clazz)
+                || Clob.class.isAssignableFrom(clazz)
+                || clazz.isEnum()
+                || byte[].class == clazz
+                || java.util.UUID.class == clazz;
     }
 
     @Override
@@ -298,15 +310,6 @@ public class BeanRowMapper<T> implements RowMapper<T> {
             int count = metaData.getColumnCount();
             if (count < 1) {
                 return null;
-            }
-            if (Blob.class == type) {
-                return (T) row.getBlob(1);
-            } else if (Clob.class == type) {
-                return (T) row.getClob(1);
-            }
-
-            if (Date.class.isAssignableFrom(type)) {
-                return (T) row.getDate(1);
             }
             if (this.isRecord) {
                 return mapRecord(row, metaData, count);
@@ -334,11 +337,12 @@ public class BeanRowMapper<T> implements RowMapper<T> {
                 } else if (value != null && !wrapPrimitive(propertyType).isInstance(value)) {
                     value = ConvertUtils.convert(value, propertyType);
                 }
-                if (value != null) {
+                if (value != null || !propertyType.isPrimitive()) {
                     try {
                         target.write(bean, value);
                     } catch (Exception e) {
-                        log.error("Write property[{}] value[{}] type[{}] error:{}", target.name(), value, value.getClass().getName(), e.getMessage(), e);
+                        log.error("Write property[{}] value[{}] type[{}] error:{}", target.name(), value,
+                                value == null ? "null" : value.getClass().getName(), e.getMessage(), e);
                         throw new DbException(e);
                     }
                 }

@@ -17,8 +17,8 @@ import java.util.regex.Pattern;
  */
 public final class RawColumnParser {
 
-    private static final Pattern ALIASED_COLUMN_PREFIX = Pattern.compile("^[tT][0-9]+\\.[a-zA-Z0-9_]+");
-    private static final Pattern AS_PATTERN = Pattern.compile("\\s+[Aa][Ss]\\s+");
+    private static final Pattern ALIASED_COLUMN_TOKEN = Pattern.compile("(?<![\\w\"'])[tT][0-9]+\\.[a-zA-Z0-9_]+");
+    private static final Pattern SIMPLE_IDENTIFIER = Pattern.compile("^[A-Za-z_][A-Za-z0-9_]*$");
 
     private RawColumnParser() {
     }
@@ -39,58 +39,44 @@ public final class RawColumnParser {
         }
 
         String columnName = columnStr.trim();
-        String[] strings = columnName.split(Strings.COMMA);
-        if (strings.length > 1) {
+        List<String> topLevelParts = splitByTopLevelComma(columnName);
+        if (topLevelParts.size() > 1) {
             StringJoiner sj = new StringJoiner(Strings.COMMA + " ");
-            for (String part : strings) {
-                String column = replaceAs(part);
-                List<String> list = new ArrayList<>();
-                Matcher fm = ALIASED_COLUMN_PREFIX.matcher(column);
-                while (fm.find()) {
-                    list.add(fm.group());
-                }
-                if (list.isEmpty()) {
-                    return new ColumnPair(columnName, null, false);
-                }
-                for (String string : list) {
-                    StringBuilder sb = new StringBuilder();
-                    int i = column.indexOf(string);
-                    sb.append(column, 0, i);
-                    if (string.contains("_")) {
-                        sb.append(string);
-                    } else {
-                        String underlineCase = Strings.toUnderlineCase(string);
-                        underlineCase = columnUppercase
-                                ? underlineCase.toUpperCase()
-                                : underlineCase.toLowerCase();
-                        sb.append(underlineCase);
-                    }
-                    sb.append(column.substring(i + string.length()));
-                    sj.add(sb);
-                }
+            for (String part : topLevelParts) {
+                String normalized = normalizeTopLevelAs(part.trim());
+                sj.add(formatAliasedTokens(normalized, columnUppercase));
             }
             return new ColumnPair(sj.toString(), null, false);
         }
 
-        String column = replaceAs(columnName);
-        int asIndex = column.indexOf(" AS ");
+        String column = normalizeTopLevelAs(columnName);
+        int asIndex = findTopLevelAsIndex(column);
 
         String asPart = null;
-        if (asIndex > 1) {
+        if (asIndex > 0) {
             asPart = Strings.trim(column.substring(asIndex + 4));
             column = Strings.trim(column.substring(0, asIndex));
         } else {
-            String[] split = column.split(" ");
-            if (split.length > 1) {
-                asPart = Strings.trim(split[1]);
-                column = Strings.trim(split[0]);
+            int lastSpace = findLastTopLevelWhitespace(column);
+            if (lastSpace > 0) {
+                String candidateAlias = Strings.trim(column.substring(lastSpace + 1));
+                if (SIMPLE_IDENTIFIER.matcher(candidateAlias).matches()) {
+                    asPart = candidateAlias;
+                    column = Strings.trim(column.substring(0, lastSpace));
+                }
             }
         }
-        int index = column.indexOf(".");
+
+        if (column.indexOf('(') >= 0) {
+            String formattedExpr = formatAliasedTokens(column, columnUppercase);
+            return new ColumnPair(formattedExpr, asPart, false);
+        }
+
+        int index = column.indexOf('.');
         StringBuilder sb;
         if (index > -1) {
             sb = new StringBuilder(column.substring(0, index));
-            sb.append(".");
+            sb.append('.');
             String col = column.substring(index + 1);
             if (!col.contains("_")) {
                 col = Strings.toUnderlineCase(col);
@@ -111,8 +97,94 @@ public final class RawColumnParser {
         return new ColumnPair(string, asPart);
     }
 
-    private static String replaceAs(String sql) {
-        Matcher matcher = AS_PATTERN.matcher(sql);
-        return matcher.replaceAll(" AS ").trim();
+    private static String formatAliasedTokens(String expr, boolean columnUppercase) {
+        return ALIASED_COLUMN_TOKEN.matcher(expr).replaceAll(m -> {
+            String token = m.group();
+            int dot = token.indexOf('.');
+            String prefix = token.substring(0, dot + 1);
+            String col = token.substring(dot + 1);
+            if (!col.contains("_")) {
+                col = Strings.toUnderlineCase(col);
+            }
+            col = columnUppercase ? col.toUpperCase() : col.toLowerCase();
+            return prefix + col;
+        });
+    }
+
+    private static List<String> splitByTopLevelComma(String sql) {
+        List<String> parts = new ArrayList<>();
+        int depth = 0;
+        boolean inSingleQuote = false;
+        int start = 0;
+        for (int i = 0; i < sql.length(); i++) {
+            char c = sql.charAt(i);
+            if (c == '\'') {
+                inSingleQuote = !inSingleQuote;
+            } else if (!inSingleQuote) {
+                if (c == '(') {
+                    depth++;
+                } else if (c == ')' && depth > 0) {
+                    depth--;
+                } else if (c == ',' && depth == 0) {
+                    parts.add(sql.substring(start, i));
+                    start = i + 1;
+                }
+            }
+        }
+        parts.add(sql.substring(start));
+        return parts;
+    }
+
+    private static String normalizeTopLevelAs(String sql) {
+        int idx = findTopLevelAsIndex(sql);
+        if (idx < 0) {
+            return sql.trim();
+        }
+        return (sql.substring(0, idx).trim() + " AS " + sql.substring(idx + 4).trim()).trim();
+    }
+
+    private static int findTopLevelAsIndex(String sql) {
+        int depth = 0;
+        boolean inSingleQuote = false;
+        for (int i = 0; i <= sql.length() - 4; i++) {
+            char c = sql.charAt(i);
+            if (c == '\'') {
+                inSingleQuote = !inSingleQuote;
+            } else if (!inSingleQuote) {
+                if (c == '(') {
+                    depth++;
+                } else if (c == ')' && depth > 0) {
+                    depth--;
+                } else if (depth == 0
+                        && Character.isWhitespace(c)
+                        && (sql.charAt(i + 1) == 'a' || sql.charAt(i + 1) == 'A')
+                        && (sql.charAt(i + 2) == 's' || sql.charAt(i + 2) == 'S')
+                        && Character.isWhitespace(sql.charAt(i + 3))) {
+                    return i;
+                }
+            }
+        }
+        return -1;
+    }
+
+    private static int findLastTopLevelWhitespace(String sql) {
+        int depth = 0;
+        boolean inSingleQuote = false;
+        int lastIdx = -1;
+        for (int i = 0; i < sql.length(); i++) {
+            char c = sql.charAt(i);
+            if (c == '\'') {
+                inSingleQuote = !inSingleQuote;
+            } else if (!inSingleQuote) {
+                if (c == '(') {
+                    depth++;
+                } else if (c == ')' && depth > 0) {
+                    depth--;
+                } else if (depth == 0 && Character.isWhitespace(c)) {
+                    lastIdx = i;
+                }
+            }
+        }
+        return lastIdx;
     }
 }

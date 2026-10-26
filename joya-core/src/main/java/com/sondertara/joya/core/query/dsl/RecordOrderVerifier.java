@@ -6,12 +6,13 @@ import java.lang.invoke.SerializedLambda;
 import java.lang.reflect.Method;
 import java.lang.reflect.RecordComponent;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.WeakHashMap;
 
 /**
  * 位置映射的 record 顺序校验。
@@ -22,7 +23,8 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 final class RecordOrderVerifier {
 
-    private static final Map<Class<?>, Optional<Class<?>>> CONSTRUCTED_RECORDS = new ConcurrentHashMap<>();
+    private static final Map<Class<?>, Optional<Class<?>>> CONSTRUCTED_RECORDS =
+            Collections.synchronizedMap(new WeakHashMap<>());
 
     private RecordOrderVerifier() {
     }

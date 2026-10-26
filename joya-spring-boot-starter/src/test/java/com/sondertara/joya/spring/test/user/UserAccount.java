@@ -11,6 +11,7 @@ import jakarta.persistence.Transient;
 public class UserAccount {
 
     @Id
+    @jakarta.persistence.GeneratedValue(strategy = jakarta.persistence.GenerationType.IDENTITY)
     @Column(name = "id")
     private Long id;
 

@@ -53,6 +53,51 @@ public final class Exprs {
         return new Aggregate<>("SUM", ColumnMetaProvider.fromGetter(column), false, (Class<R>) valueType(column));
     }
 
+    /** {@code SUM(col)}，显式指定宽返回类型（如 {@code Long.class} 或 {@code BigDecimal.class}，防止整型求和窄化溢出）。 */
+    public static <T, S extends Number> Expr<S> sum(IGetter<T, ? extends Number> column, Class<S> resultType) {
+        Objects.requireNonNull(column, "column must not be null");
+        Objects.requireNonNull(resultType, "resultType must not be null");
+        return new Aggregate<>("SUM", ColumnMetaProvider.fromGetter(column), false, boxed(resultType));
+    }
+
+    /** {@code SUM(col)} 并以 {@link Long} 接收结果。 */
+    public static <T> Expr<Long> sumAsLong(IGetter<T, ? extends Number> column) {
+        return sum(column, Long.class);
+    }
+
+    /** {@code SUM(col)} 并以 {@link java.math.BigDecimal} 接收结果。 */
+    public static <T> Expr<java.math.BigDecimal> sumAsDecimal(IGetter<T, ? extends Number> column) {
+        return sum(column, java.math.BigDecimal.class);
+    }
+
+    /**
+     * 显式绑定指定表别名的类型化列引用（用于自连接或同一目标表多次 JOIN 的场景，如 {@code col("t1", Emp::getName)}）。
+     */
+    @SuppressWarnings("unchecked")
+    public static <T, R> Expr<R> col(String tableAlias, IGetter<T, R> column) {
+        Objects.requireNonNull(tableAlias, "tableAlias must not be null");
+        Objects.requireNonNull(column, "column must not be null");
+        Class<?> entityClass = LambdaUtils.getReceiverClass(column);
+        String propertyName = LambdaUtils.getPropertyName(column);
+        Class<R> type = (Class<R>) boxed(valueType(column));
+        return new Expr<>() {
+            @Override
+            public Class<R> resultType() {
+                return type;
+            }
+
+            @Override
+            public String alias() {
+                return propertyName;
+            }
+
+            @Override
+            public String render(RenderContext ctx) {
+                return ctx.resolveAliasedGetterColumn(tableAlias, entityClass, propertyName).identity();
+            }
+        };
+    }
+
     /** {@code AVG(col)}，返回 {@code Double}。 */
     public static <T> Expr<Double> avg(IGetter<T, ? extends Number> column) {
         Objects.requireNonNull(column, "column must not be null");

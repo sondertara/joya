@@ -8,6 +8,7 @@ import com.sondertara.joya.core.jdbc.dao.support.EntityBasedBoundSql;
 import com.sondertara.joya.core.jdbc.dao.support.JPAQueryParser;
 import com.sondertara.joya.core.jdbc.dao.support.NativeQueryParser;
 import com.sondertara.joya.core.jdbc.support.annotation.Query;
+import com.sondertara.joya.core.kernel.dialect.DbType;
 import com.sondertara.joya.core.kernel.statement.Operation;
 import com.sondertara.joya.core.kernel.statement.SqlStatement;
 import com.sondertara.joya.core.kernel.statement.StatementMetadata;
@@ -31,8 +32,6 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.StringJoiner;
 
-import static com.sondertara.joya.utils.SqlFormatUtils.POSITIONAL_OR_INDEXED_PARAMETER;
-
 /**
  * @author huangxiaohu
  */
@@ -50,14 +49,14 @@ public class JoyaExecutorSupport {
     @SuppressWarnings({"unchecked", "rawtypes"})
     public Object execute(final Method method, Object[] args) {
         Object[] actualArgs = args == null ? new Object[0] : args;
+        com.sondertara.joya.core.kernel.dialect.DbType dbType = joyaClient.dbType();
         PageRequest pageRequest = extractPageRequest(method, actualArgs);
-        EntityBasedBoundSql boundSql = resolveBoundSql(method, actualArgs);
+        EntityBasedBoundSql boundSql = resolveBoundSql(method, actualArgs, dbType);
         String sqlString = boundSql.getSqlString();
         Type returnType = boundSql.returnType();
         Class<?> aClass = TypeUtils.getClass(returnType);
 
         List<Object> rawValues = new ArrayList<>(boundSql.parameterBinding().size());
-        boolean hasMultiValue = false;
         for (ParameterBinding binding : boundSql.parameterBinding()) {
             if (binding instanceof ConstantParameterBinding constantBinding) {
                 rawValues.add(constantBinding.getValue());
@@ -68,27 +67,19 @@ public class JoyaExecutorSupport {
                 throw new IllegalArgumentException(Strings.format(
                         "Parameter position[{}] not match args index for method[{}]", position - 1, method));
             }
-            Object prepared = binding.prepare(actualArgs[position - 1]);
-            if (isCollectionOrNonByteArray(prepared)) {
-                hasMultiValue = true;
-            }
-            rawValues.add(prepared);
+            rawValues.add(binding.prepare(actualArgs[position - 1]));
         }
 
-        List<Object> list;
-        if (hasMultiValue) {
-            list = new ArrayList<>();
-            sqlString = expandCollectionPlaceholders(sqlString, rawValues, list, method);
-        } else {
-            list = rawValues;
-        }
+        List<Object> list = new ArrayList<>(rawValues.size());
+        sqlString = expandCollectionPlaceholders(sqlString, rawValues, list, method, dbType);
 
         boolean query = boundSql.isQuery();
         Object[] parameters = list.toArray();
-        SqlOps sqlOps = createSqlOps(sqlString, parameters, query);
+        SqlOps sqlOps = createSqlOps(sqlString, parameters, query, dbType);
 
         if (!query) {
             int affected = sqlOps.update();
+            boundSql.postUpdate();
             if (aClass == void.class || aClass == Void.class) {
                 return null;
             }
@@ -129,7 +120,10 @@ public class JoyaExecutorSupport {
             Type argument = TypeUtils.getTypeArgument(returnType);
             Class<?> returnClass = argument != null ? TypeUtils.getClass(argument) : entityClass;
             if (pageRequest != null) {
-                return sqlOps.limit(returnClass, pageRequest.getOffset(), pageRequest.getSize());
+                return sqlOps.limit(returnClass, pageRequest.getOffsetAsLong(), pageRequest.getSize());
+            }
+            if (boundSql.maxResults().isPresent()) {
+                return sqlOps.limit(returnClass, 0L, boundSql.maxResults().getAsInt());
             }
             return sqlOps.list(returnClass);
         }
@@ -140,6 +134,10 @@ public class JoyaExecutorSupport {
             Class<?> returnClass = argument != null ? TypeUtils.getClass(argument) : entityClass;
             if (SqlOps.isScalarType(returnClass)) {
                 return sqlOps.value(returnClass);
+            }
+            if (boundSql.maxResults().isPresent()) {
+                List<?> rows = sqlOps.limit(returnClass, 0L, boundSql.maxResults().getAsInt());
+                return rows.isEmpty() ? Optional.empty() : Optional.ofNullable(rows.get(0));
             }
             return sqlOps.one(returnClass);
         }
@@ -154,6 +152,10 @@ public class JoyaExecutorSupport {
         }
 
         // return custom DTO or entity
+        if (boundSql.maxResults().isPresent()) {
+            List<?> rows = sqlOps.limit(aClass, 0L, boundSql.maxResults().getAsInt());
+            return rows.isEmpty() ? null : rows.get(0);
+        }
         return sqlOps.one(aClass).orElse(null);
     }
 
@@ -196,79 +198,98 @@ public class JoyaExecutorSupport {
             throw new IllegalArgumentException(
                     "Collection or array parameter for IN clause must not be empty in method: " + method.getName());
         }
+        for (Object item : items) {
+            if (item == null) {
+                throw new IllegalArgumentException(
+                        "Collection or array parameter for IN clause must not contain null elements in method: " + method.getName());
+            }
+        }
         return items;
     }
 
     private static String expandCollectionPlaceholders(
-            String sql, List<Object> rawValues, List<Object> expandedOut, Method method) {
+            String sql,
+            List<Object> rawValues,
+            List<Object> expandedOut,
+            Method method,
+            @Nullable DbType dbType) {
+        List<com.sondertara.joya.utils.SqlFormatUtils.Placeholder> placeholders =
+                com.sondertara.joya.utils.SqlFormatUtils.scanPlaceholders(sql, dbType);
+        if (placeholders.size() != rawValues.size()) {
+            throw new IllegalArgumentException("Parameter count mismatch for method " + method.getName()
+                    + ": SQL expects " + placeholders.size() + " but got " + rawValues.size());
+        }
         StringBuilder sb = new StringBuilder(sql.length() + 16);
-        int bindIdx = 0;
-        boolean inSingleQuote = false;
-        for (int i = 0; i < sql.length(); i++) {
-            char ch = sql.charAt(i);
-            if (ch == '\'') {
-                inSingleQuote = !inSingleQuote;
-                sb.append(ch);
-                continue;
-            }
-            if (!inSingleQuote && ch == '?' && bindIdx < rawValues.size()) {
-                Object val = rawValues.get(bindIdx++);
-                if (isCollectionOrNonByteArray(val)) {
-                    List<Object> items = flattenMultiValue(val, method);
-                    StringJoiner sj = new StringJoiner(", ");
-                    for (Object item : items) {
-                        sj.add("?");
-                        expandedOut.add(item);
-                    }
-                    sb.append(sj);
-                } else {
-                    sb.append('?');
-                    expandedOut.add(val);
+        int copiedUntil = 0;
+        for (int bindIdx = 0; bindIdx < placeholders.size(); bindIdx++) {
+            com.sondertara.joya.utils.SqlFormatUtils.Placeholder placeholder = placeholders.get(bindIdx);
+            sb.append(sql, copiedUntil, placeholder.start());
+            Object val = rawValues.get(bindIdx);
+            if (isCollectionOrNonByteArray(val)) {
+                List<Object> items = flattenMultiValue(val, method);
+                StringJoiner sj = new StringJoiner(", ");
+                for (Object item : items) {
+                    sj.add("?");
+                    expandedOut.add(item);
                 }
+                sb.append(sj);
             } else {
-                sb.append(ch);
+                sb.append('?');
+                expandedOut.add(val);
             }
+            copiedUntil = placeholder.end();
         }
-        while (bindIdx < rawValues.size()) {
-            expandedOut.add(rawValues.get(bindIdx++));
-        }
+        sb.append(sql, copiedUntil, sql.length());
         return sb.toString();
     }
 
-    private EntityBasedBoundSql resolveBoundSql(Method method, Object[] actualArgs) {
+    private EntityBasedBoundSql resolveBoundSql(
+            Method method,
+            Object[] actualArgs,
+            @Nullable DbType dbType) {
         EntityBasedBoundSql cached = boundSqlCache.get(method);
         if (cached != null) {
             return cached;
         }
-        EntityBasedBoundSql parsed = parseAndNormalize(method, actualArgs);
+        EntityBasedBoundSql parsed = parseAndNormalize(method, actualArgs, dbType);
         if (!(parsed instanceof com.sondertara.joya.core.jdbc.dao.support.DefaultEntityBasedBoundSql def) || def.isCacheable()) {
             boundSqlCache.putIfAbsent(method, parsed);
         }
         return parsed;
     }
 
-    private EntityBasedBoundSql parseAndNormalize(Method method, Object[] actualArgs) {
+    private EntityBasedBoundSql parseAndNormalize(
+            Method method,
+            Object[] actualArgs,
+            @Nullable DbType dbType) {
         EntityBasedBoundSql raw;
         if (method.isAnnotationPresent(Query.class)) {
-            raw = new NativeQueryParser(entityClass, method).parse();
+            raw = new NativeQueryParser(entityClass, method, dbType).parse();
         } else {
             raw = new JPAQueryParser<>(entityClass, method, actualArgs, joyaClient.settings().namingPolicy()).parse();
         }
-        String normalizedSql = raw.getSqlString().replaceAll(POSITIONAL_OR_INDEXED_PARAMETER, "?");
+        String normalizedSql = com.sondertara.joya.utils.SqlFormatUtils.getJdbcStyleSql(raw.getSqlString(), dbType);
         boolean cacheable = !(raw instanceof com.sondertara.joya.core.jdbc.dao.support.DefaultEntityBasedBoundSql def)
                 || def.isCacheable();
         return new com.sondertara.joya.core.jdbc.dao.support.DefaultEntityBasedBoundSql(
                 raw.returnType(),
                 normalizedSql,
                 raw.parameterBinding(),
-                cacheable
+                cacheable,
+                raw.maxResults(),
+                raw::postUpdate,
+                dbType
         );
     }
 
-    private SqlOps createSqlOps(String sql, Object[] parameters, boolean query) {
+    private SqlOps createSqlOps(
+            String sql,
+            Object[] parameters,
+            boolean query,
+            @Nullable DbType dbType) {
         try {
             EntityMetadataContext meta = CacheHolder.tableMetaCache().getMetadataContext(entityClass);
-            String stripped = DefaultEntityBasedBoundSql.stripLeadingComments(sql).toLowerCase(Locale.ROOT);
+            String stripped = DefaultEntityBasedBoundSql.stripLeadingComments(sql, dbType).toLowerCase(Locale.ROOT);
             Operation op = query
                     ? Operation.SELECT
                     : (stripped.startsWith("delete")
@@ -434,13 +455,13 @@ public class JoyaExecutorSupport {
             if (valueToBind == null) {
                 return null;
             }
-            String s = valueToBind.toString();
+            String s = com.sondertara.joya.core.query.criterion.WhereCriterion.escapeLikeCharacters(valueToBind);
             StringBuilder sb = new StringBuilder(s.length() + 2);
-            if (prefixWildcard && !s.startsWith("%")) {
+            if (prefixWildcard) {
                 sb.append('%');
             }
             sb.append(s);
-            if (suffixWildcard && !s.endsWith("%")) {
+            if (suffixWildcard) {
                 sb.append('%');
             }
             return sb.toString();

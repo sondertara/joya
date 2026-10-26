@@ -11,6 +11,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 import java.util.stream.Stream;
 
@@ -104,19 +105,27 @@ class ArchitectureGuardTest {
         try (Stream<Path> paths = Files.walk(mainRoot)) {
             for (Path file : paths.filter(p -> p.toString().endsWith(".java")).toList()) {
                 String content = stripComments(Files.readString(file));
+                String upper = content.toUpperCase(Locale.ROOT);
                 String relative = mainRoot.relativize(file).toString().replace('\\', '/');
-                boolean allowedRenderer = file.getFileName().toString().equals("SqlRenderer.java");
-                boolean allowedDialect = relative.contains("kernel/dialect/");
+                boolean allowedRenderer = relative.equals("com/sondertara/joya/core/kernel/statement/SqlRenderer.java");
+                boolean allowedDialect = relative.startsWith("com/sondertara/joya/core/kernel/dialect/");
                 if (allowedRenderer || allowedDialect) {
                     continue;
                 }
-                if (content.contains("append(\"INSERT INTO ")
-                        || content.contains("\"INSERT INTO \" +")
-                        || content.contains("append(\"UPDATE \")")
-                        || content.contains("\"UPDATE \" +")
-                        || content.contains("append(\"DELETE FROM ")
-                        || content.contains("\"DELETE FROM \" +")
-                        || content.contains("\"SELECT ")) {
+                if (upper.contains("APPEND(\"INSERT INTO ")
+                        || upper.contains("\"INSERT INTO \" +")
+                        || upper.contains("APPEND(\"UPDATE \")")
+                        || upper.contains("\"UPDATE \" +")
+                        || upper.contains("APPEND(\"DELETE FROM ")
+                        || upper.contains("\"DELETE FROM \" +")
+                        || upper.contains("\"TRUNCATE TABLE \" +")
+                        || upper.contains("\"LIMIT \" +")
+                        || upper.contains("APPEND(\"SELECT ")
+                        || upper.contains("\"SELECT \" +")
+                        || upper.contains("\"SELECT *")
+                        || upper.contains("\"SELECT COUNT")
+                        || upper.contains("\"SELECT 1")
+                        || upper.contains("\"SELECT DISTINCT")) {
                     violations.add(relative);
                 }
             }
@@ -124,6 +133,22 @@ class ArchitectureGuardTest {
         assertEquals(List.of(), violations,
                 "Only SqlRenderer.java (plus kernel/dialect pagination syntax) may assemble SQL text; violations: "
                         + violations);
+    }
+
+    @Test
+    void coreTopLevelFacadeMustNotDependOnJdbcDao() throws IOException {
+        Path coreRoot = resolveMainJavaRoot().resolve("com/sondertara/joya/core");
+        List<String> violations = new ArrayList<>();
+        try (Stream<Path> files = Files.list(coreRoot)) {
+            for (Path file : files.filter(p -> Files.isRegularFile(p) && p.toString().endsWith(".java")).toList()) {
+                String content = stripComments(Files.readString(file));
+                if (content.contains("com.sondertara.joya.core.jdbc.dao")) {
+                    violations.add(file.getFileName().toString());
+                }
+            }
+        }
+        assertEquals(List.of(), violations,
+                "Top-level core facade files must not depend on com.sondertara.joya.core.jdbc.dao: " + violations);
     }
 
     @Test

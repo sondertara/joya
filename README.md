@@ -196,10 +196,10 @@ Optional<Integer> maxAge = joya.from(User.class).max(User::getAge);
 
 ### 3. `JoyaMapper` 接口（免包扫描，支持跨数据源复用）
 
-定义继承 `JoyaMapper<T, ID>` 的接口，即可使用 JPA 风格方法名派生查询与 `@Query` 原生 SQL，无需任何包扫描注解：
+定义继承 `JoyaMapper<T>` 的接口，即可使用 JPA 风格方法名派生查询与 `@Query` 原生 SQL，无需任何包扫描注解：
 
 ```java
-public interface UserAccountMapper extends JoyaMapper<UserAccount, Long> {
+public interface UserAccountMapper extends JoyaMapper<UserAccount> {
 
     Optional<UserAccount> findByUserName(String userName);
 

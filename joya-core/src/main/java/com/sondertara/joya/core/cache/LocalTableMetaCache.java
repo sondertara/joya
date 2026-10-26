@@ -62,6 +62,10 @@ public class LocalTableMetaCache {
         // Scan superclass hierarchy from base class down to subclass so inherited @Id / fields are included
         List<Class<?>> hierarchy = new ArrayList<>();
         for (Class<?> cur = entityClass; cur != null && cur != Object.class; cur = cur.getSuperclass()) {
+            if (PersistenceAnnotations.isIdClassPresent(cur)) {
+                throw new DbException("Composite primary key (@IdClass) is not supported on entity ["
+                        + entityClass.getName() + "]");
+            }
             hierarchy.add(0, cur);
         }
         Map<String, Field> fieldMap = new LinkedHashMap<>();
@@ -80,12 +84,37 @@ public class LocalTableMetaCache {
             if (PersistenceAnnotations.isTransientPresent(field)) {
                 continue;
             }
-            String colName = PersistenceAnnotations.findColumnName(field)
+            if (PersistenceAnnotations.isEmbeddedIdPresent(field)) {
+                throw new DbException("Composite primary key (@EmbeddedId) on field [" + field.getName()
+                        + "] is not supported on entity [" + entityClass.getName() + "]");
+            }
+            Optional<PersistenceAnnotations.ColumnMeta> columnMeta = PersistenceAnnotations.findColumn(field);
+            String colName = columnMeta.map(PersistenceAnnotations.ColumnMeta::name)
+                    .filter(Strings::isNotBlank)
                     .orElseGet(() -> Strings.toUnderlineCase(field.getName()));
+            if (columnMeta.isPresent()) {
+                if (!columnMeta.get().insertable()) {
+                    builder.nonInsertableColumn(colName);
+                }
+                if (!columnMeta.get().updatable()) {
+                    builder.nonUpdatableColumn(colName);
+                }
+            }
             if (PersistenceAnnotations.isIdPresent(field)) {
-                builder.primaryKey(colName)
-                        .primaryKeyType(field.getType())
-                        .generatedColumn(colName);
+                if (field.getType().isPrimitive()) {
+                    throw new DbException("Primary key field [" + field.getName() + "] on entity ["
+                            + entityClass.getName() + "] must use a wrapper type instead of primitive type ["
+                            + field.getType().getName() + "]");
+                }
+                try {
+                    builder.primaryKey(colName)
+                            .primaryKeyType(field.getType());
+                } catch (IllegalStateException e) {
+                    throw new DbException(e.getMessage(), e);
+                }
+            }
+            if (PersistenceAnnotations.isGeneratedValuePresent(field)) {
+                builder.generatedColumn(colName);
             }
             builder.column(colName, field.getName(), field);
         }

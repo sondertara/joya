@@ -1,7 +1,6 @@
 package com.sondertara.joya.core;
 
 import com.sondertara.joya.core.kernel.connection.ConnectionCallback;
-import com.sondertara.joya.core.jdbc.dao.JoyaMapper;
 import com.sondertara.joya.core.kernel.dialect.DbType;
 import com.sondertara.joya.core.kernel.JoyaTemplate;
 import com.sondertara.joya.core.kernel.connection.ConnectionProvider;
@@ -96,7 +95,7 @@ public final class JoyaClient implements DataOps {
 
     @Override
     @SuppressWarnings({"unchecked", "rawtypes"})
-    public <M extends JoyaMapper> M mapper(Class<M> mapperType) {
+    public <M> M mapper(Class<M> mapperType) {
         Objects.requireNonNull(mapperType, "mapperType must not be null");
         if (!mapperType.isInterface()) {
             throw new UnsupportedOperationException("mapperType " + mapperType.getName() + " is not interface.");
@@ -130,18 +129,10 @@ public final class JoyaClient implements DataOps {
     // ===== Mapper 代理入口 =====
 
     /**
-     * 获取自定义 {@link JoyaMapper} 子接口的动态代理（等价于 {@link #mapper(Class)}）。
+     * 获取自定义 {@code JoyaMapper} 子接口的动态代理（等价于 {@link #mapper(Class)}）。
      */
-    @SuppressWarnings("rawtypes")
-    public <M extends JoyaMapper> M createMapper(Class<M> mapperType) {
+    public <M> M createMapper(Class<M> mapperType) {
         return mapper(mapperType);
-    }
-
-    /**
-     * 创建针对指定实体的标准 {@link JoyaMapper} 实例。
-     */
-    public <T> JoyaMapper<T> buildMapper(Class<T> entityType) {
-        return new JdkMapperProxy(this).build(entityType);
     }
 
     // ===== 底层逃生舱与配置访问 =====
@@ -167,8 +158,14 @@ public final class JoyaClient implements DataOps {
     }
 
     /** 获取当前客户端的实例级配置 {@link JoyaSettings}。 */
+    @Override
     public JoyaSettings settings() {
         return JoyaSettings.of(template.executionOptions(), template.namingPolicy());
+    }
+
+    @Override
+    public DbType dbType() {
+        return template.dialect().dbType();
     }
 
     /** 获取当前客户端使用的事务引擎 {@link TxEngine}。 */

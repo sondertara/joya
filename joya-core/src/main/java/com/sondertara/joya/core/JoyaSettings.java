@@ -1,6 +1,7 @@
 package com.sondertara.joya.core;
 
 import com.sondertara.joya.core.kernel.ExecutionOptions;
+import com.sondertara.joya.core.kernel.dialect.QuoteStyle;
 import com.sondertara.joya.core.naming.NamingPolicy;
 import com.sondertara.joya.core.naming.TableNameResolver;
 
@@ -14,8 +15,6 @@ import java.util.Objects;
  *   <li>{@link ExecutionOptions}：执行期行为（查询超时、批处理分片大小）</li>
  *   <li>{@link NamingPolicy}：SQL 渲染命名（大小写、联表上限、动态表名解析）</li>
  * </ul>
- *
- * <p>为兼容既有代码，保留 5 参构造器与 5 个委托访问器。
  */
 public record JoyaSettings(
         ExecutionOptions executionOptions,
@@ -33,21 +32,7 @@ public record JoyaSettings(
         namingPolicy = Objects.requireNonNullElse(namingPolicy, NamingPolicy.DEFAULT);
     }
 
-    /** 兼容构造：按 5 个原始字段构建（表名解析为恒等）。 */
-    public JoyaSettings(
-            int queryTimeoutSeconds,
-            int batchSize,
-            int maxJoinTable,
-            boolean columnUppercase,
-            boolean tableUppercase
-    ) {
-        this(
-                new ExecutionOptions(queryTimeoutSeconds, batchSize),
-                new NamingPolicy(maxJoinTable, columnUppercase, tableUppercase)
-        );
-    }
-
-    // ===== 兼容访问器：委托到组合对象 =====
+    // ===== 便捷委托访问器 =====
 
     public int queryTimeoutSeconds() {
         return executionOptions.queryTimeoutSeconds();
@@ -89,8 +74,15 @@ public record JoyaSettings(
                 namingPolicy.maxJoinTable(),
                 namingPolicy.columnUppercase(),
                 namingPolicy.tableUppercase(),
-                tableNameResolver
+                tableNameResolver,
+                namingPolicy.openQuote(),
+                namingPolicy.closeQuote()
         ));
+    }
+
+    public JoyaSettings withQuoteStyle(QuoteStyle quoteStyle) {
+        QuoteStyle qs = Objects.requireNonNullElse(quoteStyle, QuoteStyle.NONE);
+        return withNamingPolicy(namingPolicy.withQuotes(qs.openQuote(), qs.closeQuote()));
     }
 
     public static Builder builder() {
@@ -104,6 +96,7 @@ public record JoyaSettings(
         private boolean columnUppercase = false;
         private boolean tableUppercase = false;
         private TableNameResolver tableNameResolver = TableNameResolver.IDENTITY;
+        private QuoteStyle quoteStyle = QuoteStyle.NONE;
 
         private Builder() {
         }
@@ -139,10 +132,22 @@ public record JoyaSettings(
             return this;
         }
 
+        /** 标识符转义风格（反引号 / 双引号 / 方括号）。 */
+        public Builder quoteStyle(QuoteStyle quoteStyle) {
+            this.quoteStyle = Objects.requireNonNullElse(quoteStyle, QuoteStyle.NONE);
+            return this;
+        }
+
         public JoyaSettings build() {
             return new JoyaSettings(
                     new ExecutionOptions(queryTimeoutSeconds, batchSize),
-                    new NamingPolicy(maxJoinTable, columnUppercase, tableUppercase, tableNameResolver)
+                    new NamingPolicy(
+                            maxJoinTable,
+                            columnUppercase,
+                            tableUppercase,
+                            tableNameResolver,
+                            quoteStyle.openQuote(),
+                            quoteStyle.closeQuote())
             );
         }
     }

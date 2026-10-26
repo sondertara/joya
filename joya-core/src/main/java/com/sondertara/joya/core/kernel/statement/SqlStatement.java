@@ -4,7 +4,6 @@ import com.sondertara.joya.core.kernel.dialect.DbType;
 
 import java.util.List;
 import java.util.Objects;
-import java.util.Set;
 
 /**
  * 不可变 SQL 语句值对象 —— 全框架唯一的 SQL 契约。
@@ -33,45 +32,14 @@ public record SqlStatement(
         metadata = metadata == null ? StatementMetadata.empty() : metadata;
     }
 
-    // ===== 兼容入口：旧代码仍使用 args + tables + op + dbType 构造 =====
-
-    /**
-     * 兼容构造：从裸参数列表构建（过渡期使用，新代码应优先使用 {@link #of(String, List, StatementMetadata)}）。
-     *
-     * @deprecated 过渡兼容，阶段六删除 Creator 后移除
-     */
-    @Deprecated
-    public SqlStatement(String sql, List<Object> args, Set<TableRef> tables, Operation op, DbType dbType) {
-        this(
-                sql,
-                toParameters(args),
-                StatementMetadata.builder(op).dbType(dbType).tables(tables).build()
-        );
-    }
-
     /** 从有序参数列表构建（推荐）。 */
     public static SqlStatement of(String sql, List<SqlParameter> parameters, StatementMetadata metadata) {
         return new SqlStatement(sql, parameters, metadata);
     }
 
-    // ===== 兼容访问器 =====
-
-    /** 兼容访问器：导出裸参数值列表（过渡期使用）。 */
-    @Deprecated
+    /** 导出参数值列表。 */
     public List<Object> args() {
         return parameters.stream().map(SqlParameter::value).toList();
-    }
-
-    /** 兼容访问器：导出表引用集合。 */
-    @Deprecated
-    public Set<TableRef> tables() {
-        return metadata.tables();
-    }
-
-    /** 兼容访问器：导出操作类型。 */
-    @Deprecated
-    public Operation op() {
-        return metadata.operation();
     }
 
     // ===== 改写方法（返回新实例） =====

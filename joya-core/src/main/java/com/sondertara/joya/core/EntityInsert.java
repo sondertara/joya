@@ -36,6 +36,10 @@ public final class EntityInsert<T> {
     /** 按 Lambda 属性引用设置列值。 */
     public <V> EntityInsert<T> value(IGetter<T, V> column, @Nullable V value) {
         String colName = EntityOps.resolveColumn(meta, column);
+        if (meta.nonInsertableColumns().contains(colName)) {
+            throw new IllegalArgumentException(
+                    "Column '" + colName + "' is marked as insertable=false on entity " + meta.entityType().getName());
+        }
         values.put(colName, value);
         return this;
     }
@@ -43,6 +47,10 @@ public final class EntityInsert<T> {
     /** 按列名或字段名设置列值。 */
     public EntityInsert<T> value(String columnOrField, @Nullable Object value) {
         String colName = EntityOps.resolveColumnName(meta, columnOrField);
+        if (meta.nonInsertableColumns().contains(colName)) {
+            throw new IllegalArgumentException(
+                    "Column '" + colName + "' is marked as insertable=false on entity " + meta.entityType().getName());
+        }
         values.put(colName, value);
         return this;
     }
@@ -54,16 +62,17 @@ public final class EntityInsert<T> {
         return this;
     }
 
-    /** 从实体快照提取列值（若主键为 null 则自动跳过自增主键列）。 */
+    /** 从实体快照提取列值（若主键为 null 则自动跳过自增主键列，且遵守 insertable=false）。 */
     public EntityInsert<T> values(T entity) {
         Objects.requireNonNull(entity, "entity must not be null");
         EntitySnapshot snapshot = EntitySnapshot.snapshot(meta, entity);
         String pk = meta.primaryKey();
-        for (Map.Entry<String, Object> entry : snapshot.values().entrySet()) {
-            if (entry.getKey().equals(pk) && entry.getValue() == null) {
-                continue;
-            }
-            values.put(entry.getKey(), entry.getValue());
+        Object pkVal = pk == null ? null : snapshot.value(pk);
+        java.util.List<String> candidateCols = pkVal != null
+                ? meta.insertableColumnsWithPrimaryKey()
+                : meta.insertableColumns();
+        for (String col : candidateCols) {
+            values.put(col, snapshot.value(col));
         }
         return this;
     }
@@ -84,9 +93,9 @@ public final class EntityInsert<T> {
         return InsertStatementFactory.create(ctx);
     }
 
-    /** 执行插入并返回包含生成键与影响行数的 {@link MutationResult}。 */
+    /** 执行插入并返回包含生成键与真实影响行数的 {@link MutationResult}。 */
     public MutationResult execute() {
-        Object generatedKey = template.insert(toSqlStatement());
-        return MutationResult.ofInsert(1, generatedKey);
+        var slice = template.insertExecute(toSqlStatement());
+        return MutationResult.ofInsert(slice.affectedRows(), slice.generatedKey());
     }
 }

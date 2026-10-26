@@ -10,6 +10,7 @@ import com.sondertara.joya.exceptions.DbException;
 import com.sondertara.joya.utils.ConvertUtils;
 
 import java.io.Serializable;
+import java.math.BigDecimal;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -55,17 +56,31 @@ final class UpsertPlanner {
         }
         List<T> rows = BatchPlanner.toList(entities);
         String pk = ops.requirePrimaryKey();
+        List<Object> primaryKeys = new ArrayList<>(rows.size());
+        Set<Object> seenPrimaryKeys = new HashSet<>();
+        for (T row : rows) {
+            Objects.requireNonNull(row, "Entity element in saveAll must not be null");
+            Object pkVal = meta.readFieldValue(row, pk);
+            Object normalizedPk = normalizePrimaryKey(pkVal);
+            primaryKeys.add(normalizedPk);
+            if (normalizedPk != null && !seenPrimaryKeys.add(normalizedPk)) {
+                throw new IllegalArgumentException(
+                        "Duplicate primary key [" + pkVal + "] in saveAll batch for entity "
+                                + meta.entityType().getName());
+            }
+        }
+
         int batchPartitionSize = BatchPlanner.effectiveBatchSize(template);
         MutationResult total = MutationResult.EMPTY;
-
-        for (List<T> partition : Partitions.of(rows, batchPartitionSize)) {
+        for (int start = 0; start < rows.size(); start += batchPartitionSize) {
+            int end = Math.min(start + batchPartitionSize, rows.size());
             List<T> toInsert = new ArrayList<>();
             List<T> toUpdate = new ArrayList<>();
             Map<Object, T> keyed = new LinkedHashMap<>();
 
-            for (T row : partition) {
-                Objects.requireNonNull(row, "Entity element in saveAll must not be null");
-                Object pkVal = meta.readFieldValue(row, pk);
+            for (int i = start; i < end; i++) {
+                T row = rows.get(i);
+                Object pkVal = primaryKeys.get(i);
                 if (pkVal == null) {
                     toInsert.add(row);
                 } else {
@@ -112,9 +127,9 @@ final class UpsertPlanner {
                 try {
                     Object raw = rs.getObject(1);
                     if (raw != null && pkType != null && !pkType.isInstance(raw)) {
-                        return ConvertUtils.convert(raw, pkType);
+                        raw = ConvertUtils.convert(raw, pkType);
                     }
-                    return raw;
+                    return normalizePrimaryKey(raw);
                 } catch (SQLException e) {
                     throw new DbException(e);
                 }
@@ -122,5 +137,12 @@ final class UpsertPlanner {
             existing.addAll(rows);
         }
         return existing;
+    }
+
+    private static Object normalizePrimaryKey(Object key) {
+        if (key instanceof BigDecimal decimal) {
+            return decimal.stripTrailingZeros();
+        }
+        return key;
     }
 }

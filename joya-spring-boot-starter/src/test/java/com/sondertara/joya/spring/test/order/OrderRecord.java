@@ -10,6 +10,7 @@ import jakarta.persistence.Table;
 public class OrderRecord {
 
     @Id
+    @jakarta.persistence.GeneratedValue(strategy = jakarta.persistence.GenerationType.IDENTITY)
     @Column(name = "id")
     private Long id;
 

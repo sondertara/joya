@@ -131,10 +131,10 @@ public final class LambdaUtils {
 
     private static String parsePropertyName(String method) {
         if (method.length() > 3 && method.startsWith("get") && Character.isUpperCase(method.charAt(3))) {
-            return Strings.lowerFirst(method.substring(3));
+            return java.beans.Introspector.decapitalize(method.substring(3));
         }
         if (method.length() > 2 && method.startsWith("is") && Character.isUpperCase(method.charAt(2))) {
-            return Strings.lowerFirst(method.substring(2));
+            return java.beans.Introspector.decapitalize(method.substring(2));
         }
         return method;
     }

@@ -41,6 +41,24 @@ public interface TxSession extends ConnectionProvider, AutoCloseable {
         return false;
     }
 
+    /** 在回调进入本地保存点队列前预检外部同步器，避免释放保存点后才发现无法注册。 */
+    default void validateAfterCommitRegistration() {
+        // 本地回调队列无需外部同步器。
+    }
+
+    /** 已确认的物理终态；尚未结束或结果未知时返回 {@code null}。 */
+    default TxOutcome terminalOutcome() {
+        return null;
+    }
+
+    /**
+     * 是否已明确确认物理事务回滚成功。
+     * 加入外层事务时仅标记 rollback-only 不算物理回滚，默认保守返回 {@code false}。
+     */
+    default boolean isPhysicalRollbackConfirmed() {
+        return false;
+    }
+
     @Override
     void close() throws SQLException;
 }

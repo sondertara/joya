@@ -41,7 +41,10 @@ public class PageResult<T> {
     }
 
     public int getTotalPages() {
-        return (int) Math.ceil(this.total * 1.0f / pageSize) - 1;
+        if (this.total == null || this.total <= 0L || this.pageSize <= 0) {
+            return 0;
+        }
+        return (int) ((this.total + this.pageSize - 1L) / this.pageSize);
     }
 
     public long getTotalElements() {

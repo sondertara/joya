@@ -176,12 +176,16 @@ public final class JoyaTemplate {
 
     /** 流式查询：返回的 Stream 必须关闭（try-with-resources），关闭时才归还连接。 */
     public <T> Stream<T> queryStream(SqlStatement statement, RowMapper<T> mapper) {
-        return executor.queryStream(rewrite(statement), mapper);
+        return executor.queryStream(rewrite(statement), mapper, dialect().streamFetchSize());
     }
 
     /** 方言分页截取：offset 起的 limit 行。 */
     public <T> List<T> queryLimit(SqlStatement statement, RowMapper<T> mapper, long offset, long limit) {
+        validatePageBounds(offset, limit);
         SqlStatement rewritten = rewrite(statement);
+        if (limit == 0) {
+            return List.of();
+        }
         return executor.queryList(pageStatement(rewritten, offset, limit), mapper);
     }
 
@@ -191,9 +195,10 @@ public final class JoyaTemplate {
     }
 
     public <T> PageSlice<T> queryPage(SqlStatement statement, RowMapper<T> mapper, long offset, long limit) {
+        validatePageBounds(offset, limit);
         SqlStatement rewritten = rewrite(statement);
         long total = count(rewritten);
-        List<T> rows = total == 0 ? List.of() : executor.queryList(
+        List<T> rows = total == 0 || limit == 0 ? List.of() : executor.queryList(
                 pageStatement(rewritten, offset, limit), mapper);
         return new PageSlice<>(rows, total);
     }
@@ -208,18 +213,27 @@ public final class JoyaTemplate {
      * @param limit          每页条数
      */
     public <T> PageSlice<T> queryPage(SqlStatement statement, SqlStatement countStatement, RowMapper<T> mapper, long offset, long limit) {
+        validatePageBounds(offset, limit);
         SqlStatement rewrittenCount = rewrite(countStatement);
         Long counted = executor.query(rewrittenCount,
                 new SingleRowRecordExtractor<>(new SingleColumnRowMapper<>(Long.class)));
         long total = counted == null ? 0L : counted;
-        List<T> rows = total == 0 ? List.of() : executor.queryList(
+        List<T> rows = total == 0 || limit == 0 ? List.of() : executor.queryList(
                 pageStatement(rewrite(statement), offset, limit), mapper);
         return new PageSlice<>(rows, total);
     }
 
     /** 方言分页截取的流式查询：返回的 Stream 必须关闭（try-with-resources）。 */
     public <T> Stream<T> queryStream(SqlStatement statement, RowMapper<T> mapper, long offset, long limit) {
-        return executor.queryStream(pageStatement(rewrite(statement), offset, limit), mapper);
+        validatePageBounds(offset, limit);
+        SqlStatement rewritten = rewrite(statement);
+        if (limit == 0) {
+            return Stream.empty();
+        }
+        return executor.queryStream(
+                pageStatement(rewritten, offset, limit),
+                mapper,
+                dialect().streamFetchSize());
     }
 
     private long count(SqlStatement rewritten) {
@@ -233,6 +247,15 @@ public final class JoyaTemplate {
         return dialect().pageSql(rewritten, offset, limit);
     }
 
+    private static void validatePageBounds(long offset, long limit) {
+        if (offset < 0) {
+            throw new IllegalArgumentException("offset must be >= 0: " + offset);
+        }
+        if (limit < 0) {
+            throw new IllegalArgumentException("limit must be >= 0: " + limit);
+        }
+    }
+
     // ===== 变更 =====
 
     public int update(SqlStatement statement) {
@@ -242,6 +265,11 @@ public final class JoyaTemplate {
     /** 插入并返回首个生成键；无生成键返回 {@code null}。 */
     public Object insert(SqlStatement statement) {
         return executor.insert(rewrite(statement));
+    }
+
+    /** 执行 INSERT 并返回真实受影响行数与首个生成键。 */
+    public com.sondertara.joya.core.kernel.executor.Executor.InsertSlice insertExecute(SqlStatement statement) {
+        return executor.insertExecute(rewrite(statement));
     }
 
     /** 列级绑定批量执行（SQL 文本同样经过拦截器链）。 */

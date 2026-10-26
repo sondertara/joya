@@ -1,5 +1,6 @@
 package com.sondertara.joya.core;
 
+import com.sondertara.joya.core.jdbc.support.listener.EntityListener;
 import com.sondertara.joya.core.kernel.JoyaTemplate;
 import com.sondertara.joya.core.kernel.statement.Operation;
 import com.sondertara.joya.core.kernel.statement.SqlStatement;
@@ -67,7 +68,14 @@ final class EntityDeleter<T> {
             throw new IllegalArgumentException(
                     "Entity primary key must not be null for delete: " + entityType.getName());
         }
-        return new EntityDelete<T>(template, meta).where(w -> w.eq(primaryKey, pkValue)).execute();
+        if (entity instanceof EntityListener listener) {
+            listener.preRemove(entity);
+        }
+        MutationResult result = new EntityDelete<T>(template, meta).where(w -> w.eq(primaryKey, pkValue)).execute();
+        if (entity instanceof EntityListener listener) {
+            listener.postRemove(entity);
+        }
+        return result;
     }
 
     MutationResult deleteAll(Collection<? extends T> entities) {
@@ -76,13 +84,29 @@ final class EntityDeleter<T> {
             return MutationResult.EMPTY;
         }
         List<Serializable> ids = new ArrayList<>(entities.size());
+        List<T> validEntities = new ArrayList<>(entities.size());
         for (T entity : entities) {
+            Objects.requireNonNull(entity, "Entity element in deleteAll must not be null");
             Object pkValue = meta.readFieldValue(entity, primaryKey);
-            if (pkValue != null) {
-                ids.add(pkValue instanceof Serializable s ? s : pkValue.toString());
+            if (pkValue == null) {
+                throw new IllegalArgumentException(
+                        "Entity primary key must not be null for deleteAll: " + entityType.getName());
+            }
+            ids.add(pkValue instanceof Serializable s ? s : pkValue.toString());
+            validEntities.add(entity);
+        }
+        for (T entity : validEntities) {
+            if (entity instanceof EntityListener listener) {
+                listener.preRemove(entity);
             }
         }
-        return deleteByIds(ids);
+        MutationResult result = deleteByIds(ids);
+        for (T entity : validEntities) {
+            if (entity instanceof EntityListener listener) {
+                listener.postRemove(entity);
+            }
+        }
+        return result;
     }
 
     private void requirePrimaryKey() {
@@ -97,6 +121,9 @@ final class EntityDeleter<T> {
                 .table(TableRef.ofQualified(tableName, ""))
                 .entityType(entityType)
                 .build();
-        template.update(SqlStatement.of("TRUNCATE TABLE " + tableName, List.of(), metadata));
+        template.update(SqlStatement.of(
+                com.sondertara.joya.core.kernel.statement.SqlRenderer.renderTruncate(tableName),
+                List.of(),
+                metadata));
     }
 }

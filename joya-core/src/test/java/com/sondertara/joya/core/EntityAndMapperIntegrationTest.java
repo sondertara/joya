@@ -1,5 +1,6 @@
 package com.sondertara.joya.core;
 
+import com.sondertara.joya.core.cache.CacheHolder;
 import com.sondertara.joya.core.jdbc.dao.JoyaMapper;
 import com.sondertara.joya.core.jdbc.resultset.mapper.BeanRowMapper;
 import com.sondertara.joya.core.jdbc.support.annotation.Query;
@@ -7,6 +8,7 @@ import com.sondertara.joya.core.jdbc.support.listener.EntityListener;
 import com.sondertara.joya.core.kernel.interceptor.Chain;
 import com.sondertara.joya.core.kernel.interceptor.RewriteContext;
 import com.sondertara.joya.core.kernel.interceptor.SqlInterceptor;
+import com.sondertara.joya.core.kernel.statement.BatchSqlStatement;
 import com.sondertara.joya.core.kernel.statement.Operation;
 import com.sondertara.joya.core.kernel.statement.ParameterBinder;
 import com.sondertara.joya.core.kernel.statement.ParameterSource;
@@ -14,7 +16,14 @@ import com.sondertara.joya.core.kernel.statement.SqlParameter;
 import com.sondertara.joya.core.kernel.statement.SqlStatement;
 import com.sondertara.joya.core.kernel.statement.StatementMetadata;
 import com.sondertara.joya.core.kernel.statement.TableRef;
+import com.sondertara.joya.core.metadata.EntityMetadataContext;
+import com.sondertara.joya.core.naming.NamingPolicy;
 import com.sondertara.joya.core.query.criterion.WhereCriterion;
+import com.sondertara.joya.core.statement.factory.InsertStatementFactory;
+import com.sondertara.joya.core.statement.factory.UpdateStatementFactory;
+import com.sondertara.joya.exceptions.DbException;
+import com.sondertara.joya.utils.ConvertUtils;
+import com.sondertara.joya.utils.SqlDataUtils;
 import org.h2.jdbcx.JdbcDataSource;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -23,14 +32,27 @@ import javax.persistence.Column;
 import javax.persistence.Entity;
 import javax.persistence.Id;
 import javax.persistence.Table;
+import java.lang.reflect.Proxy;
 import java.math.BigDecimal;
+import java.sql.ResultSet;
+import java.sql.ResultSetMetaData;
+import java.sql.SQLFeatureNotSupportedException;
+import java.sql.Time;
+import java.sql.Timestamp;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -50,6 +72,7 @@ class EntityAndMapperIntegrationTest {
         private static final long serialVersionUID = 1L;
 
         @Id
+        @javax.persistence.GeneratedValue(strategy = javax.persistence.GenerationType.IDENTITY)
         @Column(name = "id")
         private Long id;
 
@@ -162,6 +185,7 @@ class EntityAndMapperIntegrationTest {
     @Table(name = "t_dept")
     public static class Dept {
         @Id
+        @javax.persistence.GeneratedValue(strategy = javax.persistence.GenerationType.IDENTITY)
         @Column(name = "id")
         private Long id;
 
@@ -197,6 +221,7 @@ class EntityAndMapperIntegrationTest {
     @Table(name = "t_TradeOrder")
     public static class TradeOrder {
         @Id
+        @javax.persistence.GeneratedValue(strategy = javax.persistence.GenerationType.IDENTITY)
         @Column(name = "id")
         private Long id;
 
@@ -228,6 +253,87 @@ class EntityAndMapperIntegrationTest {
         }
     }
 
+    @Entity
+    @Table(name = "t_batch_guard")
+    public static class BatchGuardEntity {
+        @Id
+        @javax.persistence.GeneratedValue(strategy = javax.persistence.GenerationType.IDENTITY)
+        @Column(name = "id")
+        private Long id;
+
+        @Column(name = "name")
+        private String name;
+
+        @Column(name = "readonly_col", insertable = false, updatable = false)
+        private String readonlyCol;
+
+        @javax.persistence.GeneratedValue(strategy = javax.persistence.GenerationType.IDENTITY)
+        @Column(name = "generated_col")
+        private Long generatedCol;
+    }
+
+    @Entity
+    @Table(name = "t_generated_only")
+    public static class GeneratedOnlyEntity {
+        @Id
+        @javax.persistence.GeneratedValue(strategy = javax.persistence.GenerationType.IDENTITY)
+        @Column(name = "id")
+        private Long id;
+
+        public GeneratedOnlyEntity() {
+        }
+
+        public GeneratedOnlyEntity(Long id) {
+            this.id = id;
+        }
+    }
+
+    @Entity
+    @Table(name = "t_numeric_key")
+    public static class NumericKeyEntity {
+        @Id
+        @Column(name = "id")
+        private BigDecimal id;
+
+        @Column(name = "name")
+        private String name;
+
+        public NumericKeyEntity() {
+        }
+
+        public NumericKeyEntity(BigDecimal id, String name) {
+            this.id = id;
+            this.name = name;
+        }
+
+        public String getName() {
+            return name;
+        }
+    }
+
+    @Entity
+    @Table(name = "t_empty_update")
+    public static class EmptyUpdateEntity implements EntityListener {
+        @Id
+        @javax.persistence.GeneratedValue(strategy = javax.persistence.GenerationType.IDENTITY)
+        @Column(name = "id")
+        private Long id;
+
+        private transient boolean postUpdateCalled;
+
+        public EmptyUpdateEntity() {
+        }
+
+        public EmptyUpdateEntity(Long id) {
+            this.id = id;
+        }
+
+        @Override
+        public void postUpdate(Object entity) {
+            this.postUpdateCalled = true;
+        }
+    }
+
     /** 自定义 Mapper 接口：同时验证 JoyaMapper 基础方法、派生查询、@Query 注解与 default 方法。 */
     public interface AccountMapper extends JoyaMapper<Account> {
 
@@ -252,6 +358,8 @@ class EntityAndMapperIntegrationTest {
         List<Account> findAllByOrderByIdDesc();
 
         int updateUserNameAndAgeById(String userName, Integer age, Long id);
+
+        int updateAgeAndUserNameById(Integer age, String userName, Long id);
 
         int updateById(Account entity, Long id);
 
@@ -312,6 +420,60 @@ class EntityAndMapperIntegrationTest {
                         null, null)
         ));
         executedStatements.clear();
+    }
+
+    private JoyaClient clientWithBatchSize(int batchSize) {
+        JdbcDataSource ds = new JdbcDataSource();
+        ds.setURL("jdbc:h2:mem:joya_entity_mapper_test;DB_CLOSE_DELAY=-1");
+        SqlInterceptor recorder = (RewriteContext context, Chain chain) -> {
+            executedStatements.add(context.statement());
+            return chain.proceed(context);
+        };
+        return JoyaClient.builder(ds)
+                .settings(JoyaSettings.builder().batchSize(batchSize).build())
+                .interceptor(recorder)
+                .build();
+    }
+
+    private static ResultSet localTimeFallbackResultSet(
+            Object raw, String text, boolean stringSupported, AtomicInteger getTimeCalls) {
+        ResultSetMetaData resultSetMetaData = (ResultSetMetaData) Proxy.newProxyInstance(
+                EntityAndMapperIntegrationTest.class.getClassLoader(),
+                new Class<?>[]{ResultSetMetaData.class},
+                (proxy, method, args) -> {
+                    if ("getColumnClassName".equals(method.getName())) {
+                        return Time.class.getName();
+                    }
+                    if ("toString".equals(method.getName())) {
+                        return "LocalTimeFallbackMetaData";
+                    }
+                    throw new SQLFeatureNotSupportedException(method.getName());
+                });
+        return (ResultSet) Proxy.newProxyInstance(
+                EntityAndMapperIntegrationTest.class.getClassLoader(),
+                new Class<?>[]{ResultSet.class},
+                (proxy, method, args) -> switch (method.getName()) {
+                    case "getObject" -> {
+                        if (args.length == 2) {
+                            throw new SQLFeatureNotSupportedException("JDBC 4.1 getObject");
+                        }
+                        yield raw;
+                    }
+                    case "getString" -> {
+                        if (!stringSupported) {
+                            throw new SQLFeatureNotSupportedException("getString");
+                        }
+                        yield text;
+                    }
+                    case "getTime" -> {
+                        getTimeCalls.incrementAndGet();
+                        yield Time.valueOf("12:34:56");
+                    }
+                    case "getMetaData" -> resultSetMetaData;
+                    case "wasNull" -> raw == null;
+                    case "toString" -> "LocalTimeFallbackResultSet";
+                    default -> throw new SQLFeatureNotSupportedException(method.getName());
+                });
     }
 
     @Test
@@ -519,6 +681,12 @@ class EntityAndMapperIntegrationTest {
         assertEquals("AliceRenamed", aliceAfterModeA.getUserName());
         assertEquals(35, aliceAfterModeA.getAge());
 
+        int reversedOrderUpdated = mapper.updateAgeAndUserNameById(42, "AliceReversedOrder", 1L);
+        assertEquals(1, reversedOrderUpdated);
+        Account aliceAfterReversed = mapper.findById(1L).orElseThrow();
+        assertEquals("AliceReversedOrder", aliceAfterReversed.getUserName());
+        assertEquals(42, aliceAfterReversed.getAge());
+
         Account patchEntity = new Account();
         patchEntity.setAge(29);
         int modeBIgnoreNull = mapper.updateIgnoreNullByUserName(patchEntity, "Bob");
@@ -543,7 +711,11 @@ class EntityAndMapperIntegrationTest {
     @Table(name = "t_dept")
     public static class AuditedDept extends Dept implements EntityListener {
         private transient boolean persistCalled;
+        private transient boolean postPersistCalled;
         private transient boolean updateCalled;
+        private transient boolean postUpdateCalled;
+        private transient boolean preRemoveCalled;
+        private transient boolean postRemoveCalled;
 
         public AuditedDept() {
         }
@@ -561,8 +733,28 @@ class EntityAndMapperIntegrationTest {
         }
 
         @Override
+        public void postPersist(Object entity) {
+            this.postPersistCalled = true;
+        }
+
+        @Override
         public void preUpdate(Object entity) {
             this.updateCalled = true;
+        }
+
+        @Override
+        public void postUpdate(Object entity) {
+            this.postUpdateCalled = true;
+        }
+
+        @Override
+        public void preRemove(Object entity) {
+            this.preRemoveCalled = true;
+        }
+
+        @Override
+        public void postRemove(Object entity) {
+            this.postRemoveCalled = true;
         }
     }
 
@@ -576,19 +768,203 @@ class EntityAndMapperIntegrationTest {
                 );
                 """).update();
 
-        joya.of(AuditedDept.class).insert(new AuditedDept(1L, "Existing"));
+        AuditedDept first = new AuditedDept(1L, "Existing");
+        joya.of(AuditedDept.class).insert(first);
+        assertTrue(first.persistCalled && first.postPersistCalled);
 
         AuditedDept existing = new AuditedDept(1L, "ExistingUpdated");
         AuditedDept fresh = new AuditedDept(2L, null);
         joya.of(AuditedDept.class).saveAll(List.of(existing, fresh));
 
-        assertTrue(existing.updateCalled, "已存在实体在 saveAll 中应触发 preUpdate");
+        assertTrue(existing.updateCalled && existing.postUpdateCalled, "已存在实体在 saveAll 中应触发 preUpdate 和 postUpdate");
         assertFalse(existing.persistCalled);
-        assertTrue(fresh.persistCalled, "新增实体在 saveAll 中应触发 prePersist");
+        assertTrue(fresh.persistCalled && fresh.postPersistCalled, "新增实体在 saveAll 中应触发 prePersist 和 postPersist");
         assertFalse(fresh.updateCalled);
         assertEquals("DEFAULT_DEPT", joya.of(AuditedDept.class).findById(2L).orElseThrow().getDeptName());
 
+        joya.of(AuditedDept.class).delete(fresh);
+        assertTrue(fresh.preRemoveCalled && fresh.postRemoveCalled, "delete(entity) 应触发 preRemove 和 postRemove");
+
         assertSame(BeanRowMapper.of(Account.class), BeanRowMapper.of(Account.class));
+    }
+
+    @Test
+    void delete_validatesWholeInputBeforeListenersAndSql() {
+        joya.sql("""
+                DROP TABLE IF EXISTS t_dept;
+                CREATE TABLE t_dept (
+                    id BIGINT PRIMARY KEY,
+                    dept_name VARCHAR(64)
+                );
+                """).update();
+        joya.sql("INSERT INTO t_dept (id, dept_name) VALUES (1, 'One'), (2, 'Two')").update();
+        EntityOps<AuditedDept> ops = joya.of(AuditedDept.class);
+        AuditedDept valid = new AuditedDept(1L, "One");
+        AuditedDept missingKey = new AuditedDept(null, "Missing");
+        executedStatements.clear();
+
+        assertThrows(IllegalArgumentException.class, () -> ops.deleteAll(List.of(valid, missingKey)));
+        assertFalse(valid.preRemoveCalled || valid.postRemoveCalled);
+        assertFalse(missingKey.preRemoveCalled || missingKey.postRemoveCalled);
+        assertTrue(executedStatements.isEmpty(), "deleteAll 主键预检失败前不得触发 SQL");
+
+        assertThrows(NullPointerException.class, () -> ops.deleteAll(Arrays.asList(valid, null)));
+        assertFalse(valid.preRemoveCalled || valid.postRemoveCalled);
+        assertTrue(executedStatements.isEmpty(), "deleteAll 元素预检失败前不得触发 SQL");
+
+        assertThrows(IllegalArgumentException.class, () -> ops.delete(missingKey));
+        assertFalse(missingKey.preRemoveCalled || missingKey.postRemoveCalled);
+        assertTrue(executedStatements.isEmpty(), "delete 主键预检失败前不得触发 SQL");
+        assertEquals(2L, ops.count());
+
+        ops.delete(valid);
+        assertTrue(valid.preRemoveCalled && valid.postRemoveCalled);
+        assertEquals(1L, ops.count());
+    }
+
+    @Test
+    void saveAll_preflightsNullElementsBeforeAnyPartitionReadOrWrite() {
+        JoyaClient partitioned = clientWithBatchSize(1);
+        List<Account> rows = new ArrayList<>();
+        rows.add(new Account(100L, "MustNotWrite", null, null, null, null, null, null));
+        rows.add(null);
+        executedStatements.clear();
+
+        assertThrows(NullPointerException.class, () -> partitioned.of(Account.class).saveAll(rows));
+
+        assertTrue(executedStatements.isEmpty(), "saveAll 坏输入预检失败前不得读取或写入任何分片");
+        assertEquals(3L, joya.of(Account.class).count());
+    }
+
+    @Test
+    void saveAll_detectsDuplicatePrimaryKeysAcrossPartitionsBeforeAnySql() {
+        JoyaClient partitioned = clientWithBatchSize(1);
+        Account first = new Account(101L, "First", null, null, null, null, null, null);
+        Account duplicate = new Account(101L, "Duplicate", null, null, null, null, null, null);
+        executedStatements.clear();
+
+        IllegalArgumentException error = assertThrows(
+                IllegalArgumentException.class,
+                () -> partitioned.of(Account.class).saveAll(List.of(first, duplicate)));
+
+        assertTrue(error.getMessage().contains("Duplicate primary key"), error.getMessage());
+        assertTrue(executedStatements.isEmpty(), "跨分片重复主键必须在首个 SELECT/INSERT 前发现");
+        assertEquals(3L, joya.of(Account.class).count());
+    }
+
+    @Test
+    void localTimeFallback_preservesFractionalSecondsAndNeverUsesSqlTime() throws Exception {
+        AtomicInteger stringFallbackGetTimeCalls = new AtomicInteger();
+        ResultSet stringFallback = localTimeFallbackResultSet(
+                Time.valueOf("12:34:56"), "12:34:56.123456789", true, stringFallbackGetTimeCalls);
+
+        Object converted = SqlDataUtils.getResultSetValue(stringFallback, 1, LocalTime.class);
+
+        assertEquals(LocalTime.of(12, 34, 56, 123_456_789), converted);
+        assertEquals(0, stringFallbackGetTimeCalls.get(), "LocalTime 字符串回退不得调用 getTime");
+
+        AtomicInteger unavailableFallbackGetTimeCalls = new AtomicInteger();
+        ResultSet unavailableFallback = localTimeFallbackResultSet(
+                Time.valueOf("12:34:56"), null, false, unavailableFallbackGetTimeCalls);
+        DbException error = assertThrows(
+                DbException.class,
+                () -> SqlDataUtils.getResultSetValue(unavailableFallback, 1, LocalTime.class));
+        assertTrue(error.getMessage().contains("LocalTime"), error.getMessage());
+        assertTrue(error.getMessage().contains("fractional seconds"), error.getMessage());
+        assertEquals(0, unavailableFallbackGetTimeCalls.get(), "无法无损读取时必须报错而不是调用 getTime");
+
+        Time timeWithMillis = Time.valueOf("12:34:56");
+        timeWithMillis.setTime(timeWithMillis.getTime() + 123L);
+        assertEquals(
+                LocalTime.of(12, 34, 56, 123_000_000),
+                ConvertUtils.convert(timeWithMillis, LocalTime.class));
+    }
+
+    @Test
+    void insert_rejectsZeroColumnSingleAndBatchPlansBeforeAnyWrite() {
+        joya.sql("""
+                DROP TABLE IF EXISTS t_generated_only;
+                CREATE TABLE t_generated_only (
+                    id BIGINT PRIMARY KEY
+                );
+                """).update();
+        EntityOps<GeneratedOnlyEntity> ops = joya.of(GeneratedOnlyEntity.class);
+        executedStatements.clear();
+
+        assertThrows(IllegalStateException.class, () -> ops.insert(new GeneratedOnlyEntity()));
+        assertThrows(IllegalStateException.class, () -> ops.insertAll(List.of(new GeneratedOnlyEntity())));
+        assertThrows(IllegalStateException.class, () -> ops.insertAllIgnoreNull(List.of(
+                new GeneratedOnlyEntity(11L),
+                new GeneratedOnlyEntity())));
+        assertTrue(executedStatements.isEmpty(), "所有零列 INSERT 都必须在规划期失败且不得部分写入");
+        assertEquals(0L, ops.count());
+
+        EntityMetadataContext meta = CacheHolder.tableMetaCache().getMetadataContext(GeneratedOnlyEntity.class);
+        assertThrows(IllegalStateException.class, () -> InsertStatementFactory.createBatch(
+                meta, List.of(), List.of(), NamingPolicy.DEFAULT, 100, false));
+
+        ops.insert(new GeneratedOnlyEntity(1L));
+        ops.insertAll(List.of(new GeneratedOnlyEntity(2L)));
+        assertEquals(2L, ops.count(), "合法显式主键仍可用于单条和批量 INSERT");
+    }
+
+    @Test
+    void batchFactories_rejectReadonlyAndGeneratedColumns_andKeepExplicitPrimaryKey() {
+        EntityMetadataContext meta = CacheHolder.tableMetaCache().getMetadataContext(BatchGuardEntity.class);
+
+        BatchSqlStatement explicitKeyInsert = InsertStatementFactory.createBatch(
+                meta,
+                List.of("id", "name"),
+                List.<Object[]>of(new Object[]{7L, "ok"}),
+                NamingPolicy.DEFAULT,
+                100,
+                false);
+        assertEquals("INSERT INTO t_batch_guard (id, name) VALUES (?, ?)", explicitKeyInsert.sql());
+
+        IllegalArgumentException readonlyInsert = assertThrows(
+                IllegalArgumentException.class,
+                () -> InsertStatementFactory.createBatch(
+                        meta,
+                        List.of("readonly_col"),
+                        List.<Object[]>of(new Object[]{"x"}),
+                        NamingPolicy.DEFAULT,
+                        100,
+                        false));
+        assertTrue(readonlyInsert.getMessage().contains("insertable=false"), readonlyInsert.getMessage());
+        assertThrows(IllegalArgumentException.class, () -> InsertStatementFactory.createBatch(
+                meta,
+                List.of("generated_col"),
+                List.<Object[]>of(new Object[]{1L}),
+                NamingPolicy.DEFAULT,
+                100,
+                false));
+
+        BatchSqlStatement validUpdate = UpdateStatementFactory.createBatchByPrimaryKey(
+                meta,
+                List.of("name"),
+                "id",
+                List.<Object[]>of(new Object[]{"renamed", 7L}),
+                NamingPolicy.DEFAULT,
+                100);
+        assertEquals("UPDATE t_batch_guard SET name = ? WHERE id = ?", validUpdate.sql());
+
+        IllegalArgumentException readonlyUpdate = assertThrows(
+                IllegalArgumentException.class,
+                () -> UpdateStatementFactory.createBatchByPrimaryKey(
+                        meta,
+                        List.of("readonly_col"),
+                        "id",
+                        List.<Object[]>of(new Object[]{"x", 7L}),
+                        NamingPolicy.DEFAULT,
+                        100));
+        assertTrue(readonlyUpdate.getMessage().contains("updatable=false"), readonlyUpdate.getMessage());
+        assertThrows(IllegalArgumentException.class, () -> UpdateStatementFactory.createBatchByPrimaryKey(
+                meta,
+                List.of("generated_col"),
+                "id",
+                List.<Object[]>of(new Object[]{1L, 7L}),
+                NamingPolicy.DEFAULT,
+                100));
     }
 
     @Test
@@ -643,5 +1019,40 @@ class EntityAndMapperIntegrationTest {
                 upperClient.from(Account.class)
                         .join(Account::getDeptId, Dept::getId)
                         .toSqlStatement());
+
+        // 4. 基于 CyclicBarrier 的 16 线程真实并发压测：同时执行元数据解析、双策略 SQL 渲染与数据库查询
+        int threads = 16;
+        java.util.concurrent.CyclicBarrier barrier = new java.util.concurrent.CyclicBarrier(threads);
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(threads);
+        List<java.util.concurrent.Future<?>> futures = new ArrayList<>();
+        for (int i = 0; i < threads; i++) {
+            final boolean useUpper = (i % 2 == 0);
+            futures.add(pool.submit(() -> {
+                barrier.await();
+                for (int round = 0; round < 20; round++) {
+                    if (useUpper) {
+                        SqlStatement s = upperClient.from(TradeOrder.class)
+                                .where(w -> w.eq(TradeOrder::getOrderNo, "ORD-001"))
+                                .toSqlStatement();
+                        assertEquals("SELECT t0.ID, t0.ORDERNO FROM T_TRADEORDER t0 WHERE t0.ORDERNO = ?", s.sql());
+                    } else {
+                        SqlStatement s = defaultClient.from(TradeOrder.class)
+                                .where(w -> w.eq(TradeOrder::getOrderNo, "ORD-001"))
+                                .toSqlStatement();
+                        assertEquals("SELECT t0.id, t0.OrderNo FROM t_TradeOrder t0 WHERE t0.OrderNo = ?", s.sql());
+                        assertTrue(joya.from(Account.class).limit(2).count() <= 2L);
+                    }
+                }
+                return null;
+            }));
+        }
+        pool.shutdown();
+        for (java.util.concurrent.Future<?> f : futures) {
+            try {
+                f.get();
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        }
     }
 }

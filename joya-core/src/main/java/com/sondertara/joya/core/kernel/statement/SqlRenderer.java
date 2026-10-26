@@ -140,6 +140,20 @@ public final class SqlRenderer {
         return sql;
     }
 
+    /**
+     * 渲染 {@code ORDER BY <items>} 子句。
+     */
+    public static String renderOrderBy(String orderByItems) {
+        return "ORDER BY " + orderByItems;
+    }
+
+    /**
+     * 渲染 {@code TRUNCATE TABLE <table>}。
+     */
+    public static String renderTruncate(String table) {
+        return "TRUNCATE TABLE " + table;
+    }
+
     private static boolean notBlank(@Nullable String value) {
         return value != null && !value.isBlank();
     }

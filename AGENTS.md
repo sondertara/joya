@@ -134,7 +134,7 @@ core/
    - 动态表名（按月分表 / 租户分表 / schema 切换）在**渲染期**由 `NamingPolicy.tableNameResolver` 决定：SQL 生成时就是最终表名，不存在执行期字符串改写。原生 SQL（`joya.sql(...)`）不携带表元数据，也不在该保证范围内。
 4. **拦截器链无旁路与现代 Java 17 映射**：
    - `JoyaTemplate` 是所有 SQL 执行的唯一收口，所有查询、变更、原生 SQL 与批处理 100% 经过 `SqlInterceptor` 链并携带完整 `StatementMetadata`。
-5. **Spring Boot 3 旁路（Sidecar）与多数据源原生镜像（`joya-spring-boot-starter`）**：
-   - **DataSource 自动镜像（`JoyaAutoConfiguration` → `JoyaClientRegistry`）**：按容器中的 `DataSource` 1:1 自动构建 `JoyaClient` 并登记到注册表，自动继承 `@Primary`、`@Qualifier("dsName")` 与自定义 `@Qualifier` 派生注解。
+5. **Spring Boot 3 旁路（Sidecar）与多数据源注册表（`joya-spring-boot-starter`）**：
+   - **主库复用与扩展库旁路隔离（`JoyaAutoConfiguration` → `JoyaClientRegistry`）**：主库通过 `joya.primary` 配置（默认 `use-spring=true` 复用 Spring 容器主 `DataSource`），扩展库通过 `joya.datasources` 数组独立初始化并登记到 `JoyaClientRegistry`（不注册全局 `DataSource` Bean，不干扰主 ORM）；`SqlInterceptor` 支持按 `@Qualifier("dsName")` 路由到指定数据源客户端。
    - **Spring 事务无缝融入（`SpringConnectionProvider` + `SpringTxEngine`）**：通过 `DataSourceUtils` 与 `PlatformTransactionManager` 协同，使 `joya` 操作、`joya.tx(...)`（含 `savepoint`）与 `@Transactional` 及主 ORM 共享同一条事务连接。
-   - **`JoyaMapper` 双模支持**：既支持免扫描的 `joya.mapper(XxxMapper.class)` / `tx.mapper(XxxMapper.class)` 随取随用，也支持轻量级按需 `@JoyaMapperScan(basePackages = ..., client = ...)` 多数据源注入。
+   - **`JoyaMapper` 免扫描随取随用**：通过 `joya.mapper(XxxMapper.class)` / `tx.mapper(XxxMapper.class)` 直接按需获取绑定到对应客户端或事务上下文的 Mapper 代理，零包扫描开销。

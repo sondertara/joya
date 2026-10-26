@@ -15,10 +15,8 @@ import java.lang.reflect.RecordComponent;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashSet;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
 
@@ -48,18 +46,14 @@ final class Projections {
             throw new IllegalArgumentException("Cannot map rows to " + type.getName()
                     + " without select; use select(column).list() for a single column");
         }
-        Map<Class<?>, List<ColumnAlias>> sourceColumns = new LinkedHashMap<>();
-        for (Class<?> source : sources) {
-            sourceColumns.put(source, ctx.getAllColumns(source));
-        }
         List<String> columns = new ArrayList<>();
         for (Field field : properties(type)) {
             String property = field.getName();
             String declaredColumn = PersistenceAnnotations.findColumnName(field).orElse(null);
             List<ColumnAlias> matches = new ArrayList<>();
             List<String> matchedTables = new ArrayList<>();
-            for (Map.Entry<Class<?>, List<ColumnAlias>> entry : sourceColumns.entrySet()) {
-                ColumnAlias match = findColumn(entry.getValue(), property, declaredColumn);
+            for (Class<?> source : sources) {
+                ColumnAlias match = ctx.findColumn(source, property, declaredColumn);
                 if (match != null) {
                     matches.add(match);
                     matchedTables.add(match.getTableName());
@@ -97,7 +91,7 @@ final class Projections {
         List<String> columns = new ArrayList<>(selected.size());
         Set<String> labels = new HashSet<>();
         for (IGetter<?, ?> column : selected) {
-            if (column instanceof Expr<?>) {
+            if (column instanceof Expr<?> expr && expr.alias() == null) {
                 throw new IllegalStateException("Name-based mapping list(" + type.getSimpleName()
                         + ".class) does not support expression columns (aggregate / raw); use list(" + type.getSimpleName() + "::new)");
             }
@@ -130,7 +124,7 @@ final class Projections {
             ColumnMetaProvider provider = ColumnMetaProvider.fromGetter(column);
             columns.add(provider.resolveSql(ctx) + " AS c" + (i + 1));
             types[i] = valueType(column);
-            names.add(column instanceof Expr<?> ? null : provider.propertyName());
+            names.add((column instanceof Expr<?> expr && expr.alias() == null) ? null : provider.propertyName());
         }
         Class<?>[] parameterTypes = null;
         Class<?> record = RecordOrderVerifier.constructedRecord(mapper);
@@ -149,22 +143,6 @@ final class Projections {
     }
 
     // ===== 内部辅助 =====
-
-    private static ColumnAlias findColumn(List<ColumnAlias> columns, String property, String declaredColumn) {
-        for (ColumnAlias column : columns) {
-            if (property.equals(column.getColumnAlias())) {
-                return column;
-            }
-        }
-        if (declaredColumn != null) {
-            for (ColumnAlias column : columns) {
-                if (declaredColumn.equalsIgnoreCase(column.getColumnName())) {
-                    return column;
-                }
-            }
-        }
-        return null;
-    }
 
     private static List<Field> properties(Class<?> type) {
         List<Field> result = new ArrayList<>();

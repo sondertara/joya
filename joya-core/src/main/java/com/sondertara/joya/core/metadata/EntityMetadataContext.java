@@ -39,7 +39,10 @@ public final class EntityMetadataContext {
     private final Map<String, String> lowerFieldToCanonical; // 小写字段名 → 规范字段名
     private final Map<String, Field> columnFields;           // 规范列名 → 预缓存 Field
     private final Set<String> generatedColumns;              // 生成列（自增/数据库生成）
+    private final Set<String> nonInsertableColumns;          // @Column(insertable = false)
+    private final Set<String> nonUpdatableColumns;           // @Column(updatable = false)
     private final List<String> insertableColumns;
+    private final List<String> insertableColumnsWithPrimaryKey;
     private final List<String> updatableColumns;
 
     private EntityMetadataContext(Builder b) {
@@ -48,10 +51,12 @@ public final class EntityMetadataContext {
         this.schemaName = b.schemaName;
         this.primaryKey = b.primaryKey;
         this.columnNames = List.copyOf(b.columnNames);
-        this.fieldNames = List.copyOf(b. columnToField.values());
+        this.fieldNames = List.copyOf(b.columnToField.values());
         this.columnToField = Map.copyOf(b.columnToField);
         this.fieldToColumn = Map.copyOf(b.fieldToColumn);
         this.generatedColumns = Set.copyOf(b.generatedColumns);
+        this.nonInsertableColumns = Set.copyOf(b.nonInsertableColumns);
+        this.nonUpdatableColumns = Set.copyOf(b.nonUpdatableColumns);
 
         Map<String, String> lowerColField = new LinkedHashMap<>();
         Map<String, String> lowerColCanon = new LinkedHashMap<>();
@@ -96,10 +101,16 @@ public final class EntityMetadataContext {
         this.primaryKeyType = pkType;
 
         this.insertableColumns = this.columnNames.stream()
-                .filter(c -> !this.generatedColumns.contains(c))
+                .filter(c -> !this.generatedColumns.contains(c) && !this.nonInsertableColumns.contains(c))
+                .toList();
+        this.insertableColumnsWithPrimaryKey = this.columnNames.stream()
+                .filter(c -> !this.nonInsertableColumns.contains(c)
+                        && (c.equals(this.primaryKey) || !this.generatedColumns.contains(c)))
                 .toList();
         this.updatableColumns = this.columnNames.stream()
-                .filter(c -> !this.generatedColumns.contains(c))
+                .filter(c -> !c.equals(this.primaryKey)
+                        && !this.generatedColumns.contains(c)
+                        && !this.nonUpdatableColumns.contains(c))
                 .toList();
     }
 
@@ -293,8 +304,8 @@ public final class EntityMetadataContext {
     /** 按 Lambda Getter 引用解析规范列名，不存在时抛出 {@link IllegalArgumentException}。 */
     public <E> String resolveColumn(IGetter<E, ?> getter) {
         String m = LambdaUtils.getImplMethodName(getter);
-        String prop = m.startsWith("get") && m.length() > 3 ? Strings.lowerFirst(m.substring(3))
-                : (m.startsWith("is") && m.length() > 2 ? Strings.lowerFirst(m.substring(2)) : m);
+        String prop = m.startsWith("get") && m.length() > 3 ? java.beans.Introspector.decapitalize(m.substring(3))
+                : (m.startsWith("is") && m.length() > 2 ? java.beans.Introspector.decapitalize(m.substring(2)) : m);
         String col = columnByField(prop);
         if (col == null) {
             throw new IllegalArgumentException("Unknown property '" + prop + "' on entity " + entityType.getName());
@@ -321,12 +332,27 @@ public final class EntityMetadataContext {
         return generatedColumns;
     }
 
-    /** 可插入列：排除生成列。 */
+    /** 不可插入列集合（{@code @Column(insertable = false)}）。 */
+    public Set<String> nonInsertableColumns() {
+        return nonInsertableColumns;
+    }
+
+    /** 不可更新列集合（{@code @Column(updatable = false)}）。 */
+    public Set<String> nonUpdatableColumns() {
+        return nonUpdatableColumns;
+    }
+
+    /** 可插入列：排除生成列与 {@code @Column(insertable = false)} 列。 */
     public List<String> insertableColumns() {
         return insertableColumns;
     }
 
-    /** 可更新列：排除生成列（主键通常不可更新，由调用方决定）。 */
+    /** 包含显式主键的可插入列（当用户手工指定主键值时使用，仍排除 {@code @Column(insertable = false)} 列）。 */
+    public List<String> insertableColumnsWithPrimaryKey() {
+        return insertableColumnsWithPrimaryKey;
+    }
+
+    /** 可更新列：排除生成列与 {@code @Column(updatable = false)} 列（主键通常不可更新，由调用方决定）。 */
     public List<String> updatableColumns() {
         return updatableColumns;
     }
@@ -343,6 +369,8 @@ public final class EntityMetadataContext {
         private final Map<String, String> fieldToColumn = new LinkedHashMap<>();
         private final Map<String, Field> columnFields = new LinkedHashMap<>();
         private final Set<String> generatedColumns = new LinkedHashSet<>();
+        private final Set<String> nonInsertableColumns = new LinkedHashSet<>();
+        private final Set<String> nonUpdatableColumns = new LinkedHashSet<>();
 
         public Builder(Class<?> entityType) {
             this.entityType = entityType;
@@ -359,6 +387,11 @@ public final class EntityMetadataContext {
         }
 
         public Builder primaryKey(String primaryKey) {
+            if (this.primaryKey != null && !this.primaryKey.equals(primaryKey)) {
+                throw new IllegalStateException("Composite primary key (multiple @Id fields: ["
+                        + this.primaryKey + ", " + primaryKey + "]) is not supported on entity ["
+                        + (entityType != null ? entityType.getName() : "unknown") + "]");
+            }
             this.primaryKey = primaryKey;
             return this;
         }
@@ -384,6 +417,16 @@ public final class EntityMetadataContext {
 
         public Builder generatedColumn(String columnName) {
             generatedColumns.add(columnName);
+            return this;
+        }
+
+        public Builder nonInsertableColumn(String columnName) {
+            nonInsertableColumns.add(columnName);
+            return this;
+        }
+
+        public Builder nonUpdatableColumn(String columnName) {
+            nonUpdatableColumns.add(columnName);
             return this;
         }
 

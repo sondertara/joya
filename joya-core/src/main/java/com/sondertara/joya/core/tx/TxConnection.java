@@ -28,6 +28,12 @@ public final class TxConnection implements TxSession {
     /** final —— 结构上保证事务期内连接不可替换（I5）。 */
     private final Connection connection;
 
+    /** 可选的底层连接提供者（用于归还自定义连接）。 */
+    private final ConnectionProvider baseConnections;
+
+    /** 全局默认查询超时秒数（无事务 deadline 时回退使用）。 */
+    private final OptionalInt defaultQueryTimeoutSeconds;
+
     /** 所有者线程：虚拟线程下尤其重要，跨线程使用必须响亮失败（I9）。 */
     private final Thread ownerThread;
 
@@ -39,13 +45,28 @@ public final class TxConnection implements TxSession {
     private final Deque<Savepoint> savepoints = new ArrayDeque<>();
     /** 截止时间（纳秒）；0 表示不限时。 */
     private long deadlineNanos;
+    private boolean commitFailed;
+    private boolean rollbackFailed;
+    private boolean physicalRollbackConfirmed;
+    private boolean beginIncomplete;
     private boolean closed;
 
     public TxConnection(Connection connection) {
+        this(connection, null, OptionalInt.empty());
+    }
+
+    public TxConnection(Connection connection, ConnectionProvider baseConnections) {
+        this(connection, baseConnections,
+                baseConnections != null ? baseConnections.queryTimeoutSeconds() : OptionalInt.empty());
+    }
+
+    public TxConnection(Connection connection, ConnectionProvider baseConnections, OptionalInt defaultQueryTimeoutSeconds) {
         if (connection == null) {
             throw new IllegalArgumentException("connection must not be null");
         }
         this.connection = connection;
+        this.baseConnections = baseConnections;
+        this.defaultQueryTimeoutSeconds = defaultQueryTimeoutSeconds != null ? defaultQueryTimeoutSeconds : OptionalInt.empty();
         this.ownerThread = Thread.currentThread();
     }
 
@@ -60,11 +81,13 @@ public final class TxConnection implements TxSession {
             throw new IllegalTxStateException(status.state(), TxState.ACTIVE, status.state().allowedTransitions());
         }
         restorePoint = RestorePoint.capture(connection);
+        beginIncomplete = true;
         applyOptions(options);
         if (options.timeout() != null) {
             deadlineNanos = System.nanoTime() + options.timeout().toNanos();
         }
         status = status.transitionTo(TxState.ACTIVE).enter();
+        beginIncomplete = false;
     }
 
     /**
@@ -122,15 +145,26 @@ public final class TxConnection implements TxSession {
         checkOwner();
         Savepoint sp = savepoints.pop();
         status = status.exit();
-        connection.releaseSavepoint(sp);
+        try {
+            connection.releaseSavepoint(sp);
+        } catch (SQLException | RuntimeException | Error e) {
+            // 保存点写入是否仍有效已无法保证，禁止外层继续提交。
+            status = status.markRollbackOnly();
+            throw e;
+        }
     }
 
-    /** 失败退出保存点层：回滚到保存点，<b>不</b>标记全局仅回滚，外层可继续并提交。 */
+    /** 失败退出保存点层：回滚到保存点；若保存点回滚自身失败，立即标记外层事务为仅回滚。 */
     public void exitSavepointRollback() throws SQLException {
         checkOwner();
         Savepoint sp = savepoints.pop();
         status = status.exit();
-        connection.rollback(sp);
+        try {
+            connection.rollback(sp);
+        } catch (SQLException | RuntimeException | Error e) {
+            status = status.markRollbackOnly();
+            throw e;
+        }
     }
 
     // ===== ConnectionProvider：事务视图借还连接 =====
@@ -155,7 +189,9 @@ public final class TxConnection implements TxSession {
     @Override
     public OptionalInt queryTimeoutSeconds() {
         if (deadlineNanos == 0) {
-            return OptionalInt.empty();
+            return defaultQueryTimeoutSeconds.isPresent()
+                    ? defaultQueryTimeoutSeconds
+                    : (baseConnections != null ? baseConnections.queryTimeoutSeconds() : OptionalInt.empty());
         }
         long remaining = deadlineNanos - System.nanoTime();
         // JDBC 超时单位为秒且 0 表示不限，向上取整并至少为 1
@@ -194,6 +230,22 @@ public final class TxConnection implements TxSession {
         return closed;
     }
 
+    @Override
+    public TxOutcome terminalOutcome() {
+        if (status.state() == TxState.COMMITTED) {
+            return TxOutcome.COMMITTED;
+        }
+        if (status.state() == TxState.ROLLED_BACK) {
+            return TxOutcome.ROLLED_BACK;
+        }
+        return null;
+    }
+
+    @Override
+    public boolean isPhysicalRollbackConfirmed() {
+        return physicalRollbackConfirmed;
+    }
+
     public long elapsedNanos() {
         return System.nanoTime() - startedAtNanos;
     }
@@ -202,24 +254,58 @@ public final class TxConnection implements TxSession {
 
     @Override
     public void close() throws SQLException {
+        checkOwner();
         if (closed) {
             return;
         }
         closed = true;
+        SQLException primaryError = null;
         try {
-            // 未显式结束的事务一律回滚：安全默认，绝不隐式提交
-            if (status.isActive()) {
-                connection.rollback();
-                status = status.transitionTo(TxState.ROLLED_BACK);
+            // 未显式结束（包括 begin 选项设置失败）的事务一律回滚：安全默认，绝不隐式提交
+            if ((status.isActive() || beginIncomplete) && !rollbackFailed) {
+                try {
+                    connection.rollback();
+                    if (!commitFailed) {
+                        physicalRollbackConfirmed = true;
+                        status = status.transitionTo(TxState.ROLLED_BACK);
+                    }
+                    beginIncomplete = false;
+                } catch (SQLException e) {
+                    rollbackFailed = true;
+                    primaryError = e;
+                }
             }
         } finally {
             try {
-                if (restorePoint != null) {
+                // 仅当提交/回滚未失败且事务已正常脱离 ACTIVE 状态时才还原 autoCommit，
+                // 严禁在 rollback()/commit() 失败后调用 setAutoCommit(true) 导致未决事务被 JDBC 隐式提交！
+                if (!commitFailed && !rollbackFailed && !status.isActive() && restorePoint != null) {
                     restorePoint.restore(connection);
                 }
+            } catch (SQLException restoreEx) {
+                if (primaryError != null) {
+                    primaryError.addSuppressed(restoreEx);
+                } else {
+                    primaryError = restoreEx;
+                }
             } finally {
-                connection.close();   // 归还池
+                try {
+                    if (baseConnections != null && !commitFailed && !rollbackFailed && !status.isActive()) {
+                        baseConnections.release(connection);
+                    } else {
+                        connection.close();   // 归还池或关闭污染连接
+                    }
+                } catch (SQLException closeEx) {
+                    if (primaryError != null) {
+                        primaryError.addSuppressed(closeEx);
+                    } else {
+                        primaryError = closeEx;
+                    }
+                }
             }
+        }
+        if (primaryError != null) {
+            throw primaryError;
         }
     }
 
@@ -238,13 +324,24 @@ public final class TxConnection implements TxSession {
     }
 
     private void doCommit() throws SQLException {
-        connection.commit();
-        status = status.transitionTo(TxState.COMMITTED);
+        try {
+            connection.commit();
+            status = status.transitionTo(TxState.COMMITTED);
+        } catch (SQLException | RuntimeException | Error e) {
+            commitFailed = true;
+            throw e;
+        }
     }
 
     private void doRollback() throws SQLException {
-        connection.rollback();
-        status = status.transitionTo(TxState.ROLLED_BACK);
+        try {
+            connection.rollback();
+            physicalRollbackConfirmed = true;
+            status = status.transitionTo(TxState.ROLLED_BACK);
+        } catch (SQLException | RuntimeException | Error e) {
+            rollbackFailed = true;
+            throw e;
+        }
     }
 
     private void checkOwner() {

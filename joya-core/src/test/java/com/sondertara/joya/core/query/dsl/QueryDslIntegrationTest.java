@@ -1,6 +1,9 @@
 package com.sondertara.joya.core.query.dsl;
 
 import com.sondertara.joya.core.JoyaClient;
+import com.sondertara.joya.core.JoyaSettings;
+import com.sondertara.joya.core.kernel.dialect.DbType;
+import com.sondertara.joya.core.kernel.dialect.QuoteStyle;
 import com.sondertara.joya.core.kernel.interceptor.Chain;
 import com.sondertara.joya.core.kernel.interceptor.RewriteContext;
 import com.sondertara.joya.core.kernel.interceptor.SqlInterceptor;
@@ -23,6 +26,7 @@ import javax.persistence.Transient;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 import static com.sondertara.joya.core.query.dsl.Exprs.count;
 import static com.sondertara.joya.core.query.dsl.Exprs.max;
@@ -197,12 +201,13 @@ class QueryDslIntegrationTest {
     public record AmbiguousIdDto(Long id, String name) {}
 
     private List<SqlStatement> executedStatements;
+    private JdbcDataSource dataSource;
     private JoyaClient joya;
 
     @BeforeEach
     void setUp() {
-        JdbcDataSource ds = new JdbcDataSource();
-        ds.setURL("jdbc:h2:mem:joya_query_dsl_test;DB_CLOSE_DELAY=-1");
+        dataSource = new JdbcDataSource();
+        dataSource.setURL("jdbc:h2:mem:joya_query_dsl_test;DB_CLOSE_DELAY=-1");
 
         executedStatements = new ArrayList<>();
         SqlInterceptor recorder = (RewriteContext ctx, Chain chain) -> {
@@ -210,7 +215,7 @@ class QueryDslIntegrationTest {
             return chain.proceed(ctx);
         };
 
-        joya = JoyaClient.builder(ds).interceptor(recorder).build();
+        joya = JoyaClient.builder(dataSource).interceptor(recorder).build();
         joya.sql("""
                 DROP TABLE IF EXISTS t_user;
                 DROP TABLE IF EXISTS t_dept;
@@ -373,5 +378,113 @@ class QueryDslIntegrationTest {
         assertEquals(2L, result.getTotal());
         assertEquals("Bob", result.getData().get(0).getName());
         assertEquals("Alice", result.getData().get(1).getName());
+    }
+
+    @Test
+    void distinctWindowPageUsesCurrentProjectionForTotal() {
+        executedStatements.clear();
+
+        PageResult<Long> page = joya.from(User.class)
+                .distinct()
+                .limit(1, 2)
+                .orderByAsc(User::getDeptId)
+                .select(User::getDeptId)
+                .page(PageRequest.of(0, 1));
+
+        assertEquals(1L, page.getTotal());
+        assertEquals(List.of(20L), page.getData());
+        String countSql = executedStatements.get(0).sql();
+        assertTrue(countSql.contains("SELECT DISTINCT t0.dept_id AS c1"), countSql);
+        assertFalse(countSql.contains("t0.id"), countSql);
+    }
+
+    @Test
+    void globalAggregateProjectionPageWithoutGroupBy_returnsAggregateRowCountAndPreservesEmptyTableResult() {
+        executedStatements.clear();
+
+        // 1. 非空表无 GROUP BY 的全局聚合投影分页：结果集只有 1 行聚合行（值为 3L），total 应为 1 而非底表行数 3
+        PageResult<Long> nonEmptyAggPage = joya.from(User.class)
+                .select(count())
+                .page(PageRequest.of(0, 10));
+        assertEquals(1L, nonEmptyAggPage.getTotal());
+        assertEquals(List.of(3L), nonEmptyAggPage.getData());
+
+        // 2. 空结果过滤（或空表）下的无 GROUP BY 全局聚合投影分页：SQL 全局 COUNT(*) 仍返回 1 行（值为 0L），不得因底表 0 行而跳过数据查询
+        PageResult<Long> emptyAggPage = joya.from(User.class)
+                .where(w -> w.eq(User::getId, -999L))
+                .select(count())
+                .page(PageRequest.of(0, 10));
+        assertEquals(1L, emptyAggPage.getTotal());
+        assertEquals(List.of(0L), emptyAggPage.getData());
+    }
+
+    @Test
+    void pageQueryParamsBoxesPrimitiveArrays() {
+        PageQueryParam param = new PageQueryParam();
+        param.addSearchParam("id", new int[]{1, 3}, FieldParam.Operator.IN);
+
+        List<User> users = joya.from(User.class)
+                .apply(PageQueryParams.of(param))
+                .orderByAsc(User::getId)
+                .list();
+
+        assertEquals(List.of(1L, 3L), users.stream().map(User::getId).toList());
+    }
+
+    @Test
+    void quotedNamingMatchesDtoColumnAnnotationAgainstRawMetadata() {
+        JoyaClient quoted = JoyaClient.builder(dataSource)
+                .settings(JoyaSettings.builder()
+                        .columnUppercase(true)
+                        .tableUppercase(true)
+                        .quoteStyle(QuoteStyle.DOUBLE_QUOTE)
+                        .build())
+                .build();
+
+        List<UserDeptBriefDto> rows = quoted.from(User.class)
+                .join(User::getDeptId, Dept::getId)
+                .where(w -> w.eq(User::getId, 1L))
+                .list(UserDeptBriefDto.class);
+
+        assertEquals(1, rows.size());
+        assertEquals("Alice", rows.get(0).getName());
+        assertEquals("R&D", rows.get(0).getDepartment());
+    }
+
+    @Test
+    void nativePageUsesLongOffsetAndZeroLimitIsDialectIndependent() {
+        PageResult<User> page = joya.sql("SELECT * FROM t_user ORDER BY id")
+                .page(User.class, PageRequest.of(Integer.MAX_VALUE, 2));
+        assertEquals(3L, page.getTotal());
+        assertTrue(page.getData().isEmpty());
+
+        for (DbType dbType : List.of(DbType.h2, DbType.mysql, DbType.sqlserver, DbType.oracle, DbType.informix)) {
+            JoyaClient client = JoyaClient.builder(dataSource).dialect(dbType).build();
+            assertTrue(client.sql("SELECT * FROM t_user").limit(User.class, 0, 0).isEmpty(), dbType.name());
+            assertThrows(IllegalArgumentException.class,
+                    () -> client.sql("SELECT * FROM t_user").limit(User.class, 0, -1), dbType.name());
+            assertThrows(IllegalArgumentException.class,
+                    () -> client.sql("SELECT * FROM t_user").limit(User.class, -1, 1), dbType.name());
+        }
+    }
+
+    @Test
+    void listMapUsesMapRowMapperSemantics() {
+        Map<String, Object> row = joya.sql(
+                "SELECT id AS \"MixedId\", name AS \"t0.display_name\" FROM t_user WHERE id = 1")
+                .listMap()
+                .get(0);
+
+        assertEquals(1L, row.get("mixedid"));
+        assertEquals("Alice", row.get("display_name"));
+    }
+
+    @Test
+    void joinRejectsExpressionWithoutTableRoleAtBuildTime() {
+        IllegalArgumentException exception = assertThrows(IllegalArgumentException.class,
+                () -> Query.of(User.class).join(raw("t0.dept_id", Long.class), Dept::getId));
+
+        assertTrue(exception.getMessage().contains("JOIN left"), exception.getMessage());
+        assertTrue(exception.getMessage().contains("table role"), exception.getMessage());
     }
 }

@@ -347,12 +347,29 @@ public final class Query<T> implements QueryScope {
     public long count() {
         RenderContext ctx = renderContext();
         List<String> cols = distinct ? Projections.entity(rootType, ctx).columns() : List.of("1");
-        SqlStatement countStmt = renderCountStatement(cols, ctx);
+        return count(cols, ctx);
+    }
+
+    private long count(List<String> projectionColumns, RenderContext ctx) {
+        if (limit != null && limit <= 0L) {
+            return 0L;
+        }
+        SqlStatement countStmt = renderCountStatement(projectionColumns, ctx);
         Long total = requireTemplate().query(countStmt, new SingleColumnRowMapper<>(Long.class));
-        return total == null ? 0L : total;
+        long rawTotal = total == null ? 0L : total;
+        if (offset != null && offset > 0L) {
+            rawTotal = Math.max(0L, rawTotal - offset);
+        }
+        if (limit != null) {
+            rawTotal = Math.min(rawTotal, limit);
+        }
+        return rawTotal;
     }
 
     public boolean exists() {
+        if (limit != null && limit <= 0L) {
+            return false;
+        }
         RenderContext ctx = renderContext();
         SqlStatement stmt = renderStatement(List.of("1"), false, ctx);
         long start = offset == null ? 0L : offset;
@@ -370,6 +387,18 @@ public final class Query<T> implements QueryScope {
 
     public <E, N extends Number> Optional<N> sum(IGetter<E, N> column) {
         return select(Exprs.sum(column)).one();
+    }
+
+    public <E, S extends Number> Optional<S> sum(IGetter<E, ? extends Number> column, Class<S> resultType) {
+        return select(Exprs.sum(column, resultType)).one();
+    }
+
+    public <E> Optional<Long> sumAsLong(IGetter<E, ? extends Number> column) {
+        return select(Exprs.sumAsLong(column)).one();
+    }
+
+    public <E> Optional<java.math.BigDecimal> sumAsDecimal(IGetter<E, ? extends Number> column) {
+        return select(Exprs.sumAsDecimal(column)).one();
     }
 
     public <E> Optional<Double> avg(IGetter<E, ? extends Number> column) {
@@ -455,9 +484,31 @@ public final class Query<T> implements QueryScope {
     private <V> PageResult<V> executePage(PageRequest page, Projection<V> projection, RenderContext ctx) {
         Objects.requireNonNull(page, "page must not be null");
         SqlStatement dataStmt = renderStatement(projection.columns(), true, ctx);
+        if (this.limit != null || this.offset != null) {
+            long total = count(projection.columns(), ctx);
+            long pageRelOffset = page.getOffsetAsLong();
+            if (total <= 0L || pageRelOffset >= total) {
+                return PageResult.<V>of(List.of())
+                        .pagination(page.getPage(), page.getSize())
+                        .total(total)
+                        .build();
+            }
+            long baseOffset = this.offset == null ? 0L : this.offset;
+            long effectiveOffset = Math.addExact(baseOffset, pageRelOffset);
+            long effectiveLimit = this.limit == null
+                    ? page.getSize()
+                    : Math.min((long) page.getSize(), Math.max(0L, this.limit - pageRelOffset));
+            List<V> rows = effectiveLimit <= 0L
+                    ? List.of()
+                    : requireTemplate().queryLimit(dataStmt, projection.mapper(), effectiveOffset, effectiveLimit);
+            return PageResult.of(rows)
+                    .pagination(page.getPage(), page.getSize())
+                    .total(total)
+                    .build();
+        }
         SqlStatement countStmt = renderCountStatement(projection.columns(), ctx);
         PageSlice<V> slice = requireTemplate().queryPage(
-                dataStmt, countStmt, projection.mapper(), page.getOffset(), page.getSize());
+                dataStmt, countStmt, projection.mapper(), page.getOffsetAsLong(), page.getSize());
         return PageResult.of(slice.rows())
                 .pagination(page.getPage(), page.getSize())
                 .total(slice.total())
@@ -515,11 +566,117 @@ public final class Query<T> implements QueryScope {
     }
 
     private SqlStatement renderCountStatement(List<String> selectColumns, RenderContext ctx) {
-        if (!distinct && groupByColumns.isEmpty() && havingCriterion.isEmpty()) {
+        boolean hasAggregate = containsAggregateExpression(selectColumns);
+        if (!distinct && !hasAggregate && groupByColumns.isEmpty() && havingCriterion.isEmpty()) {
             return renderStatement(List.of("COUNT(*)"), false, ctx);
         }
-        SqlStatement inner = renderStatement(distinct ? selectColumns : List.of("1"), false, ctx);
+        SqlStatement inner = renderStatement((distinct || hasAggregate) ? selectColumns : List.of("1"), false, ctx);
         return inner.withSql(SqlRenderer.renderCountSubquery(inner.sql()));
+    }
+
+    private static boolean containsAggregateExpression(List<String> selectColumns) {
+        if (selectColumns == null || selectColumns.isEmpty()) {
+            return false;
+        }
+        for (String col : selectColumns) {
+            if (col != null && hasAggregateCall(col)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean hasAggregateCall(String sql) {
+        boolean single = false;
+        boolean doubleQuote = false;
+        boolean bracket = false;
+        boolean backtick = false;
+        int len = sql.length();
+        for (int i = 0; i < len; i++) {
+            char c = sql.charAt(i);
+            char next = i + 1 < len ? sql.charAt(i + 1) : '\0';
+            if (single || doubleQuote || bracket || backtick) {
+                if ((single && c == '\'') || (doubleQuote && c == '"') || (backtick && c == '`')) {
+                    if (next == c) {
+                        i++;
+                    } else {
+                        single = false;
+                        doubleQuote = false;
+                        backtick = false;
+                    }
+                } else if (bracket && c == ']') {
+                    if (next == ']') {
+                        i++;
+                    } else {
+                        bracket = false;
+                    }
+                }
+                continue;
+            }
+            if (c == '-' && next == '-') {
+                i += 2;
+                while (i < len && sql.charAt(i) != '\n' && sql.charAt(i) != '\r') {
+                    i++;
+                }
+                continue;
+            }
+            if (c == '/' && next == '*') {
+                i += 2;
+                while (i + 1 < len && !(sql.charAt(i) == '*' && sql.charAt(i + 1) == '/')) {
+                    i++;
+                }
+                i++;
+                continue;
+            }
+            if (c == '\'') {
+                single = true;
+                continue;
+            }
+            if (c == '"') {
+                doubleQuote = true;
+                continue;
+            }
+            if (c == '[') {
+                bracket = true;
+                continue;
+            }
+            if (c == '`') {
+                backtick = true;
+                continue;
+            }
+            if (Character.isLetter(c) || c == '_') {
+                int start = i;
+                while (i + 1 < len && (Character.isLetterOrDigit(sql.charAt(i + 1)) || sql.charAt(i + 1) == '_')) {
+                    i++;
+                }
+                if (start > 0 && sql.charAt(start - 1) == '.') {
+                    continue;
+                }
+                String ident = sql.substring(start, i + 1);
+                if (isAggregateFunctionName(ident)) {
+                    int k = i + 1;
+                    while (k < len && Character.isWhitespace(sql.charAt(k))) {
+                        k++;
+                    }
+                    if (k < len && sql.charAt(k) == '(') {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    private static boolean isAggregateFunctionName(String ident) {
+        return switch (ident.toUpperCase(java.util.Locale.ROOT)) {
+            case "COUNT", "SUM", "AVG", "MIN", "MAX",
+                 "STDDEV", "STDDEV_POP", "STDDEV_SAMP",
+                 "VARIANCE", "VAR_POP", "VAR_SAMP",
+                 "GROUP_CONCAT", "STRING_AGG", "LISTAGG", "ARRAY_AGG",
+                 "BOOL_AND", "BOOL_OR", "EVERY",
+                 "BIT_AND", "BIT_OR", "BIT_XOR" -> true;
+            default -> false;
+        };
     }
 
     private JoyaTemplate requireTemplate() {

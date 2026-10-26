@@ -60,6 +60,7 @@ class JoyaFluentApiAndTxIntegrationTest {
     @Table(name = "t_account")
     public static class Account {
         @Id
+        @javax.persistence.GeneratedValue(strategy = javax.persistence.GenerationType.IDENTITY)
         @Column(name = "id")
         private Long id;
 
@@ -119,6 +120,7 @@ class JoyaFluentApiAndTxIntegrationTest {
     @Table(name = "t_order")
     public static class OrderRecord {
         @Id
+        @javax.persistence.GeneratedValue(strategy = javax.persistence.GenerationType.IDENTITY)
         @Column(name = "id")
         private Long id;
 

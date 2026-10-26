@@ -41,16 +41,28 @@ public final class UpdateStatementFactory {
             throw new IllegalStateException("UPDATE without WHERE is not allowed; use allowAll() explicitly");
         }
 
-        // 1. 确定 SET 列：显式声明时按元数据列顺序归一，避免调用方传入 HashSet 导致 SQL 文本不确定
+        // 1. 确定 SET 列：显式声明时严格保留调用方声明顺序（如派生更新方法名顺序），避免参数绑定错位
         List<String> setColumns = ctx.declaredColumns().isEmpty()
                 ? meta.updatableColumns()
-                : orderByMetadata(meta, ctx.declaredColumns());
+                : new ArrayList<>(ctx.declaredColumns());
 
         SqlParameterList params = new SqlParameterList();
+        Set<String> nonUpdatable = meta.nonUpdatableColumns();
 
         // 2. 先渲染 SET 和 SET 参数
         List<String> finalSetColumns = new ArrayList<>();
         for (String col : setColumns) {
+            String canonical = meta.canonicalColumn(col);
+            String checkedColumn = canonical != null ? canonical : col;
+            if (nonUpdatable.contains(checkedColumn)) {
+                throw new IllegalArgumentException(
+                        "Column '" + checkedColumn + "' is marked as updatable=false on entity " + meta.entityType().getName());
+            }
+            if (meta.generatedColumns().contains(checkedColumn)) {
+                throw new IllegalArgumentException(
+                        "Column '" + checkedColumn + "' is database-generated and cannot be updated on entity "
+                                + meta.entityType().getName());
+            }
             Object value = ctx.resolveValue(col);
             if (ctx.ignoreNull() && value == null) {
                 continue;
@@ -85,27 +97,6 @@ public final class UpdateStatementFactory {
     }
 
     /**
-     * 按元数据列顺序归一显式声明的列，元数据外的列保持其原始迭代顺序追加。
-     *
-     * <p>存在的理由：{@code ctx.declaredColumns()} 可能是任意 {@link Set} 实现，
-     * 直接遍历会让同一逻辑产生不同 SQL 文本，破坏执行计划缓存与快照测试的稳定性。
-     */
-    private static List<String> orderByMetadata(EntityMetadataContext meta, Set<String> declared) {
-        List<String> ordered = new ArrayList<>(declared.size());
-        for (String col : meta.columnNames()) {
-            if (declared.contains(col)) {
-                ordered.add(col);
-            }
-        }
-        for (String col : declared) {
-            if (!ordered.contains(col)) {
-                ordered.add(col);
-            }
-        }
-        return ordered;
-    }
-
-    /**
      * 构建按主键批量更新的 {@link BatchSqlStatement}（参数顺序：setColumns 依次排在前，pk 排在最后）。
      */
     public static BatchSqlStatement createBatchByPrimaryKey(
@@ -116,6 +107,23 @@ public final class UpdateStatementFactory {
             NamingPolicy namingPolicy,
             int batchSize
     ) {
+        if (setColumns == null || setColumns.isEmpty()) {
+            throw new IllegalStateException("UPDATE statement has no columns to set");
+        }
+        for (String col : setColumns) {
+            String canonical = meta.canonicalColumn(col);
+            String checkedColumn = canonical != null ? canonical : col;
+            if (meta.nonUpdatableColumns().contains(checkedColumn)) {
+                throw new IllegalArgumentException(
+                        "Column '" + checkedColumn + "' is marked as updatable=false on entity "
+                                + meta.entityType().getName());
+            }
+            if (meta.generatedColumns().contains(checkedColumn)) {
+                throw new IllegalArgumentException(
+                        "Column '" + checkedColumn + "' is database-generated and cannot be updated on entity "
+                                + meta.entityType().getName());
+            }
+        }
         List<String> formattedSetColumns = setColumns.stream()
                 .map(c -> meta.formatColumn(c, namingPolicy))
                 .toList();

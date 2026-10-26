@@ -217,7 +217,7 @@ public final class ConvertUtils {
             return sqlDate.toLocalDate().atStartOfDay(ZoneId.systemDefault()).toInstant();
         }
         if (value instanceof Time sqlTime) {
-            return sqlTime.toLocalTime().atDate(LocalDate.EPOCH).atZone(ZoneId.systemDefault()).toInstant();
+            return Instant.ofEpochMilli(sqlTime.getTime());
         }
         if (value instanceof Date d) return d.toInstant();
         if (value instanceof LocalDateTime ldt) return ldt.atZone(ZoneId.systemDefault()).toInstant();
@@ -276,7 +276,11 @@ public final class ConvertUtils {
 
     private static LocalTime convertToLocalTime(Object value) {
         if (value instanceof LocalTime lt) return lt;
-        if (value instanceof Time t) return t.toLocalTime();
+        if (value instanceof Time t) {
+            LocalTime time = t.toLocalTime();
+            int millis = (int) Math.floorMod(t.getTime(), 1000L);
+            return millis == 0 ? time : time.withNano(millis * 1_000_000);
+        }
         if (value instanceof Timestamp ts) return ts.toLocalDateTime().toLocalTime();
         if (value instanceof LocalDateTime ldt) return ldt.toLocalTime();
         if (value instanceof OffsetDateTime odt) return odt.toLocalTime();

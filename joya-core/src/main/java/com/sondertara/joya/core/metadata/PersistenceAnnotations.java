@@ -17,6 +17,9 @@ public final class PersistenceAnnotations {
     public record TableMeta(String name, String schema, String catalog) {
     }
 
+    public record ColumnMeta(String name, boolean insertable, boolean updatable) {
+    }
+
     private static final List<Class<? extends Annotation>> TABLE_TYPES = loadAnnotations(
             "jakarta.persistence.Table", "javax.persistence.Table");
     private static final List<Class<? extends Annotation>> ENTITY_TYPES = loadAnnotations(
@@ -25,8 +28,14 @@ public final class PersistenceAnnotations {
             "jakarta.persistence.Column", "javax.persistence.Column");
     private static final List<Class<? extends Annotation>> ID_TYPES = loadAnnotations(
             "jakarta.persistence.Id", "javax.persistence.Id");
+    private static final List<Class<? extends Annotation>> GENERATED_VALUE_TYPES = loadAnnotations(
+            "jakarta.persistence.GeneratedValue", "javax.persistence.GeneratedValue");
     private static final List<Class<? extends Annotation>> TRANSIENT_TYPES = loadAnnotations(
             "jakarta.persistence.Transient", "javax.persistence.Transient");
+    private static final List<Class<? extends Annotation>> ID_CLASS_TYPES = loadAnnotations(
+            "jakarta.persistence.IdClass", "javax.persistence.IdClass");
+    private static final List<Class<? extends Annotation>> EMBEDDED_ID_TYPES = loadAnnotations(
+            "jakarta.persistence.EmbeddedId", "javax.persistence.EmbeddedId");
 
     private PersistenceAnnotations() {
     }
@@ -75,19 +84,28 @@ public final class PersistenceAnnotations {
     }
 
     /**
-     * 解析字段或方法上的 {@code @Column(name = ...)} 属性；未标注或为空白字符串时返回 {@link Optional#empty()}。
+     * 解析字段或方法上的 {@code @Column} 完整元数据（名称、insertable、updatable）。
      */
-    public static Optional<String> findColumnName(AnnotatedElement element) {
+    public static Optional<ColumnMeta> findColumn(AnnotatedElement element) {
         for (Class<? extends Annotation> type : COLUMN_TYPES) {
             Annotation ann = element.getAnnotation(type);
             if (ann != null) {
                 String name = invokeString(ann, "name");
-                if (name != null && !name.isBlank()) {
-                    return Optional.of(name);
-                }
+                boolean insertable = invokeBoolean(ann, "insertable", true);
+                boolean updatable = invokeBoolean(ann, "updatable", true);
+                return Optional.of(new ColumnMeta(name, insertable, updatable));
             }
         }
         return Optional.empty();
+    }
+
+    /**
+     * 解析字段或方法上的 {@code @Column(name = ...)} 属性；未标注或为空白字符串时返回 {@link Optional#empty()}。
+     */
+    public static Optional<String> findColumnName(AnnotatedElement element) {
+        return findColumn(element)
+                .map(ColumnMeta::name)
+                .filter(name -> name != null && !name.isBlank());
     }
 
     /**
@@ -98,10 +116,31 @@ public final class PersistenceAnnotations {
     }
 
     /**
+     * 判断字段是否标注了 {@code @GeneratedValue}。
+     */
+    public static boolean isGeneratedValuePresent(AnnotatedElement element) {
+        return isAnyPresent(element, GENERATED_VALUE_TYPES);
+    }
+
+    /**
      * 判断字段是否标注了 {@code @Transient}。
      */
     public static boolean isTransientPresent(AnnotatedElement element) {
         return isAnyPresent(element, TRANSIENT_TYPES);
+    }
+
+    /**
+     * 判断类是否标注了 {@code @IdClass}（复合主键）。
+     */
+    public static boolean isIdClassPresent(AnnotatedElement element) {
+        return isAnyPresent(element, ID_CLASS_TYPES);
+    }
+
+    /**
+     * 判断字段是否标注了 {@code @EmbeddedId}（嵌入式复合主键）。
+     */
+    public static boolean isEmbeddedIdPresent(AnnotatedElement element) {
+        return isAnyPresent(element, EMBEDDED_ID_TYPES);
     }
 
     private static boolean isAnyPresent(AnnotatedElement element, List<Class<? extends Annotation>> types) {
@@ -133,6 +172,16 @@ public final class PersistenceAnnotations {
             return val instanceof String s ? s : "";
         } catch (Exception e) {
             return "";
+        }
+    }
+
+    private static boolean invokeBoolean(Annotation annotation, String attributeName, boolean defaultValue) {
+        try {
+            Method m = annotation.annotationType().getMethod(attributeName);
+            Object val = m.invoke(annotation);
+            return val instanceof Boolean b ? b : defaultValue;
+        } catch (Exception e) {
+            return defaultValue;
         }
     }
 }

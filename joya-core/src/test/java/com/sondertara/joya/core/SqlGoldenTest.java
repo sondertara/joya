@@ -2,6 +2,10 @@ package com.sondertara.joya.core;
 
 import com.sondertara.joya.core.cache.CacheHolder;
 import com.sondertara.joya.core.naming.NamingPolicy;
+import com.sondertara.joya.core.kernel.dialect.DbType;
+import com.sondertara.joya.core.kernel.dialect.PaginationStyle;
+import com.sondertara.joya.core.kernel.dialect.QuoteStyle;
+import com.sondertara.joya.core.kernel.dialect.StandardDialect;
 import com.sondertara.joya.core.kernel.statement.SqlStatement;
 import com.sondertara.joya.core.metadata.EntityMetadataContext;
 import com.sondertara.joya.core.statement.MutationContext;
@@ -25,6 +29,9 @@ import java.util.Map;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * SQL 文本快照测试 —— 任何"行为不变"的重构都必须先让本类保持全绿。
@@ -187,6 +194,149 @@ class SqlGoldenTest {
                         new NamingPolicy(10, true, true)),
                 "SELECT * FROM T_USER WHERE ID = ?",
                 "[1]");
+    }
+
+    @Test
+    void sqlServerNativeCountAndCommentSafePagination() {
+        StandardDialect sqlServer = new StandardDialect(
+                DbType.sqlserver, QuoteStyle.BRACKET, PaginationStyle.ANSI_OFFSET_FETCH, true);
+        check("sqlserver_count_removes_only_top_level_order",
+                sqlServer.countSql(SqlStatement.select("SELECT id FROM users ORDER BY id")),
+                "SELECT COUNT(*) FROM (SELECT id FROM users) AS TEMP_T",
+                "[]");
+        check("sqlserver_count_hoists_leading_cte",
+                sqlServer.countSql(SqlStatement.select(
+                        "WITH active AS (SELECT id FROM users WHERE active = 1) SELECT id FROM active ORDER BY id")),
+                "WITH active AS (SELECT id FROM users WHERE active = 1) SELECT COUNT(*) FROM (SELECT id FROM active) AS TEMP_T",
+                "[]");
+        check("sqlserver_count_keeps_order_by_for_top_with_ties",
+                sqlServer.countSql(SqlStatement.select(
+                        "SELECT TOP 5 WITH TIES id FROM users ORDER BY score DESC")),
+                "SELECT COUNT(*) FROM (SELECT TOP 5 WITH TIES id FROM users ORDER BY score DESC) AS TEMP_T",
+                "[]");
+        check("sqlserver_count_ignores_question_mark_in_comment_or_literal",
+                sqlServer.countSql(SqlStatement.select(
+                        "SELECT id FROM users ORDER BY CASE WHEN tag = '?' THEN 0 ELSE 1 END -- comment ?")),
+                "SELECT COUNT(*) FROM (SELECT id FROM users) AS TEMP_T",
+                "[]");
+        check("count_before_trailing_line_comment",
+                sqlServer.countSql(SqlStatement.select("SELECT id FROM users -- tail")),
+                "SELECT COUNT(*) FROM (SELECT id FROM users -- tail\n) AS TEMP_T",
+                "[]");
+
+        UnsupportedOperationException complexCount = assertThrows(UnsupportedOperationException.class,
+                () -> sqlServer.countSql(SqlStatement.select(
+                        "SELECT id FROM users ORDER BY id OFFSET 0 ROWS FETCH NEXT 10 ROWS ONLY")));
+        assertTrue(complexCount.getMessage().contains("independent count statement"));
+        assertThrows(UnsupportedOperationException.class,
+                () -> sqlServer.countSql(SqlStatement.select(
+                        "SELECT id FROM users ORDER BY CASE WHEN ? = 1 THEN id ELSE id END", 1)));
+
+        StandardDialect ansi = new StandardDialect(
+                DbType.sqlserver, QuoteStyle.BRACKET, PaginationStyle.ANSI_OFFSET_FETCH, true);
+        check("pagination_scans_comments_and_appends_after_line_comment",
+                ansi.pageSql(SqlStatement.select(
+                        "SELECT id /* ORDER BY fake */ FROM users "
+                                + "WHERE note = '-- ORDER BY fake' -- ORDER BY fake"), 0, 5),
+                "SELECT id /* ORDER BY fake */ FROM users "
+                        + "WHERE note = '-- ORDER BY fake' -- ORDER BY fake\n"
+                        + " ORDER BY (SELECT 0) OFFSET ? ROWS FETCH NEXT ? ROWS ONLY",
+                "[0, 5]");
+
+        for (PaginationStyle style : PaginationStyle.values()) {
+            if (style == PaginationStyle.UNSUPPORTED) {
+                continue;
+            }
+            StandardDialect dialect = new StandardDialect(DbType.h2, QuoteStyle.NONE, style, true);
+            assertThrows(IllegalArgumentException.class,
+                    () -> dialect.pageSql(SqlStatement.select("SELECT 1"), 0, -1), style.name());
+            assertThrows(IllegalArgumentException.class,
+                    () -> dialect.pageSql(SqlStatement.select("SELECT 1"), -1, 1), style.name());
+        }
+    }
+
+    @Test
+    void sqlServerRowNumberHandlesDistinctCteUnionAndComments() {
+        StandardDialect dialect = new StandardDialect(
+                DbType.sqlserver, QuoteStyle.BRACKET, PaginationStyle.SQLSERVER_ROW_NUMBER, true);
+
+        String distinct = "SELECT \n   DISTINCT\n"
+                + "   u.id AS user_id, u.name AS display_name\n"
+                + "FROM users u\n"
+                + "ORDER BY u.id DESC, display_name ASC";
+        String distinctCore = distinct.substring(0, distinct.indexOf("ORDER BY")).trim();
+        check("row_number_distinct_alias_and_flexible_whitespace",
+                dialect.pageSql(SqlStatement.select(distinct), 0, 10),
+                "WITH selectTemp AS (SELECT TOP 100 PERCENT innerTemp.*, "
+                        + "ROW_NUMBER() OVER (ORDER BY user_id DESC, display_name ASC) as __row_number__ "
+                        + "FROM (" + distinctCore + ") innerTemp) "
+                        + "SELECT * FROM selectTemp WHERE __row_number__ BETWEEN ? AND ? ORDER BY __row_number__",
+                "[1, 10]");
+
+        String cte = "WITH active_users AS (SELECT id, name FROM users WHERE active = 1)\n"
+                + "SELECT id AS user_id, name FROM active_users ORDER BY id";
+        check("row_number_preserves_leading_cte",
+                dialect.pageSql(SqlStatement.select(cte), 2, 5),
+                "WITH active_users AS (SELECT id, name FROM users WHERE active = 1), selectTemp AS ("
+                        + "SELECT TOP 100 PERCENT id AS user_id, name, "
+                        + "ROW_NUMBER() OVER (ORDER BY id) as __row_number__ FROM active_users) "
+                        + "SELECT * FROM selectTemp WHERE __row_number__ BETWEEN ? AND ? ORDER BY __row_number__",
+                "[3, 7]");
+
+        check("row_number_wraps_union_before_adding_window",
+                dialect.pageSql(SqlStatement.select(
+                        "SELECT id AS user_id FROM a UNION ALL SELECT id FROM b ORDER BY 1 DESC"), 0, 2),
+                "WITH selectTemp AS (SELECT TOP 100 PERCENT innerTemp.*, "
+                        + "ROW_NUMBER() OVER (ORDER BY user_id DESC) as __row_number__ "
+                        + "FROM (SELECT id AS user_id FROM a UNION ALL SELECT id FROM b) innerTemp) "
+                        + "SELECT * FROM selectTemp WHERE __row_number__ BETWEEN ? AND ? ORDER BY __row_number__",
+                "[1, 2]");
+
+        String commentSql = dialect.pageSql(SqlStatement.select(
+                "SELECT id /* FROM ignored */ FROM users -- ORDER BY ignored"), 0, 1).sql();
+        assertTrue(commentSql.contains("ROW_NUMBER() OVER (ORDER BY CURRENT_TIMESTAMP)"), commentSql);
+        assertTrue(commentSql.contains("FROM users -- ORDER BY ignored\n) SELECT * FROM selectTemp"), commentSql);
+        assertFalse(commentSql.contains("OVER (ORDER BY ORDER BY"), commentSql);
+
+        UnsupportedOperationException unsupported = assertThrows(UnsupportedOperationException.class,
+                () -> dialect.pageSql(SqlStatement.select("SELECT DISTINCT * FROM users ORDER BY id"), 0, 10));
+        assertTrue(unsupported.getMessage().contains("explicit SELECT alias"));
+        assertThrows(UnsupportedOperationException.class,
+                () -> dialect.pageSql(SqlStatement.select(
+                        "SELECT id FROM users WHERE id > ? ORDER BY CASE WHEN ? = 1 THEN id ELSE id END", 0, 1), 0, 10));
+
+        // 普通 SELECT 的 ORDER BY 引用 SELECT 别名时自动内联原表达式（避免同层 OVER 引用别名报错）
+        check("row_number_normal_select_inlines_order_by_alias",
+                dialect.pageSql(SqlStatement.select(
+                        "SELECT u.id AS user_id, u.name FROM users u ORDER BY user_id DESC -- ? in comment"), 0, 5),
+                "WITH selectTemp AS (SELECT TOP 100 PERCENT u.id AS user_id, u.name, "
+                        + "ROW_NUMBER() OVER (ORDER BY u.id DESC) as __row_number__ FROM users u) "
+                        + "SELECT * FROM selectTemp WHERE __row_number__ BETWEEN ? AND ? ORDER BY __row_number__",
+                "[1, 5]");
+
+        // 复合 ORDER BY 表达式中引用 SELECT 别名时快速拒绝
+        assertThrows(UnsupportedOperationException.class,
+                () -> dialect.pageSql(SqlStatement.select(
+                        "SELECT u.price * u.qty AS total_price FROM orders u ORDER BY total_price + 1 DESC"), 0, 5));
+
+        // DISTINCT 带引号限定列名（[u].[id] / "u"."name"）取最后一段作为外层排序列
+        check("row_number_distinct_quoted_qualified_columns",
+                dialect.pageSql(SqlStatement.select(
+                        "SELECT DISTINCT [u].[id], \"u\".\"name\" FROM [users] [u] ORDER BY [u].[id] DESC, \"u\".\"name\" ASC"), 0, 5),
+                "WITH selectTemp AS (SELECT TOP 100 PERCENT innerTemp.*, "
+                        + "ROW_NUMBER() OVER (ORDER BY [id] DESC, \"name\" ASC) as __row_number__ "
+                        + "FROM (SELECT DISTINCT [u].[id], \"u\".\"name\" FROM [users] [u]) innerTemp) "
+                        + "SELECT * FROM selectTemp WHERE __row_number__ BETWEEN ? AND ? ORDER BY __row_number__",
+                "[1, 5]");
+
+        // 输入 SQL 已占用 selectTemp / __row_number__ 标识符时自动追加后缀避让
+        check("row_number_avoids_identifier_collision",
+                dialect.pageSql(SqlStatement.select(
+                        "SELECT selectTemp.__row_number__ FROM selectTemp ORDER BY selectTemp.__row_number__"), 0, 5),
+                "WITH selectTemp_1 AS (SELECT TOP 100 PERCENT selectTemp.__row_number__, "
+                        + "ROW_NUMBER() OVER (ORDER BY selectTemp.__row_number__) as __row_number___1 FROM selectTemp) "
+                        + "SELECT * FROM selectTemp_1 WHERE __row_number___1 BETWEEN ? AND ? ORDER BY __row_number___1",
+                "[1, 5]");
     }
 
     @Test

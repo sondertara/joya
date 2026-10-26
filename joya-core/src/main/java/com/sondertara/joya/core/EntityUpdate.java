@@ -44,6 +44,10 @@ public final class EntityUpdate<T> {
     /** 按 Lambda 属性引用设置待更新列。 */
     public <V> EntityUpdate<T> set(IGetter<T, V> column, @Nullable V value) {
         String colName = EntityOps.resolveColumn(meta, column);
+        if (meta.nonUpdatableColumns().contains(colName)) {
+            throw new IllegalArgumentException(
+                    "Column '" + colName + "' is marked as updatable=false on entity " + meta.entityType().getName());
+        }
         values.put(colName, value);
         return this;
     }
@@ -51,6 +55,10 @@ public final class EntityUpdate<T> {
     /** 按列名或字段名设置待更新列。 */
     public EntityUpdate<T> set(String columnOrField, @Nullable Object value) {
         String colName = EntityOps.resolveColumnName(meta, columnOrField);
+        if (meta.nonUpdatableColumns().contains(colName)) {
+            throw new IllegalArgumentException(
+                    "Column '" + colName + "' is marked as updatable=false on entity " + meta.entityType().getName());
+        }
         values.put(colName, value);
         return this;
     }

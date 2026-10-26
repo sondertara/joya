@@ -32,8 +32,11 @@ public final class PageRequest implements Serializable {
     public int getPage() { return page; }
     public int getSize() { return size; }
 
-    /** 计算 OFFSET */
-    public int getOffset() { return page * size; }
+    /** 计算 OFFSET（超出 int 范围时抛出 {@link ArithmeticException}） */
+    public int getOffset() { return Math.multiplyExact(page, size); }
+
+    /** 计算 64 位 OFFSET */
+    public long getOffsetAsLong() { return (long) page * (long) size; }
 
     /** 计算 LIMIT */
     public int getLimit() { return size; }

@@ -15,6 +15,8 @@ public final class DataSourceConnectionProvider implements ConnectionProvider {
 
     private final DataSource dataSource;
     private final int queryTimeoutSeconds;
+    private final java.util.Set<Connection> flippedAutoCommit =
+            java.util.Collections.synchronizedSet(java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>()));
 
     public DataSourceConnectionProvider(DataSource dataSource) {
         this(dataSource, 0);
@@ -27,13 +29,48 @@ public final class DataSourceConnectionProvider implements ConnectionProvider {
 
     @Override
     public Connection acquire() throws SQLException {
-        return dataSource.getConnection();
+        Connection conn = dataSource.getConnection();
+        try {
+            if (!conn.getAutoCommit()) {
+                conn.setAutoCommit(true);
+                flippedAutoCommit.add(conn);
+            }
+            return conn;
+        } catch (SQLException | RuntimeException e) {
+            flippedAutoCommit.remove(conn);
+            try {
+                conn.close();
+            } catch (SQLException closeEx) {
+                e.addSuppressed(closeEx);
+            }
+            throw e;
+        }
     }
 
     @Override
     public void release(Connection connection) throws SQLException {
         if (connection != null) {
-            connection.close();
+            boolean restoreManual = flippedAutoCommit.remove(connection);
+            SQLException restoreError = null;
+            if (restoreManual) {
+                try {
+                    connection.setAutoCommit(false);
+                } catch (SQLException e) {
+                    restoreError = e;
+                }
+            }
+            try {
+                connection.close();
+            } catch (SQLException closeEx) {
+                if (restoreError != null) {
+                    restoreError.addSuppressed(closeEx);
+                    throw restoreError;
+                }
+                throw closeEx;
+            }
+            if (restoreError != null) {
+                throw restoreError;
+            }
         }
     }
 

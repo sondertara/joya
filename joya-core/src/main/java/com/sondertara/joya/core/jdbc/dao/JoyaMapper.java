@@ -19,11 +19,10 @@ import java.util.function.UnaryOperator;
 public interface JoyaMapper<T> {
 
     /**
-     * Saves a given entity. Use the returned instance for further operations as the save operation might have changed the
-     * entity instance completely.
+     * Saves (inserts or updates) the given entity and returns its primary key value.
      *
      * @param entity must not be {@literal null}.
-     * @return the saved entity; will never be {@literal null}.
+     * @return the primary key of the saved entity (generated or existing), or {@literal null} if the entity has no primary key value.
      * @throws IllegalArgumentException in case the given {@literal entity} is {@literal null}.
      */
     Serializable save(T entity);

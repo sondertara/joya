@@ -48,6 +48,9 @@ public final class RenderContext {
     private final List<JoinPart> joins;
     private final NamingPolicy namingPolicy;
     private final Map<Class<?>, TableBinding> tableBindings = new LinkedHashMap<>();
+    private final List<TableBinding> allBindings = new ArrayList<>();
+    private final Map<JoinPart, TableBinding> selfJoinBindings = new java.util.IdentityHashMap<>();
+    private @Nullable TableBinding activeJoinTargetBinding;
 
     private record TableBinding(Class<?> entityClass, EntityMetadataContext meta, @Nullable String alias) {
     }
@@ -76,16 +79,28 @@ public final class RenderContext {
             for (JoinPart join : joins) {
                 Class<?> leftType = join.getLeftColumn().entityClass();
                 Class<?> rightType = join.getRightColumn().entityClass();
-                if (leftType != null) {
+                boolean leftRegistered = leftType != null && ctx.tableBindings.containsKey(leftType);
+                boolean rightRegistered = rightType != null && ctx.tableBindings.containsKey(rightType);
+                if (leftType != null && rightType != null && !leftRegistered && !rightRegistered) {
+                    throw new IllegalStateException("Disconnected JOIN between ["
+                            + leftType.getSimpleName() + "] and [" + rightType.getSimpleName()
+                            + "]: neither table is connected to previously registered tables "
+                            + ctx.tableBindings.keySet().stream().map(Class::getSimpleName).toList());
+                }
+                if (leftType != null && !leftRegistered) {
                     ctx.registerQueryTable(leftType);
                 }
                 if (rightType != null) {
-                    ctx.registerQueryTable(rightType);
+                    if (Objects.equals(leftType, rightType) || (leftRegistered && rightRegistered)) {
+                        ctx.registerSelfJoinTable(join, rightType);
+                    } else if (!rightRegistered) {
+                        ctx.registerQueryTable(rightType);
+                    }
                 }
             }
         }
         int maxJoinedTables = ctx.namingPolicy.maxJoinTable();
-        if (ctx.tableBindings.size() > maxJoinedTables) {
+        if (ctx.allBindings.size() > maxJoinedTables) {
             throw new DbException("The maximum number of tables that can be joined is " + maxJoinedTables);
         }
         return ctx;
@@ -105,7 +120,9 @@ public final class RenderContext {
         Objects.requireNonNull(meta, "meta must not be null");
         Class<?> entityType = meta.entityType() != null ? meta.entityType() : Object.class;
         RenderContext ctx = new RenderContext(entityType, false, List.of(), namingPolicy);
-        ctx.tableBindings.put(entityType, new TableBinding(entityType, meta, null));
+        TableBinding single = new TableBinding(entityType, meta, null);
+        ctx.tableBindings.put(entityType, single);
+        ctx.allBindings.add(single);
         return ctx;
     }
 
@@ -127,15 +144,18 @@ public final class RenderContext {
             return;
         }
         EntityMetadataContext meta = CacheHolder.tableMetaCache().getMetadataContext(entityClass);
-        // 若不同实体类映射到同一物理表，复用同一别名
-        for (TableBinding existing : tableBindings.values()) {
-            if (existing.meta().qualifiedTableName().equalsIgnoreCase(meta.qualifiedTableName())) {
-                tableBindings.put(entityClass, new TableBinding(entityClass, meta, existing.alias()));
-                return;
-            }
-        }
-        String alias = ALIAS_PREFIX + tableBindings.size();
-        tableBindings.put(entityClass, new TableBinding(entityClass, meta, alias));
+        String alias = ALIAS_PREFIX + allBindings.size();
+        TableBinding binding = new TableBinding(entityClass, meta, alias);
+        tableBindings.put(entityClass, binding);
+        allBindings.add(binding);
+    }
+
+    private void registerSelfJoinTable(JoinPart join, Class<?> entityClass) {
+        EntityMetadataContext meta = CacheHolder.tableMetaCache().getMetadataContext(entityClass);
+        String alias = ALIAS_PREFIX + allBindings.size();
+        TableBinding binding = new TableBinding(entityClass, meta, alias);
+        selfJoinBindings.put(join, binding);
+        allBindings.add(binding);
     }
 
     /**
@@ -163,7 +183,9 @@ public final class RenderContext {
      * 解析实体方法引用对应的列（强校验实体已在 FROM / JOIN 中注册）。
      */
     public ColumnAlias resolveGetterColumn(Class<?> entityClass, String propertyName) {
-        TableBinding binding = tableBindings.get(entityClass);
+        TableBinding binding = (activeJoinTargetBinding != null && activeJoinTargetBinding.entityClass().equals(entityClass))
+                ? activeJoinTargetBinding
+                : tableBindings.get(entityClass);
         if (binding == null) {
             throw unjoinedEntityError(entityClass, propertyName);
         }
@@ -173,6 +195,36 @@ public final class RenderContext {
                     "Can not find column for property [{}] on entity [{}]", propertyName, entityClass.getName()));
         }
         return buildColumnAlias(binding, columnName, propertyName);
+    }
+
+    /**
+     * 解析显式指定表别名的实体方法引用列（用于自连接或同一目标实体多次 JOIN 场景，如 {@code Exprs.col("t1", Emp::getName)}）。
+     */
+    public ColumnAlias resolveAliasedGetterColumn(String tableAlias, Class<?> entityClass, String propertyName) {
+        if (Strings.isBlank(tableAlias)) {
+            return resolveGetterColumn(entityClass, propertyName);
+        }
+        TableBinding matched = null;
+        for (TableBinding b : allBindings) {
+            if (b.alias() != null && b.alias().equalsIgnoreCase(tableAlias.trim())) {
+                matched = b;
+                break;
+            }
+        }
+        if (matched == null) {
+            throw new IllegalStateException("Table alias [" + tableAlias + "] is not registered in query rooted at ["
+                    + rootType.getSimpleName() + "]");
+        }
+        if (!matched.entityClass().equals(entityClass)) {
+            throw new IllegalStateException("Table alias [" + tableAlias + "] is bound to entity ["
+                    + matched.entityClass().getSimpleName() + "], not [" + entityClass.getSimpleName() + "]");
+        }
+        String columnName = matched.meta().columnByField(propertyName);
+        if (columnName == null) {
+            throw new DbException(Strings.format(
+                    "Can not find column for property [{}] on entity [{}]", propertyName, entityClass.getName()));
+        }
+        return buildColumnAlias(matched, columnName, propertyName);
     }
 
     private IllegalStateException unjoinedEntityError(Class<?> entityClass, @Nullable String propertyName) {
@@ -255,6 +307,30 @@ public final class RenderContext {
     }
 
     /**
+     * 按 DTO 属性名或其 {@code @Column} 原始声明匹配单张已注册表的列。
+     * 匹配始终使用未格式化的元数据列名，避免引号或大小写格式化干扰注解匹配。
+     */
+    public @Nullable ColumnAlias findColumn(Class<?> entityClass, String propertyName,
+                                            @Nullable String declaredColumnName) {
+        TableBinding binding = tableBindings.get(entityClass);
+        if (binding == null) {
+            throw unjoinedEntityError(entityClass, propertyName);
+        }
+        String propertyColumn = binding.meta().columnByField(propertyName);
+        if (propertyColumn != null) {
+            return buildColumnAlias(binding, propertyColumn, propertyName);
+        }
+        if (declaredColumnName != null) {
+            for (String columnName : binding.meta().columnNames()) {
+                if (declaredColumnName.equalsIgnoreCase(columnName)) {
+                    return buildColumnAlias(binding, columnName, binding.meta().fieldByColumn(columnName));
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
      * 渲染 FROM 与 JOIN 子句（不含前导 {@code FROM } 关键字）。
      */
     public String renderFromClause() {
@@ -273,36 +349,46 @@ public final class RenderContext {
                     : rootTableName + " " + root.alias();
         }
         StringJoiner sj = new StringJoiner(" ");
-        Set<String> joinedTables = new HashSet<>();
+        Set<String> joinedAliases = new HashSet<>();
         sj.add(rootTableName + " " + root.alias());
-        joinedTables.add(rootTableName.toLowerCase(Locale.ROOT));
+        if (root.alias() != null) {
+            joinedAliases.add(root.alias().toLowerCase(Locale.ROOT));
+        }
 
         StringBuilder sb = new StringBuilder();
         for (JoinPart segment : joins) {
             ColumnAlias first = segment.getLeftColumn().resolveAlias(this);
-            ColumnAlias last = segment.getRightColumn().resolveAlias(this);
+            ColumnAlias last = resolveRightJoinColumn(segment);
             String code = segment.getJoinType().getCode();
-            String firstTableKey = first.getTableName().toLowerCase(Locale.ROOT);
-            String lastTableKey = last.getTableName().toLowerCase(Locale.ROOT);
+            String firstAliasKey = first.getTableAlias() != null
+                    ? first.getTableAlias().toLowerCase(Locale.ROOT)
+                    : first.getTableName().toLowerCase(Locale.ROOT);
+            String lastAliasKey = last.getTableAlias() != null
+                    ? last.getTableAlias().toLowerCase(Locale.ROOT)
+                    : last.getTableName().toLowerCase(Locale.ROOT);
 
-            if (joinedTables.contains(firstTableKey)) {
+            if (joinedAliases.contains(firstAliasKey)) {
                 sb.append(code).append(' ')
                         .append(last.getTableName()).append(' ').append(last.getTableAlias())
                         .append(" ON ").append(first.identity()).append(" = ").append(last.identity());
-            } else if (joinedTables.contains(lastTableKey)) {
+            } else if (joinedAliases.contains(lastAliasKey)) {
                 sb.append(code).append(' ')
                         .append(first.getTableName()).append(' ').append(first.getTableAlias())
                         .append(" ON ").append(first.identity()).append(" = ").append(last.identity());
             } else {
-                sb.append(first.getTableName()).append(' ').append(first.getTableAlias())
-                        .append(' ').append(code).append(' ')
-                        .append(last.getTableName()).append(' ').append(last.getTableAlias())
-                        .append(" ON ").append(first.identity()).append(" = ").append(last.identity());
+                throw new IllegalStateException("Disconnected JOIN segment between '"
+                        + first.getTableName() + "' and '" + last.getTableName() + "'");
             }
             WhereCriterion onCriterion = segment.getOnCriterion();
             if (onCriterion != null && !onCriterion.isEmpty()) {
                 StringBuilder onSql = new StringBuilder();
-                onCriterion.render(this, onSql, params, ParameterSource.WHERE);
+                TableBinding prevTarget = this.activeJoinTargetBinding;
+                this.activeJoinTargetBinding = selfJoinBindings.get(segment);
+                try {
+                    onCriterion.render(this, onSql, params, ParameterSource.WHERE);
+                } finally {
+                    this.activeJoinTargetBinding = prevTarget;
+                }
                 if (!onSql.isEmpty()) {
                     boolean wrapParens = onCriterion.getCurrentOpt() == LinkType.OR
                             && onCriterion.getPredicates().size() > 1;
@@ -314,12 +400,26 @@ public final class RenderContext {
                     }
                 }
             }
-            joinedTables.add(firstTableKey);
-            joinedTables.add(lastTableKey);
+            joinedAliases.add(firstAliasKey);
+            joinedAliases.add(lastAliasKey);
             sj.add(sb.toString());
             sb.setLength(0);
         }
         return sj.toString();
+    }
+
+    private ColumnAlias resolveRightJoinColumn(JoinPart segment) {
+        TableBinding selfBinding = selfJoinBindings.get(segment);
+        if (selfBinding == null) {
+            return segment.getRightColumn().resolveAlias(this);
+        }
+        ColumnAlias base = segment.getRightColumn().resolveAlias(this);
+        ColumnAlias rebound = new ColumnAlias();
+        rebound.setTableName(selfBinding.meta().qualifiedTableName(namingPolicy));
+        rebound.setTableAlias(selfBinding.alias());
+        rebound.setColumnName(base.getColumnName());
+        rebound.setColumnAlias(base.getColumnAlias());
+        return rebound;
     }
 
     /**
@@ -327,15 +427,15 @@ public final class RenderContext {
      */
     public Set<TableRef> extractTables() {
         Set<TableRef> result = new LinkedHashSet<>();
-        for (TableBinding binding : tableBindings.values()) {
+        for (TableBinding binding : allBindings) {
             result.add(TableRef.ofQualified(binding.meta().qualifiedTableName(namingPolicy), binding.alias()));
         }
         return result;
     }
 
     private @Nullable TableBinding findBindingByPrefix(String prefix) {
-        if (!aliased && tableBindings.size() == 1) {
-            TableBinding single = tableBindings.values().iterator().next();
+        if (!aliased && allBindings.size() == 1) {
+            TableBinding single = allBindings.get(0);
             if ("t0".equalsIgnoreCase(prefix)
                     || prefix.equalsIgnoreCase(single.entityClass().getSimpleName())
                     || prefix.equalsIgnoreCase(single.meta().tableName())
@@ -343,7 +443,7 @@ public final class RenderContext {
                 return single;
             }
         }
-        for (TableBinding binding : tableBindings.values()) {
+        for (TableBinding binding : allBindings) {
             if ((binding.alias() != null && prefix.equalsIgnoreCase(binding.alias()))
                     || prefix.equalsIgnoreCase(binding.entityClass().getSimpleName())
                     || prefix.equalsIgnoreCase(binding.meta().tableName())

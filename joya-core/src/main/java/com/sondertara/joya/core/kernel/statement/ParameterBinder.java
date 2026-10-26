@@ -65,6 +65,8 @@ public interface ParameterBinder {
             statement.setTimestamp(index, timestamp);
         } else if (value instanceof Date date) {
             statement.setTimestamp(index, Timestamp.from(date.toInstant()));
+        } else if (value instanceof Enum<?> enumVal) {
+            statement.setString(index, enumVal.name());
         } else if (value instanceof OffsetDateTime odt && isOracle(statement)) {
             if (odt.getYear() < 1905) {
                 statement.setTimestamp(index, Timestamp.valueOf(odt.atZoneSameInstant(ZoneId.systemDefault()).toLocalDateTime()));
@@ -89,6 +91,19 @@ public interface ParameterBinder {
     }
 
     private static boolean isOracle(PreparedStatement statement) {
+        if (statement == null) {
+            return false;
+        }
+        String className = statement.getClass().getName();
+        if (className.startsWith("oracle.")) {
+            return true;
+        }
+        if (className.startsWith("org.h2.")
+                || className.startsWith("org.postgresql.")
+                || className.startsWith("com.mysql.")
+                || className.startsWith("org.mariadb.")) {
+            return false;
+        }
         try {
             Connection conn = statement.getConnection();
             return conn != null && DbType.oracle.equals(DbType.of(conn));

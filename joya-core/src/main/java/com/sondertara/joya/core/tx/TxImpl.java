@@ -3,18 +3,21 @@ package com.sondertara.joya.core.tx;
 import com.sondertara.joya.core.EntityOps;
 import com.sondertara.joya.core.JoyaSettings;
 import com.sondertara.joya.core.SqlOps;
-import com.sondertara.joya.core.jdbc.dao.JoyaMapper;
 import com.sondertara.joya.core.kernel.JoyaTemplate;
+import com.sondertara.joya.core.kernel.connection.ConnectionProvider;
+import com.sondertara.joya.core.kernel.executor.ResultSetSpliterator;
 import com.sondertara.joya.core.kernel.statement.SqlStatement;
 import com.sondertara.joya.core.proxy.JdkMapperProxy;
 import com.sondertara.joya.core.query.dsl.Query;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.OptionalInt;
 import java.util.function.Consumer;
 
 /**
@@ -27,14 +30,36 @@ public final class TxImpl implements Tx {
 
     private final TxSession session;
     private final JoyaTemplate template;
+    private final Thread ownerThread;
     private final List<Runnable> afterCommit = new ArrayList<>();
     private final List<Consumer<TxOutcome>> afterCompletion = new ArrayList<>();
+    private final List<Runnable> streamCloseActions = new ArrayList<>();
+    private final java.util.Deque<List<Runnable>> savepointAfterCommitStack = new java.util.ArrayDeque<>();
     private java.util.Map<Class<?>, Object> mapperCache;
-    private boolean completed;
+    private TxOutcome outcome;
+    private int openTransactionalStreams;
 
     public TxImpl(JoyaTemplate rootTemplate, TxSession session) {
         this.session = Objects.requireNonNull(session, "session must not be null");
-        this.template = Objects.requireNonNull(rootTemplate, "rootTemplate must not be null").bind(session);
+        this.ownerThread = Thread.currentThread();
+        this.template = Objects.requireNonNull(rootTemplate, "rootTemplate must not be null")
+                .bind(new TransactionalConnectionProvider(session));
+    }
+
+    public boolean isCompleted() {
+        return outcome != null;
+    }
+
+    TxOutcome outcome() {
+        return outcome;
+    }
+
+    boolean isPhysicalRollbackConfirmed() {
+        return outcome == TxOutcome.ROLLED_BACK && session.isPhysicalRollbackConfirmed();
+    }
+
+    boolean hasTransactionalStreams() {
+        return openTransactionalStreams > 0;
     }
 
     // ===== DataOps：事务视图 =====
@@ -61,7 +86,7 @@ public final class TxImpl implements Tx {
 
     @Override
     @SuppressWarnings({"unchecked", "rawtypes"})
-    public <M extends JoyaMapper> M mapper(Class<M> mapperType) {
+    public <M> M mapper(Class<M> mapperType) {
         Objects.requireNonNull(mapperType, "mapperType must not be null");
         if (!mapperType.isInterface()) {
             throw new UnsupportedOperationException("mapperType " + mapperType.getName() + " is not interface.");
@@ -77,6 +102,11 @@ public final class TxImpl implements Tx {
         return JoyaSettings.of(template.executionOptions(), template.namingPolicy());
     }
 
+    @Override
+    public com.sondertara.joya.core.kernel.dialect.DbType dbType() {
+        return template.dialect().dbType();
+    }
+
     // ===== 保存点（Savepoint） =====
 
     @Override
@@ -90,16 +120,22 @@ public final class TxImpl implements Tx {
 
     @Override
     public <R> R savepointCall(TxCallback<R> body) {
+        checkOwner();
         Objects.requireNonNull(body, "savepointCall body must not be null");
         try {
             session.enterSavepoint();
         } catch (SQLException e) {
             throw new TxException("Failed to create savepoint", e);
         }
+        savepointAfterCommitStack.push(new ArrayList<>());
         R result;
         try {
             result = body.apply(this);
+            if (!savepointAfterCommitStack.peek().isEmpty()) {
+                session.validateAfterCommitRegistration();
+            }
         } catch (Throwable t) {
+            savepointAfterCommitStack.pop();
             try {
                 session.exitSavepointRollback();
             } catch (Throwable rollbackFailure) {
@@ -110,7 +146,17 @@ public final class TxImpl implements Tx {
         try {
             session.exitSavepointCommit();
         } catch (SQLException e) {
+            savepointAfterCommitStack.pop();
+            session.markRollbackOnly();
             throw new TxException("Failed to release savepoint", e);
+        } catch (RuntimeException | Error e) {
+            savepointAfterCommitStack.pop();
+            session.markRollbackOnly();
+            throw e;
+        }
+        List<Runnable> spCallbacks = savepointAfterCommitStack.pop();
+        for (Runnable cb : spCallbacks) {
+            afterCommit(cb);
         }
         return result;
     }
@@ -119,7 +165,13 @@ public final class TxImpl implements Tx {
 
     @Override
     public void afterCommit(Runnable callback) {
+        checkOwner();
         Objects.requireNonNull(callback, "callback must not be null");
+        session.validateAfterCommitRegistration();
+        if (!savepointAfterCommitStack.isEmpty()) {
+            savepointAfterCommitStack.peek().add(callback);
+            return;
+        }
         if (!session.registerExternalAfterCommit(() -> runQuietly(callback, "afterCommit"))) {
             afterCommit.add(callback);
         }
@@ -127,6 +179,7 @@ public final class TxImpl implements Tx {
 
     @Override
     public void afterCompletion(Consumer<TxOutcome> callback) {
+        checkOwner();
         Objects.requireNonNull(callback, "callback must not be null");
         if (!session.registerExternalAfterCompletion(outcome -> runQuietly(() -> callback.accept(outcome), "afterCompletion"))) {
             afterCompletion.add(callback);
@@ -137,17 +190,28 @@ public final class TxImpl implements Tx {
 
     @Override
     public void commit() {
-        if (completed) {
+        checkOwner();
+        if (!savepointAfterCommitStack.isEmpty()) {
+            throw new IllegalTxStateException(TxState.ACTIVE, TxState.COMMITTED, java.util.Set.of(TxState.ACTIVE),
+                    new IllegalStateException("Cannot call commit() directly inside a savepoint scope"));
+        }
+        if (isCompleted()) {
             throw new IllegalTxStateException(TxState.COMMITTED, TxState.COMMITTED, TxState.COMMITTED.allowedTransitions(),
                     new IllegalStateException("transaction already completed"));
         }
+        closeStreams();
         try {
             session.exitCommit();
+        } catch (UnexpectedRollbackException e) {
+            complete(TxOutcome.ROLLED_BACK);
+            throw e;
         } catch (SQLException e) {
-            complete(TxOutcome.ROLLED_BACK);
+            complete(TxOutcome.UNKNOWN);
             throw new TxException("Commit failed.", e);
-        } catch (RuntimeException e) {
-            complete(TxOutcome.ROLLED_BACK);
+        } catch (IllegalTxStateException e) {
+            throw e;
+        } catch (RuntimeException | Error e) {
+            complete(TxOutcome.UNKNOWN);
             throw e;
         }
         complete(TxOutcome.COMMITTED);
@@ -155,15 +219,26 @@ public final class TxImpl implements Tx {
 
     @Override
     public void rollback() {
+        checkOwner();
+        if (!savepointAfterCommitStack.isEmpty()) {
+            throw new IllegalTxStateException(TxState.ACTIVE, TxState.ROLLED_BACK, java.util.Set.of(TxState.ACTIVE),
+                    new IllegalStateException("Cannot call rollback() directly inside a savepoint scope"));
+        }
+        if (isCompleted()) {
+            return;
+        }
+        closeStreams();
         try {
             if (!session.isClosed() && session.isActive()) {
                 session.exitRollback();
             }
         } catch (SQLException e) {
-            complete(TxOutcome.ROLLED_BACK);
+            complete(TxOutcome.UNKNOWN);
             throw new TxException("Rollback failed.", e);
-        } catch (RuntimeException e) {
-            complete(TxOutcome.ROLLED_BACK);
+        } catch (IllegalTxStateException e) {
+            throw e;
+        } catch (RuntimeException | Error e) {
+            complete(TxOutcome.UNKNOWN);
             throw e;
         }
         complete(TxOutcome.ROLLED_BACK);
@@ -171,6 +246,7 @@ public final class TxImpl implements Tx {
 
     @Override
     public void setRollbackOnly() {
+        checkOwner();
         session.markRollbackOnly();
     }
 
@@ -181,25 +257,33 @@ public final class TxImpl implements Tx {
 
     @Override
     public void close() {
+        checkOwner();
+        closeStreams();
         try {
             session.close();
         } catch (SQLException e) {
-            complete(TxOutcome.ROLLED_BACK);
+            completeAfterCloseFailure();
             throw new TxException("Failed to close transaction connection.", e);
+        } catch (IllegalTxStateException e) {
+            throw e;
         } catch (RuntimeException e) {
-            complete(TxOutcome.ROLLED_BACK);
+            completeAfterCloseFailure();
+            throw e;
+        } catch (Error e) {
+            completeAfterCloseFailure();
             throw e;
         }
-        complete(TxOutcome.ROLLED_BACK);   // 已完成时为空操作
+        TxOutcome terminalOutcome = session.terminalOutcome();
+        complete(terminalOutcome != null ? terminalOutcome : TxOutcome.ROLLED_BACK);
     }
 
     // ===== 内部 =====
 
     private void complete(TxOutcome outcome) {
-        if (completed) {
+        if (this.outcome != null) {
             return;
         }
-        completed = true;
+        this.outcome = outcome;
         if (outcome == TxOutcome.COMMITTED) {
             for (Runnable callback : afterCommit) {
                 runQuietly(callback, "afterCommit");
@@ -207,6 +291,74 @@ public final class TxImpl implements Tx {
         }
         for (Consumer<TxOutcome> callback : afterCompletion) {
             runQuietly(() -> callback.accept(outcome), "afterCompletion");
+        }
+    }
+
+    private void completeAfterCloseFailure() {
+        TxOutcome terminalOutcome = session.terminalOutcome();
+        complete(terminalOutcome != null ? terminalOutcome : TxOutcome.UNKNOWN);
+    }
+
+    private void closeStreams() {
+        for (Runnable closeAction : streamCloseActions) {
+            try {
+                closeAction.run();
+            } catch (Throwable t) {
+                log.warn("Transaction Stream cleanup failed callback", t);
+            }
+        }
+    }
+
+    private void checkOwner() {
+        if (Thread.currentThread() != ownerThread) {
+            throw new TxException("Transaction is owned by thread [" + ownerThread.getName()
+                    + "] but was used by [" + Thread.currentThread().getName()
+                    + "]. A transaction must not cross threads (invariant I9).");
+        }
+    }
+
+    private final class TransactionalConnectionProvider implements ConnectionProvider, ResultSetSpliterator.StreamAccess {
+        private final TxSession delegate;
+
+        private TransactionalConnectionProvider(TxSession delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public Connection acquire() throws SQLException {
+            return delegate.acquire();
+        }
+
+        @Override
+        public void release(Connection connection) throws SQLException {
+            delegate.release(connection);
+        }
+
+        @Override
+        public OptionalInt queryTimeoutSeconds() {
+            return delegate.queryTimeoutSeconds();
+        }
+
+        @Override
+        public void checkStreamAccess() {
+            checkOwner();
+            if (outcome != null || session.isClosed() || !session.isActive()) {
+                throw new TxException("Cannot read a transactional Stream after the transaction is no longer active"
+                        + (outcome == null ? "." : " (outcome=" + outcome + ")."));
+            }
+        }
+
+        @Override
+        public void registerStream(Runnable closeAction) {
+            openTransactionalStreams++;
+            streamCloseActions.add(closeAction);
+        }
+
+        @Override
+        public void onStreamClosed() {
+            if (openTransactionalStreams > 0) {
+                openTransactionalStreams--;
+            }
         }
     }
 

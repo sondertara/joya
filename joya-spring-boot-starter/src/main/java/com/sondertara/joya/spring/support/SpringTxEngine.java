@@ -59,10 +59,14 @@ public final class SpringTxEngine implements TxEngine {
                 && TransactionSynchronizationManager.isActualTransactionActive();
         if (existingTxForDataSource && options.hasExplicitIsolation()) {
             Integer currentIso = TransactionSynchronizationManager.getCurrentTransactionIsolationLevel();
-            if (currentIso != null && currentIso != options.isolation().getValue()) {
+            if (currentIso == null || currentIso != options.isolation().getValue()) {
                 throw new TxException("Cannot override isolation level to " + options.isolation()
-                        + " when joining an existing Spring transaction with isolation " + currentIso);
+                        + " when joining an existing Spring transaction with isolation "
+                        + (currentIso == null ? "DEFAULT" : currentIso));
             }
+        }
+        if (existingTxForDataSource && options.readOnly() && !TransactionSynchronizationManager.isCurrentTransactionReadOnly()) {
+            throw new TxException("Cannot enforce readOnly=true when joining an existing read-write Spring transaction.");
         }
 
         DefaultTransactionDefinition def = new DefaultTransactionDefinition(TransactionDefinition.PROPAGATION_REQUIRED);
@@ -77,11 +81,30 @@ public final class SpringTxEngine implements TxEngine {
             def.setTimeout(timeoutSec);
         }
 
+        TransactionStatus status = null;
         try {
-            TransactionStatus status = transactionManager.getTransaction(def);
+            status = transactionManager.getTransaction(def);
             return new TxImpl(rootTemplate, new SpringTxSession(rootTemplate, transactionManager, status, options));
-        } catch (TransactionException e) {
-            throw new TxException("Failed to begin Spring-managed transaction.", e);
+        } catch (Throwable beginFailure) {
+            if (status != null) {
+                try {
+                    if (!status.isCompleted()) {
+                        transactionManager.rollback(status);
+                    }
+                } catch (Throwable cleanupFailure) {
+                    beginFailure.addSuppressed(cleanupFailure);
+                }
+            }
+            if (beginFailure instanceof TransactionException e) {
+                throw new TxException("Failed to begin Spring-managed transaction.", e);
+            }
+            if (beginFailure instanceof RuntimeException e) {
+                throw e;
+            }
+            if (beginFailure instanceof Error e) {
+                throw e;
+            }
+            throw new TxException("Failed to begin Spring-managed transaction.", beginFailure);
         }
     }
 
@@ -101,6 +124,8 @@ public final class SpringTxEngine implements TxEngine {
         private final Thread ownerThread;
         private final long deadlineNanos;
         private final Deque<Object> savepoints = new ArrayDeque<>();
+        private TxOutcome terminalOutcome;
+        private boolean physicalRollbackConfirmed;
         private boolean rollbackOnly;
         private boolean completed;
         private boolean closed;
@@ -135,7 +160,12 @@ public final class SpringTxEngine implements TxEngine {
                 long remaining = deadlineNanos - System.nanoTime();
                 return OptionalInt.of((int) Math.max(1, (remaining + 999_999_999L) / 1_000_000_000L));
             }
-            return rootTemplate.connections().queryTimeoutSeconds();
+            OptionalInt providerTimeout = rootTemplate.connections().queryTimeoutSeconds();
+            if (providerTimeout != null && providerTimeout.isPresent()) {
+                return providerTimeout;
+            }
+            int configuredTimeout = rootTemplate.executionOptions().queryTimeoutSeconds();
+            return configuredTimeout > 0 ? OptionalInt.of(configuredTimeout) : OptionalInt.empty();
         }
 
         @Override
@@ -155,7 +185,11 @@ public final class SpringTxEngine implements TxEngine {
             try {
                 status.releaseSavepoint(savepoint);
             } catch (TransactionException e) {
+                markRollbackOnly();
                 throw new TxException("Failed to release savepoint", e);
+            } catch (RuntimeException | Error e) {
+                markRollbackOnly();
+                throw e;
             }
         }
 
@@ -165,6 +199,12 @@ public final class SpringTxEngine implements TxEngine {
             Object savepoint = savepoints.pop();
             try {
                 status.rollbackToSavepoint(savepoint);
+            } catch (Throwable rollbackFailure) {
+                markRollbackOnly();
+                if (rollbackFailure instanceof TransactionException te) {
+                    throw new TxException("Failed to rollback to savepoint; outer transaction marked rollback-only", te);
+                }
+                throw rollbackFailure;
             } finally {
                 try {
                     status.releaseSavepoint(savepoint);
@@ -175,8 +215,16 @@ public final class SpringTxEngine implements TxEngine {
         }
 
         @Override
+        public void validateAfterCommitRegistration() {
+            if (!status.isNewTransaction() && !TransactionSynchronizationManager.isSynchronizationActive()) {
+                throw new TxException("Cannot register afterCommit callback on joined transaction when Spring TransactionSynchronization is inactive.");
+            }
+        }
+
+        @Override
         public boolean registerExternalAfterCommit(Runnable callback) {
-            if (!status.isNewTransaction() && TransactionSynchronizationManager.isSynchronizationActive()) {
+            if (!status.isNewTransaction()) {
+                validateAfterCommitRegistration();
                 TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
                     @Override
                     public void afterCommit() {
@@ -190,13 +238,21 @@ public final class SpringTxEngine implements TxEngine {
 
         @Override
         public boolean registerExternalAfterCompletion(Consumer<TxOutcome> callback) {
-            if (!status.isNewTransaction() && TransactionSynchronizationManager.isSynchronizationActive()) {
+            if (!status.isNewTransaction()) {
+                if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+                    throw new TxException("Cannot register afterCompletion callback on joined transaction when Spring TransactionSynchronization is inactive.");
+                }
                 TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
                     @Override
                     public void afterCompletion(int syncStatus) {
-                        TxOutcome outcome = (syncStatus == TransactionSynchronization.STATUS_COMMITTED)
-                                ? TxOutcome.COMMITTED
-                                : TxOutcome.ROLLED_BACK;
+                        TxOutcome outcome;
+                        if (syncStatus == TransactionSynchronization.STATUS_COMMITTED) {
+                            outcome = TxOutcome.COMMITTED;
+                        } else if (syncStatus == TransactionSynchronization.STATUS_ROLLED_BACK) {
+                            outcome = TxOutcome.ROLLED_BACK;
+                        } else {
+                            outcome = TxOutcome.UNKNOWN;
+                        }
                         callback.accept(outcome);
                     }
                 });
@@ -212,20 +268,28 @@ public final class SpringTxEngine implements TxEngine {
                 completed = true;
                 if (!status.isCompleted()) {
                     txManager.rollback(status);
+                    if (status.isNewTransaction()) {
+                        physicalRollbackConfirmed = true;
+                    }
                 }
+                terminalOutcome = TxOutcome.ROLLED_BACK;
                 throw new UnexpectedRollbackException("Transaction was marked rollback-only; commit refused (invariant I7).");
             }
             try {
                 txManager.commit(status);
                 completed = true;
+                terminalOutcome = TxOutcome.COMMITTED;
             } catch (org.springframework.transaction.UnexpectedRollbackException e) {
                 completed = true;
+                terminalOutcome = TxOutcome.ROLLED_BACK;
                 throw new UnexpectedRollbackException("Transaction was marked rollback-only; commit refused (invariant I7).", e);
             } catch (TransactionException e) {
                 completed = true;
+                terminalOutcome = TxOutcome.UNKNOWN;
                 throw new TxException("Commit failed.", e);
-            } catch (RuntimeException e) {
+            } catch (RuntimeException | Error e) {
                 completed = true;
+                terminalOutcome = TxOutcome.UNKNOWN;
                 throw e;
             }
         }
@@ -237,9 +301,17 @@ public final class SpringTxEngine implements TxEngine {
             try {
                 if (!status.isCompleted()) {
                     txManager.rollback(status);
+                    if (status.isNewTransaction()) {
+                        physicalRollbackConfirmed = true;
+                    }
                 }
+                terminalOutcome = TxOutcome.ROLLED_BACK;
             } catch (TransactionException e) {
+                terminalOutcome = TxOutcome.UNKNOWN;
                 throw new TxException("Rollback failed.", e);
+            } catch (RuntimeException | Error e) {
+                terminalOutcome = TxOutcome.UNKNOWN;
+                throw e;
             }
         }
 
@@ -268,7 +340,18 @@ public final class SpringTxEngine implements TxEngine {
         }
 
         @Override
+        public TxOutcome terminalOutcome() {
+            return terminalOutcome;
+        }
+
+        @Override
+        public boolean isPhysicalRollbackConfirmed() {
+            return physicalRollbackConfirmed && status.isNewTransaction();
+        }
+
+        @Override
         public void close() {
+            checkOwner();
             if (closed) {
                 return;
             }
@@ -278,9 +361,17 @@ public final class SpringTxEngine implements TxEngine {
                 try {
                     if (!status.isCompleted()) {
                         txManager.rollback(status);
+                        if (status.isNewTransaction()) {
+                            physicalRollbackConfirmed = true;
+                        }
                     }
+                    terminalOutcome = TxOutcome.ROLLED_BACK;
                 } catch (TransactionException e) {
+                    terminalOutcome = TxOutcome.UNKNOWN;
                     throw new TxException("Failed to rollback uncommitted transaction on close.", e);
+                } catch (RuntimeException | Error e) {
+                    terminalOutcome = TxOutcome.UNKNOWN;
+                    throw e;
                 }
             }
         }

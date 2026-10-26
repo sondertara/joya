@@ -27,10 +27,13 @@ public class JoyaProperties {
     /** 是否开启内置 SQL 日志拦截器，默认关闭。 */
     private boolean sqlLog = false;
 
+    /** 开启 SQL 日志时是否打印明文参数，默认关闭（仅输出参数个数脱敏占位）。 */
+    private boolean sqlLogPrintArgs = false;
+
     /** 默认查询超时秒数（{@code <= 0} 表示不限制）。 */
     private int queryTimeoutSeconds = 0;
 
-    /** 批量保存/更新分片大小（默认 8000）。 */
+    /** 批量保存/更新分片大小（默认 1000）。 */
     private int batchSize = JoyaSettings.DEFAULT_BATCH_SIZE;
 
     /** 联表最大表数限制（默认 10）。 */
@@ -112,6 +115,14 @@ public class JoyaProperties {
 
     public void setSqlLog(boolean sqlLog) {
         this.sqlLog = sqlLog;
+    }
+
+    public boolean isSqlLogPrintArgs() {
+        return sqlLogPrintArgs;
+    }
+
+    public void setSqlLogPrintArgs(boolean sqlLogPrintArgs) {
+        this.sqlLogPrintArgs = sqlLogPrintArgs;
     }
 
     public int getQueryTimeoutSeconds() {

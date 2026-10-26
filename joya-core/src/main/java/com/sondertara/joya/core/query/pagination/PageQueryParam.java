@@ -100,17 +100,43 @@ public class PageQueryParam extends JoyaQuery implements Serializable, Cloneable
 
     @Override
     public PageQueryParam clone() {
-        PageQueryParam pageQueryParam = new PageQueryParam();
-        pageQueryParam.setNested(getNested());
-        pageQueryParam.linkType(getRootOperator());
-        pageQueryParam.setParams(getParams());
-        pageQueryParam.setOrderList(getOrderList());
-        pageQueryParam.setCondition(getCondition());
-        pageQueryParam.setFrom(getFrom());
-        pageQueryParam.setAlias(getAlias());
-        pageQueryParam.page(getPage());
-        pageQueryParam.pageSize(getPageSize());
-        return pageQueryParam;
+        PageQueryParam copy = new PageQueryParam();
+        copy.linkType(getRootOperator());
+        copy.page(getPage());
+        copy.pageSize(getPageSize());
+        if (this.params != null) {
+            List<SearchParam> copiedParams = new ArrayList<>(this.params.size());
+            for (SearchParam sp : this.params) {
+                copiedParams.add(sp == null ? null : new SearchParam(sp.getFieldName(), sp.getFieldValue(), sp.getOperator()));
+            }
+            copy.setParams(copiedParams);
+        }
+        if (this.orderList != null) {
+            List<OrderParam> copiedOrders = new ArrayList<>(this.orderList.size());
+            for (OrderParam op : this.orderList) {
+                copiedOrders.add(op == null ? null : new OrderParam(op.getFieldName(), op.getOrderType()));
+            }
+            copy.setOrderList(copiedOrders);
+        }
+        if (this.nested != null) {
+            Nested copiedNested = new Nested();
+            if (this.nested.getAnd() != null) {
+                for (SearchParam sp : this.nested.getAnd()) {
+                    if (sp != null) {
+                        copiedNested.addAndParam(sp.getFieldName(), sp.getFieldValue(), sp.getOperator());
+                    }
+                }
+            }
+            if (this.nested.getOr() != null) {
+                for (SearchParam sp : this.nested.getOr()) {
+                    if (sp != null) {
+                        copiedNested.addOrParam(sp.getFieldName(), sp.getFieldValue(), sp.getOperator());
+                    }
+                }
+            }
+            copy.setNested(copiedNested);
+        }
+        return copy;
     }
 
     @Data

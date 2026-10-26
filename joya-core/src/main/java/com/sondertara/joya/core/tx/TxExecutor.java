@@ -14,6 +14,9 @@ import java.sql.SQLException;
  */
 final class TxExecutor {
 
+    private static final long BASE_RETRY_DELAY_MS = 10L;
+    private static final long MAX_RETRY_DELAY_MS = 500L;
+
     private TxExecutor() {
     }
 
@@ -27,16 +30,28 @@ final class TxExecutor {
             boolean succeeded = false;
             try {
                 R result = body.apply(tx);
-                tx.commit();
+                if (result instanceof java.util.stream.Stream<?>
+                        && tx instanceof TxImpl impl
+                        && impl.hasTransactionalStreams()) {
+                    throw new TxException("A transactional Stream must be consumed inside the transaction; "
+                            + "returning it from txCall is not allowed.");
+                }
+                if (!(tx instanceof TxImpl impl) || !impl.isCompleted()) {
+                    tx.commit();
+                }
                 succeeded = true;
                 return result;
             } catch (Throwable primary) {
-                if (attempt < maxAttempts && isRetryable(primary)) {
-                    rollbackAndCloseQuietly(tx, primary);
+                boolean cleanupSucceeded = rollbackAndCloseQuietly(tx, primary);
+                boolean confirmedRolledBack = tx instanceof TxImpl impl && impl.isPhysicalRollbackConfirmed();
+                if (attempt < maxAttempts && cleanupSucceeded && confirmedRolledBack && isRetryable(primary)) {
+                    if (!sleepBeforeRetry(attempt, primary)) {
+                        throw compose(primary);
+                    }
                     attempt++;
                     continue;
                 }
-                throw rollbackAndCompose(tx, primary);
+                throw compose(primary);
             } finally {
                 // 成功路径也必须归还连接并还原属性（RestorePoint 在此生效）。
                 // close() 幂等，异常路径已关闭也无副作用。
@@ -52,6 +67,19 @@ final class TxExecutor {
         }
     }
 
+    private static boolean sleepBeforeRetry(int attempt, Throwable primary) {
+        long expDelay = Math.min(MAX_RETRY_DELAY_MS, BASE_RETRY_DELAY_MS * (1L << Math.min(attempt - 1, 6)));
+        long jitter = java.util.concurrent.ThreadLocalRandom.current().nextLong(BASE_RETRY_DELAY_MS);
+        try {
+            Thread.sleep(expDelay + jitter);
+            return true;
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            primary.addSuppressed(ie);
+            return false;
+        }
+    }
+
     private static void loggerIfAvailable(Throwable t) {
         // 已提交成功，关闭失败只记录，避免静默吞掉
         org.slf4j.LoggerFactory.getLogger(TxExecutor.class)
@@ -60,7 +88,8 @@ final class TxExecutor {
 
 
     /**
-     * 是否可重试：仅死锁 / 序列化失败（SQLState 以 40 开头，如 40001、40P01）。
+     * 是否可重试：仅明确的死锁 / 串行化冲突（SQLState 40001、40P01，以及 MySQL 死锁/锁等待错误码 1213/1205），
+     * 排除结果未知的 40003（statement_completion_unknown）以避免非幂等写入重复执行。
      *
      * <p>其他异常（约束冲突、语法错误、业务异常）重试无意义，必须立即失败。
      */
@@ -70,7 +99,11 @@ final class TxExecutor {
         while (cursor != null && depth++ < 20) {
             if (cursor instanceof SQLException se) {
                 String state = se.getSQLState();
-                if (state != null && state.startsWith("40")) {
+                if ("40001".equals(state) || "40P01".equalsIgnoreCase(state)) {
+                    return true;
+                }
+                int vendorCode = se.getErrorCode();
+                if (vendorCode == 1213 || vendorCode == 1205) {
                     return true;
                 }
             }
@@ -79,10 +112,8 @@ final class TxExecutor {
         return false;
     }
 
-    /** 回滚 + 关闭，并把主异常原样抛出（清理失败一律挂到 suppressed）。 */
-    private static RuntimeException rollbackAndCompose(Tx tx, Throwable primary) {
-        rollbackAndCloseQuietly(tx, primary);
-
+    /** 把主异常原样抛出；清理异常已由调用方挂到 suppressed。 */
+    private static RuntimeException compose(Throwable primary) {
         if (primary instanceof RuntimeException re) {
             return re;
         }
@@ -92,16 +123,20 @@ final class TxExecutor {
         return new TxException("Transaction failed.", primary);
     }
 
-    private static void rollbackAndCloseQuietly(Tx tx, Throwable primary) {
+    private static boolean rollbackAndCloseQuietly(Tx tx, Throwable primary) {
+        boolean succeeded = true;
         try {
             tx.rollback();
         } catch (Throwable rollbackFailure) {
+            succeeded = false;
             primary.addSuppressed(rollbackFailure);
         }
         try {
             tx.close();
         } catch (Throwable closeFailure) {
+            succeeded = false;
             primary.addSuppressed(closeFailure);
         }
+        return succeeded;
     }
 }

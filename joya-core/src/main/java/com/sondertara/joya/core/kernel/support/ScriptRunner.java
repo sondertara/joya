@@ -53,6 +53,7 @@ public class ScriptRunner {
     private boolean autoCommit;
 
     private boolean sendFullScript;
+    private boolean logFullScript;
     private boolean removeCRs;
     private boolean escapeProcessing = true;
 
@@ -80,6 +81,11 @@ public class ScriptRunner {
 
     public void setSendFullScript(boolean sendFullScript) {
         this.sendFullScript = sendFullScript;
+    }
+
+    /** 显式开启完整脚本日志；默认仅输出语句类型、长度与指纹，避免泄露参数和字面量。 */
+    public void setLogFullScript(boolean logFullScript) {
+        this.logFullScript = logFullScript;
     }
 
     public void setRemoveCRs(boolean removeCRs) {
@@ -113,16 +119,10 @@ public class ScriptRunner {
     }
 
     public void runScript(Reader reader) {
-        setAutoCommit();
-
-        try {
-            if (sendFullScript) {
-                executeFullScript(reader);
-            } else {
-                executeLineByLine(reader);
-            }
-        } finally {
-            rollbackConnection();
+        if (sendFullScript) {
+            executeFullScript(reader);
+        } else {
+            executeLineByLine(reader);
         }
     }
 
@@ -136,11 +136,10 @@ public class ScriptRunner {
                 script.append(LINE_SEPARATOR);
             }
             String command = script.toString();
-            println(command);
+            println(commandLog(command));
             executeStatement(command);
-            commitConnection();
         } catch (Exception e) {
-            String message = "Error executing: " + script + ".  Cause: " + e;
+            String message = "Error executing: " + commandDescription(script) + ".  Cause: " + e;
             printlnError(message);
             throw new DbException(message, e);
         }
@@ -154,50 +153,18 @@ public class ScriptRunner {
             while ((line = lineReader.readLine()) != null) {
                 handleLine(command, line);
             }
-            commitConnection();
             checkForMissingLineTerminator(command);
         } catch (Exception e) {
-            String message = "Error executing: " + command + ".  Cause: " + e;
+            String message = "Error executing: " + commandDescription(command) + ".  Cause: " + e;
             printlnError(message);
             throw new DbException(message, e);
         }
     }
 
-
-
-    private void setAutoCommit() {
-        try {
-            if (autoCommit != connection.getAutoCommit()) {
-                connection.setAutoCommit(autoCommit);
-            }
-        } catch (Throwable t) {
-            throw new DbException("Could not set AutoCommit to " + autoCommit + ". Cause: " + t, t);
-        }
-    }
-
-    private void commitConnection() {
-        try {
-            if (!connection.getAutoCommit()) {
-                connection.commit();
-            }
-        } catch (Throwable t) {
-            throw new DbException("Could not commit transaction. Cause: " + t, t);
-        }
-    }
-
-    private void rollbackConnection() {
-        try {
-            if (!connection.getAutoCommit()) {
-                connection.rollback();
-            }
-        } catch (Throwable t) {
-            // ignore
-        }
-    }
-
     private void checkForMissingLineTerminator(StringBuilder command) {
         if (command != null && !command.toString().trim().isEmpty()) {
-            throw new DbException("Line missing end-of-line terminator (" + delimiter + ") => " + command);
+            throw new DbException("Line missing end-of-line terminator (" + delimiter + ") => "
+                    + commandDescription(command));
         }
     }
 
@@ -208,11 +175,11 @@ public class ScriptRunner {
             if (matcher.find()) {
                 delimiter = matcher.group(5);
             }
-            println(trimmedLine);
+            println(logFullScript ? trimmedLine : "SQL script comment");
         } else if (commandReadyToExecute(trimmedLine)) {
             command.append(line, 0, line.lastIndexOf(delimiter));
             command.append(LINE_SEPARATOR);
-            println(command);
+            println(commandLog(command));
             executeStatement(command.toString());
             command.setLength(0);
         } else if (!trimmedLine.isEmpty()) {
@@ -252,7 +219,7 @@ public class ScriptRunner {
                 if (stopOnError) {
                     throw e;
                 }
-                String message = "Error executing: " + command + ".  Cause: " + e;
+                String message = "Error executing: " + commandDescription(command) + ".  Cause: " + e;
                 printlnError(message);
             }
         }
@@ -268,6 +235,31 @@ public class ScriptRunner {
         if (warning != null) {
             throw warning;
         }
+    }
+
+    private String commandLog(CharSequence command) {
+        return logFullScript ? command.toString() : commandDescription(command);
+    }
+
+    private String commandDescription(CharSequence command) {
+        String sql = command.toString().trim();
+        if (logFullScript) {
+            return sql;
+        }
+        int keywordEnd = 0;
+        while (keywordEnd < sql.length() && !Character.isWhitespace(sql.charAt(keywordEnd))) {
+            keywordEnd++;
+        }
+        String keyword = keywordEnd == 0 ? "EMPTY" : sql.substring(0, keywordEnd).toUpperCase(java.util.Locale.ROOT);
+        String type = switch (keyword) {
+            case "SELECT", "INSERT", "UPDATE", "DELETE", "CREATE", "ALTER", "DROP", "TRUNCATE",
+                    "MERGE", "CALL", "WITH", "BEGIN", "COMMIT", "ROLLBACK", "GRANT", "REVOKE" -> keyword;
+            case "EMPTY" -> "EMPTY";
+            default -> "OTHER";
+        };
+        return "SQL script statement[type=" + type
+                + ", length=" + sql.length()
+                + ", fingerprint=" + Integer.toHexString(sql.hashCode()) + "]";
     }
 
     private void printResults(Statement statement, boolean hasResults) {

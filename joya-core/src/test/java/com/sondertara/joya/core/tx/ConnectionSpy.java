@@ -52,7 +52,20 @@ public final class ConnectionSpy {
     /** 连接当前状态（跨借出保持，不重置）。 */
     private volatile boolean autoCommit;
     private volatile int isolation;
+    private volatile boolean readOnly;
     private volatile boolean closed;
+    private volatile boolean failOnRollback;
+    private volatile boolean failOnCommit;
+    private volatile boolean failOnSavepointRollback;
+    private volatile boolean failOnSavepointRelease;
+    private volatile boolean failOnRestoreAutoCommit;
+    private volatile boolean failWithErrorOnReadOnly;
+    private volatile boolean failWithErrorOnCommit;
+    private volatile boolean failWithErrorOnResultSetClose;
+    private volatile String commitFailureSqlState;
+    private volatile int queryTimeoutSeconds = -1;
+    private int preparedStatementCloseCount;
+    private int resultSetCloseCount;
 
     private final DataSource dataSource;
     private final Connection connection;
@@ -132,8 +145,70 @@ public final class ConnectionSpy {
         return isolation;
     }
 
+    public boolean currentReadOnly() {
+        return readOnly;
+    }
+
     public boolean isClosed() {
         return closed;
+    }
+
+    public ConnectionSpy failOnRollback() {
+        this.failOnRollback = true;
+        return this;
+    }
+
+    public ConnectionSpy failOnCommit() {
+        this.failOnCommit = true;
+        return this;
+    }
+
+    public ConnectionSpy failOnCommit(String sqlState) {
+        this.failOnCommit = true;
+        this.commitFailureSqlState = sqlState;
+        return this;
+    }
+
+    public ConnectionSpy failOnSavepointRollback() {
+        this.failOnSavepointRollback = true;
+        return this;
+    }
+
+    public ConnectionSpy failOnRestoreAutoCommit() {
+        this.failOnRestoreAutoCommit = true;
+        return this;
+    }
+
+    public ConnectionSpy failWithErrorOnReadOnly() {
+        this.failWithErrorOnReadOnly = true;
+        return this;
+    }
+
+    public ConnectionSpy failOnSavepointRelease() {
+        this.failOnSavepointRelease = true;
+        return this;
+    }
+
+    public ConnectionSpy failWithErrorOnCommit() {
+        this.failWithErrorOnCommit = true;
+        return this;
+    }
+
+    public ConnectionSpy failWithErrorOnResultSetClose() {
+        this.failWithErrorOnResultSetClose = true;
+        return this;
+    }
+
+    public int queryTimeoutSeconds() {
+        return queryTimeoutSeconds;
+    }
+
+    public int preparedStatementCloseCount() {
+        return preparedStatementCloseCount;
+    }
+
+    public int resultSetCloseCount() {
+        return resultSetCloseCount;
     }
 
     /** 清空记录，保留当前连接状态（用于分段观测）。 */
@@ -163,8 +238,11 @@ public final class ConnectionSpy {
             switch (name) {
                 case "setAutoCommit": {
                     boolean v = (Boolean) args[0];
-                    autoCommit = v;
                     ops.add("setAutoCommit(" + v + ")");
+                    if (v && failOnRestoreAutoCommit) {
+                        throw new java.sql.SQLException("simulated autoCommit restore failure");
+                    }
+                    autoCommit = v;
                     return null;
                 }
                 case "getAutoCommit":
@@ -172,13 +250,25 @@ public final class ConnectionSpy {
                 case "commit":
                     commitCount++;
                     ops.add("COMMIT");
+                    if (failWithErrorOnCommit) {
+                        throw new AssertionError("simulated commit Error");
+                    }
+                    if (failOnCommit) {
+                        throw new java.sql.SQLException("simulated commit failure", commitFailureSqlState);
+                    }
                     return null;
                 case "rollback":
                     if (args != null && args.length == 1) {
                         ops.add("ROLLBACK_TO_SP");
+                        if (failOnSavepointRollback) {
+                            throw new java.sql.SQLException("simulated savepoint rollback failure");
+                        }
                     } else {
                         rollbackCount++;
                         ops.add("ROLLBACK");
+                        if (failOnRollback) {
+                            throw new java.sql.SQLException("simulated rollback failure");
+                        }
                     }
                     return null;
                 case "setSavepoint":
@@ -186,6 +276,9 @@ public final class ConnectionSpy {
                     return newFakeSavepoint();
                 case "releaseSavepoint":
                     ops.add("RELEASE_SP");
+                    if (failOnSavepointRelease) {
+                        throw new java.sql.SQLException("simulated savepoint release failure");
+                    }
                     return null;
                 case "close":
                     closeCount++;
@@ -204,14 +297,22 @@ public final class ConnectionSpy {
                 }
                 case "getTransactionIsolation":
                     return isolation;
-                case "setReadOnly":
-                    ops.add("setReadOnly(" + args[0] + ")");
+                case "setReadOnly": {
+                    boolean v = (Boolean) args[0];
+                    ops.add("setReadOnly(" + v + ")");
+                    if (failWithErrorOnReadOnly) {
+                        throw new AssertionError("simulated begin option Error");
+                    }
+                    readOnly = v;
                     return null;
+                }
                 case "isReadOnly":
-                    return false;
+                    return readOnly;
                 case "prepareStatement":
                     ops.add("EXEC");
                     return newPreparedStatementProxy();
+                case "createStatement":
+                    return newScriptStatementProxy();
                 case "getMetaData":
                     return newDatabaseMetaDataProxy();
                 default:
@@ -239,7 +340,11 @@ public final class ConnectionSpy {
                     return newResultSetProxy();
                 case "getConnection":
                     return connection;
+                case "setQueryTimeout":
+                    queryTimeoutSeconds = (Integer) args[0];
+                    return null;
                 case "close":
+                    preparedStatementCloseCount++;
                     return null;
                 default:
                     return defaultValue(method.getReturnType());
@@ -251,6 +356,19 @@ public final class ConnectionSpy {
                 handler);
     }
 
+    private java.sql.Statement newScriptStatementProxy() {
+        InvocationHandler handler = (proxy, method, args) -> {
+            if ("execute".equals(method.getName())) {
+                throw new java.sql.SQLException("simulated script failure");
+            }
+            return defaultValue(method.getReturnType());
+        };
+        return (java.sql.Statement) Proxy.newProxyInstance(
+                java.sql.Statement.class.getClassLoader(),
+                new Class<?>[]{java.sql.Statement.class},
+                handler);
+    }
+
     /** 结果集代理：始终为空（{@code next()} 返回 false）。 */
     private java.sql.ResultSet newResultSetProxy() {
         InvocationHandler handler = (proxy, method, args) -> {
@@ -258,6 +376,10 @@ public final class ConnectionSpy {
                 case "next":
                     return false;
                 case "close":
+                    resultSetCloseCount++;
+                    if (failWithErrorOnResultSetClose) {
+                        throw new AssertionError("simulated ResultSet.close Error");
+                    }
                     return null;
                 default:
                     return defaultValue(method.getReturnType());

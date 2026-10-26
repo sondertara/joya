@@ -4,7 +4,6 @@ import com.sondertara.joya.core.kernel.connection.ConnectionCallback;
 import com.sondertara.joya.core.kernel.executor.ListRecordExtractor;
 import com.sondertara.joya.core.kernel.executor.ResultSetExtractor;
 import com.sondertara.joya.core.kernel.executor.RowMapper;
-import com.sondertara.joya.core.kernel.executor.StreamRecordExtractor;
 import com.sondertara.joya.core.kernel.support.LoggingOutputStream;
 import com.sondertara.joya.core.kernel.support.ScriptRunner;
 import com.sondertara.joya.core.kernel.ExecutionOptions;
@@ -101,30 +100,54 @@ public class JdbcExecutor implements Executor {
 
     @Override
     public <T> Stream<T> queryStream(SqlStatement statement, RowMapper<T> mapper) {
+        var dbType = statement.metadata().dbType();
+        int fetchSize = dbType != null && dbType.isLikeMysql() ? Integer.MIN_VALUE : 2000;
+        return queryStream(statement, mapper, fetchSize);
+    }
+
+    @Override
+    public <T> Stream<T> queryStream(SqlStatement statement, RowMapper<T> mapper, int fetchSize) {
         Connection conn = null;
         PreparedStatement ps = null;
         ResultSet rs = null;
         try {
             conn = connections.acquire();
             ps = prepare(conn, statement, false);
-            ps.setFetchSize(2000);
+            applyStreamFetchSize(ps, fetchSize);
             rs = ps.executeQuery();
             final Connection capturedConn = conn;
             final PreparedStatement capturedPs = ps;
             final ResultSet capturedRs = rs;
-            StreamRecordExtractor<T> extractor = new StreamRecordExtractor<>(mapper);
-            // 流关闭时才归还连接：调用方必须在 try-with-resources 中使用返回的 Stream
-            extractor.onClose(() -> {
-                closeQuietly(capturedRs);
-                closeQuietly(capturedPs);
-                releaseQuietly(capturedConn);
-            });
-            return extractor.extract(capturedRs);
-        } catch (SQLException e) {
-            closeQuietly(rs);
-            closeQuietly(ps);
-            releaseQuietly(conn);
-            throw new DbException(e);
+            ResultSetSpliterator.StreamAccess streamAccess = connections instanceof ResultSetSpliterator.StreamAccess access
+                    ? access
+                    : null;
+            java.util.concurrent.atomic.AtomicBoolean cleanedUp = new java.util.concurrent.atomic.AtomicBoolean();
+            Runnable cleanup = () -> {
+                if (cleanedUp.compareAndSet(false, true)) {
+                    closeStreamResources(
+                            capturedRs,
+                            capturedPs,
+                            capturedConn,
+                            streamAccess != null ? streamAccess::onStreamClosed : null);
+                }
+            };
+            // 流关闭时才归还连接；事务边界也可通过 StreamAccess 对称清理同一组资源。
+            Stream<T> stream = new ResultSetSpliterator<>(capturedRs, mapper, streamAccess)
+                    .stream()
+                    .onClose(cleanup);
+            if (streamAccess != null) {
+                streamAccess.registerStream(cleanup);
+            }
+            return stream;
+        } catch (Throwable t) {
+            closeStreamResourcesOnError(rs, ps, conn, t);
+            if (t instanceof RuntimeException re) {
+                throw re;
+            }
+            if (t instanceof Error err) {
+                throw err;
+            }
+            throw new DbException(t);
         }
     }
 
@@ -139,11 +162,19 @@ public class JdbcExecutor implements Executor {
 
     @Override
     public Object insert(SqlStatement statement) {
+        return insertExecute(statement).generatedKey();
+    }
+
+    @Override
+    public InsertSlice insertExecute(SqlStatement statement) {
         return withConnection(conn -> {
             try (PreparedStatement ps = prepare(conn, statement, true)) {
-                ps.executeUpdate();
+                int affected = ps.executeUpdate();
                 try (ResultSet keys = ps.getGeneratedKeys()) {
-                    return keys != null && keys.next() ? keys.getObject(1) : null;
+                    Object key = keys != null && keys.next() ? keys.getObject(1) : null;
+                    return new InsertSlice(affected, key);
+                } catch (SQLException | RuntimeException | AbstractMethodError ignored) {
+                    return new InsertSlice(affected, null);
                 }
             }
         });
@@ -170,10 +201,16 @@ public class JdbcExecutor implements Executor {
             int countOffset = 0;
             List<Object> generatedKeys = wantKeys ? new ArrayList<>(totalRows) : List.of();
 
-            try (PreparedStatement ps = prepare(conn, batch.sql(), wantKeys)) {
+            var dbType = batch.metadata() != null ? batch.metadata().dbType() : null;
+            try (PreparedStatement ps = prepare(conn, batch.sql(), dbType, wantKeys)) {
                 int inChunk = 0;
                 for (int r = 0; r < totalRows; r++) {
                     Object[] row = rows.get(r);
+                    if (row == null || row.length != columns.size()) {
+                        throw new IllegalArgumentException("Batch row at index " + r
+                                + " has invalid parameter length (expected " + columns.size() + ")");
+                    }
+                    ps.clearParameters();
                     for (int c = 0; c < columns.size(); c++) {
                         ColumnBinding column = columns.get(c);
                         column.binder().bindValue(ps, c + 1, column.name(), row[c]);
@@ -204,12 +241,22 @@ public class JdbcExecutor implements Executor {
         }
         int totalRows = rows.size();
         int chunkSize = batchSize > 0 ? batchSize : ExecutionOptions.DEFAULT_BATCH_SIZE;
+        var dbType = template.metadata() != null ? template.metadata().dbType() : null;
+        int expectedParams = SqlFormatUtils.countPlaceholders(template.sql(), dbType);
         return withConnection(conn -> {
             int[] allCounts = new int[totalRows];
             int countOffset = 0;
-            try (PreparedStatement ps = prepare(conn, template.sql(), false)) {
+            try (PreparedStatement ps = prepare(conn, template.sql(), dbType, false)) {
                 int inChunk = 0;
-                for (Object[] row : rows) {
+                for (int r = 0; r < totalRows; r++) {
+                    Object[] row = rows.get(r);
+                    if (row == null) {
+                        throw new IllegalArgumentException("Batch row at index " + r + " must not be null");
+                    }
+                    if (expectedParams > 0 && row.length != expectedParams) {
+                        throw new IllegalArgumentException("Batch row at index " + r + " has " + row.length
+                                + " parameters, but SQL expects " + expectedParams + ": " + template.sql());
+                    }
                     bindRow(ps, row);
                     ps.addBatch();
                     inChunk++;
@@ -258,7 +305,7 @@ public class JdbcExecutor implements Executor {
     public void runScript(Reader reader) {
         // 注意：不能用 try-with-resources 关闭连接——事务模式下连接属于事务，由 ConnectionProvider 决定如何归还
         withConnection(conn -> {
-            try (PrintWriter logWriter = new PrintWriter(new LoggingOutputStream(logger, Level.INFO));
+            try (PrintWriter logWriter = new PrintWriter(new LoggingOutputStream(logger, Level.DEBUG));
                  PrintWriter errorWriter = new PrintWriter(new LoggingOutputStream(logger, Level.ERROR))) {
                 ScriptRunner runner = new ScriptRunner(conn);
                 runner.setStopOnError(true);
@@ -278,7 +325,8 @@ public class JdbcExecutor implements Executor {
     // ===== 语句准备 =====
 
     private PreparedStatement prepare(Connection conn, SqlStatement statement, boolean generatedKeys) throws SQLException {
-        String jdbcStyleSql = SqlFormatUtils.getJdbcStyleSql(statement.sql());
+        var dbType = statement.metadata() != null ? statement.metadata().dbType() : null;
+        String jdbcStyleSql = SqlFormatUtils.getJdbcStyleSql(statement.sql(), dbType);
         PreparedStatement ps = generatedKeys
                 ? conn.prepareStatement(jdbcStyleSql, Statement.RETURN_GENERATED_KEYS)
                 : conn.prepareStatement(jdbcStyleSql);
@@ -299,13 +347,110 @@ public class JdbcExecutor implements Executor {
         }
     }
 
-    private PreparedStatement prepare(Connection conn, String sql, boolean generatedKeys, Object... params) throws SQLException {
-        PreparedStatement ps = createPreparedStatement(conn, sql, generatedKeys, params);
-        OptionalInt timeout = connections.queryTimeoutSeconds();
-        if (timeout.isPresent()) {
-            ps.setQueryTimeout(timeout.getAsInt());
+    private PreparedStatement prepare(
+            Connection conn,
+            String sql,
+            com.sondertara.joya.core.kernel.dialect.DbType dbType,
+            boolean generatedKeys,
+            Object... params
+    ) throws SQLException {
+        String jdbcStyleSql = SqlFormatUtils.getJdbcStyleSql(sql, dbType);
+        PreparedStatement ps = generatedKeys
+                ? conn.prepareStatement(jdbcStyleSql, Statement.RETURN_GENERATED_KEYS)
+                : conn.prepareStatement(jdbcStyleSql);
+        try {
+            bindRow(ps, params);
+            OptionalInt timeout = connections.queryTimeoutSeconds();
+            if (timeout.isPresent()) {
+                ps.setQueryTimeout(timeout.getAsInt());
+            }
+            return ps;
+        } catch (SQLException | RuntimeException e) {
+            closeQuietly(ps);
+            throw e;
         }
-        return ps;
+    }
+
+    private static void applyStreamFetchSize(PreparedStatement ps, int fetchSize) throws SQLException {
+        try {
+            ps.setFetchSize(fetchSize);
+        } catch (SQLException e) {
+            if (fetchSize < 0) {
+                ps.setFetchSize(2000);
+            } else {
+                throw e;
+            }
+        }
+    }
+
+    private void closeStreamResources(ResultSet rs, PreparedStatement ps, Connection conn, Runnable onClosed) {
+        Throwable primary = null;
+        try {
+            if (rs != null) {
+                rs.close();
+            }
+        } catch (Throwable t) {
+            primary = t;
+        }
+        try {
+            if (ps != null) {
+                ps.close();
+            }
+        } catch (Throwable t) {
+            if (primary != null) {
+                primary.addSuppressed(t);
+            } else {
+                primary = t;
+            }
+        }
+        try {
+            if (conn != null) {
+                connections.release(conn);
+            }
+        } catch (Throwable t) {
+            if (primary != null) {
+                primary.addSuppressed(t);
+            } else {
+                primary = t;
+            }
+        } finally {
+            if (onClosed != null) {
+                onClosed.run();
+            }
+        }
+        if (primary instanceof RuntimeException re) {
+            throw re;
+        }
+        if (primary instanceof Error err) {
+            throw err;
+        }
+        if (primary != null) {
+            logger.warn("Failed to close stream resources", primary);
+        }
+    }
+
+    private void closeStreamResourcesOnError(ResultSet rs, PreparedStatement ps, Connection conn, Throwable primary) {
+        if (rs != null) {
+            try {
+                rs.close();
+            } catch (Throwable t) {
+                primary.addSuppressed(t);
+            }
+        }
+        if (ps != null) {
+            try {
+                ps.close();
+            } catch (Throwable t) {
+                primary.addSuppressed(t);
+            }
+        }
+        if (conn != null) {
+            try {
+                connections.release(conn);
+            } catch (Throwable t) {
+                primary.addSuppressed(t);
+            }
+        }
     }
 
     private static void closeQuietly(AutoCloseable closeable) {
@@ -337,6 +482,7 @@ public class JdbcExecutor implements Executor {
     }
 
     private static void bindRow(PreparedStatement stmt, Object[] params) throws SQLException {
+        stmt.clearParameters();
         if (params == null) {
             return;
         }

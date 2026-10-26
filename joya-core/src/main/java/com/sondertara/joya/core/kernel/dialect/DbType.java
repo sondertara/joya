@@ -73,8 +73,11 @@ public enum DbType {
     edbc,
     mimer;
 
+    private static final java.util.Map<Connection, DbType> CONNECTION_CACHE =
+            java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
+
     /**
-     * 依据连接的元数据探测数据库类型：优先产品名，其次 JDBC URL，均失败时返回 {@link #other}。
+     * 依据连接的元数据探测数据库类型（按连接实例弱引用缓存，避免热路径重复调用 {@link Connection#getMetaData()}）。
      *
      * <p>该能力原位于 {@code utils.JdbcUtils}，下沉到方言包后，
      * {@code kernel} 不再需要为一次探测反向依赖工具包。
@@ -83,8 +86,21 @@ public enum DbType {
         if (connection == null) {
             return other;
         }
+        DbType cached = CONNECTION_CACHE.get(connection);
+        if (cached != null) {
+            return cached;
+        }
+        DbType resolved = probeConnection(connection);
+        CONNECTION_CACHE.put(connection, resolved);
+        return resolved;
+    }
+
+    private static DbType probeConnection(Connection connection) {
         try {
             DatabaseMetaData metaData = connection.getMetaData();
+            if (metaData == null) {
+                return other;
+            }
             String productName = metaData.getDatabaseProductName();
             if (productName != null && !productName.isBlank()) {
                 try {

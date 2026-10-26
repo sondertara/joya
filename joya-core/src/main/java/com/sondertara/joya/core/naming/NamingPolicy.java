@@ -26,17 +26,27 @@ public record NamingPolicy(
         int maxJoinTable,
         boolean columnUppercase,
         boolean tableUppercase,
-        TableNameResolver tableNameResolver
+        TableNameResolver tableNameResolver,
+        char openQuote,
+        char closeQuote
 ) {
 
     public static final int DEFAULT_MAX_JOIN_TABLE = 10;
 
     public static final NamingPolicy DEFAULT =
-            new NamingPolicy(DEFAULT_MAX_JOIN_TABLE, false, false, TableNameResolver.IDENTITY);
+            new NamingPolicy(DEFAULT_MAX_JOIN_TABLE, false, false, TableNameResolver.IDENTITY, '\0', '\0');
 
-    /** 兼容构造：未指定表名解析策略时使用恒等解析。 */
+    public NamingPolicy(
+            int maxJoinTable,
+            boolean columnUppercase,
+            boolean tableUppercase,
+            TableNameResolver tableNameResolver
+    ) {
+        this(maxJoinTable, columnUppercase, tableUppercase, tableNameResolver, '\0', '\0');
+    }
+
     public NamingPolicy(int maxJoinTable, boolean columnUppercase, boolean tableUppercase) {
-        this(maxJoinTable, columnUppercase, tableUppercase, TableNameResolver.IDENTITY);
+        this(maxJoinTable, columnUppercase, tableUppercase, TableNameResolver.IDENTITY, '\0', '\0');
     }
 
     public NamingPolicy {
@@ -44,6 +54,10 @@ public record NamingPolicy(
             maxJoinTable = DEFAULT_MAX_JOIN_TABLE;
         }
         tableNameResolver = Objects.requireNonNullElse(tableNameResolver, TableNameResolver.IDENTITY);
+    }
+
+    public NamingPolicy withQuotes(char openQuote, char closeQuote) {
+        return new NamingPolicy(maxJoinTable, columnUppercase, tableUppercase, tableNameResolver, openQuote, closeQuote);
     }
 
     public String formatTable(String tableName) {
@@ -57,11 +71,12 @@ public record NamingPolicy(
         if (columnName == null) {
             return null;
         }
-        return columnUppercase ? columnName.toUpperCase(Locale.ROOT) : columnName;
+        String cased = columnUppercase ? columnName.toUpperCase(Locale.ROOT) : columnName;
+        return quoteIdentifier(cased);
     }
 
     /**
-     * 解析最终写入 SQL 的表名：先按大小写策略格式化，再交给 {@link TableNameResolver}。
+     * 解析最终写入 SQL 的表名：先按大小写策略格式化，再交给 {@link TableNameResolver}，最后按配置包裹标识符引号。
      *
      * @param schema 原始 schema 名，可能为 {@code null}
      * @param table  原始表名（不含 schema）
@@ -69,6 +84,35 @@ public record NamingPolicy(
     public String resolveTable(@Nullable String schema, String table) {
         Objects.requireNonNull(table, "table name must not be null");
         String formattedSchema = schema == null || schema.isBlank() ? null : formatTable(schema);
-        return tableNameResolver.resolve(formattedSchema, formatTable(table));
+        String resolved = tableNameResolver.resolve(formattedSchema, formatTable(table));
+        return quoteIdentifier(resolved);
+    }
+
+    public String quoteIdentifier(String identifier) {
+        if (identifier == null || identifier.isBlank() || openQuote == '\0' || closeQuote == '\0' || "*".equals(identifier.trim())) {
+            return identifier;
+        }
+        String trimmed = identifier.trim();
+        if (trimmed.indexOf('.') > 0) {
+            String[] parts = trimmed.split("\\.");
+            java.util.StringJoiner joiner = new java.util.StringJoiner(".");
+            for (String part : parts) {
+                joiner.add(quoteSingleSegment(part.trim()));
+            }
+            return joiner.toString();
+        }
+        return quoteSingleSegment(trimmed);
+    }
+
+    private String quoteSingleSegment(String segment) {
+        if (segment.isEmpty() || "*".equals(segment)) {
+            return segment;
+        }
+        if (segment.length() >= 2 && segment.charAt(0) == openQuote && segment.charAt(segment.length() - 1) == closeQuote) {
+            return segment;
+        }
+        String closeStr = String.valueOf(closeQuote);
+        String escaped = segment.replace(closeStr, closeStr + closeStr);
+        return openQuote + escaped + closeQuote;
     }
 }
