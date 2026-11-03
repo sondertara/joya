@@ -1,22 +1,23 @@
 package com.sondertara.joya.core;
 
 import com.sondertara.joya.core.function.IGetter;
-import com.sondertara.joya.core.kernel.JoyaTemplate;
+import com.sondertara.joya.core.kernel.ExecutionKernel;
+import com.sondertara.joya.core.kernel.statement.ParameterSource;
+import com.sondertara.joya.core.kernel.statement.SqlFormatUtils;
+import com.sondertara.joya.core.kernel.statement.SqlNode;
+import com.sondertara.joya.core.kernel.statement.SqlNodes;
+import com.sondertara.joya.core.kernel.statement.SqlParameter;
 import com.sondertara.joya.core.kernel.statement.SqlStatement;
 import com.sondertara.joya.core.metadata.EntityMetadataContext;
-import com.sondertara.joya.core.statement.MutationContext;
 import com.sondertara.joya.core.query.criterion.WhereCriterion;
 import com.sondertara.joya.core.result.MutationResult;
-import com.sondertara.joya.core.statement.factory.UpdateStatementFactory;
 import org.jspecify.annotations.Nullable;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
 import java.util.function.UnaryOperator;
 
 /**
@@ -29,36 +30,36 @@ import java.util.function.UnaryOperator;
  */
 public final class EntityUpdate<T> {
 
-    private final JoyaTemplate template;
+    private final ExecutionKernel template;
     private final EntityMetadataContext meta;
     private final Map<String, Object> values = new LinkedHashMap<>();
     private final List<UnaryOperator<WhereCriterion>> whereCallbacks = new ArrayList<>();
-    private WhereCriterion explicitCriterion;
+    private final List<WhereCriterion> explicitCriteria = new ArrayList<>();
     private boolean allowAll;
 
-    EntityUpdate(JoyaTemplate template, EntityMetadataContext meta) {
+    EntityUpdate(ExecutionKernel template, EntityMetadataContext meta) {
         this.template = Objects.requireNonNull(template, "template must not be null");
         this.meta = Objects.requireNonNull(meta, "meta must not be null");
     }
 
     /** 按 Lambda 属性引用设置待更新列。 */
     public <V> EntityUpdate<T> set(IGetter<T, V> column, @Nullable V value) {
-        String colName = EntityOps.resolveColumn(meta, column);
-        if (meta.nonUpdatableColumns().contains(colName)) {
-            throw new IllegalArgumentException(
-                    "Column '" + colName + "' is marked as updatable=false on entity " + meta.entityType().getName());
-        }
+        String colName = validateUpdatableColumn(meta.resolveColumn(column));
         values.put(colName, value);
+        return this;
+    }
+
+    /** 当值非 {@code null} 时按 Lambda 属性引用设置待更新列。 */
+    public <V> EntityUpdate<T> setIfPresent(IGetter<T, V> column, @Nullable V value) {
+        if (value != null) {
+            set(column, value);
+        }
         return this;
     }
 
     /** 按列名或字段名设置待更新列。 */
     public EntityUpdate<T> set(String columnOrField, @Nullable Object value) {
-        String colName = EntityOps.resolveColumnName(meta, columnOrField);
-        if (meta.nonUpdatableColumns().contains(colName)) {
-            throw new IllegalArgumentException(
-                    "Column '" + colName + "' is marked as updatable=false on entity " + meta.entityType().getName());
-        }
+        String colName = validateUpdatableColumn(meta.resolveColumnName(columnOrField));
         values.put(colName, value);
         return this;
     }
@@ -70,6 +71,50 @@ public final class EntityUpdate<T> {
         return this;
     }
 
+    /**
+     * 按 Lambda 属性引用执行列级原子增减（渲染为 {@code col = col + ?}，传入负数即为原子自减）。
+     */
+    public <N extends Number> EntityUpdate<T> incr(IGetter<T, N> column, Number delta) {
+        Objects.requireNonNull(delta, "delta must not be null");
+        String colName = validateUpdatableColumn(meta.resolveColumn(column));
+        String formattedCol = meta.formatColumn(colName, template.namingPolicy());
+        values.put(colName, new SqlNode.Binary("+",
+                SqlNodes.column((SqlNode.Table) null, formattedCol),
+                SqlNodes.param(colName, delta, ParameterSource.SET)));
+        return this;
+    }
+
+    /**
+     * 按列名或字段名执行列级原子增减（渲染为 {@code col = col + ?}，传入负数即为原子自减）。
+     */
+    public EntityUpdate<T> incr(String columnOrField, Number delta) {
+        Objects.requireNonNull(delta, "delta must not be null");
+        String colName = validateUpdatableColumn(meta.resolveColumnName(columnOrField));
+        String formattedCol = meta.formatColumn(colName, template.namingPolicy());
+        values.put(colName, new SqlNode.Binary("+",
+                SqlNodes.column((SqlNode.Table) null, formattedCol),
+                SqlNodes.param(colName, delta, ParameterSource.SET)));
+        return this;
+    }
+
+    /**
+     * 按 Lambda 属性引用设置参数化 SQL 表达式（如 {@code setExpr(User::getScore, "GREATEST(score - ?, 0)", 10)}）。
+     */
+    public <V> EntityUpdate<T> setExpr(IGetter<T, V> column, String sqlExpr, Object... args) {
+        String colName = validateUpdatableColumn(meta.resolveColumn(column));
+        values.put(colName, buildExprNode(colName, sqlExpr, args));
+        return this;
+    }
+
+    /**
+     * 按列名或字段名设置参数化 SQL 表达式。
+     */
+    public EntityUpdate<T> setExpr(String columnOrField, String sqlExpr, Object... args) {
+        String colName = validateUpdatableColumn(meta.resolveColumnName(columnOrField));
+        values.put(colName, buildExprNode(colName, sqlExpr, args));
+        return this;
+    }
+
     /** 追加 WHERE 过滤条件（多次调用以 AND 合并）。 */
     public EntityUpdate<T> where(UnaryOperator<WhereCriterion> condition) {
         Objects.requireNonNull(condition, "where condition must not be null");
@@ -77,9 +122,12 @@ public final class EntityUpdate<T> {
         return this;
     }
 
-    /** 使用预构建的 {@link WhereCriterion}。 */
+    /** 追加预构建的 {@link WhereCriterion}（多次调用以 AND 合并）。 */
     public EntityUpdate<T> where(WhereCriterion criterion) {
-        this.explicitCriterion = Objects.requireNonNull(criterion, "criterion must not be null");
+        Objects.requireNonNull(criterion, "criterion must not be null");
+        WhereCriterion snapshot = criterion.copy();
+        this.explicitCriteria.add(snapshot);
+        this.whereCallbacks.add(w -> w.and(inner -> snapshot.copy()));
         return this;
     }
 
@@ -94,28 +142,57 @@ public final class EntityUpdate<T> {
         if (values.isEmpty()) {
             throw new IllegalStateException("Update values must not be empty");
         }
-        WhereCriterion where = buildWhere();
-        Set<String> declared = new LinkedHashSet<>(values.keySet());
-        MutationContext ctx = new MutationContext(meta, values, where, declared, false, allowAll, template.namingPolicy());
-        return UpdateStatementFactory.create(ctx);
+        return UpdatePlan.explicit(meta, values, buildWhere(), allowAll).toSqlStatement(template);
     }
 
     /** 执行更新并返回 {@link MutationResult}。 */
     public MutationResult execute() {
-        int affected = template.update(toSqlStatement());
-        return MutationResult.ofAffected(affected);
+        if (values.isEmpty()) {
+            throw new IllegalStateException("Update values must not be empty");
+        }
+        return UpdatePlan.explicit(meta, values, buildWhere(), allowAll).execute(template);
     }
 
     private WhereCriterion buildWhere() {
-        if (explicitCriterion == null && whereCallbacks.isEmpty()) {
-            return null;
+        if (explicitCriteria.size() == 1 && whereCallbacks.size() == 1) {
+            return explicitCriteria.get(0).copy();
         }
-        WhereCriterion w = explicitCriterion != null
-                ? explicitCriterion
-                : WhereCriterion.forEntity(meta.entityType());
-        for (UnaryOperator<WhereCriterion> cb : whereCallbacks) {
-            cb.apply(w);
+        return WhereCriterion.merge(null, whereCallbacks);
+    }
+
+    private String validateUpdatableColumn(String colName) {
+        if (meta.nonUpdatableColumns().contains(colName)) {
+            throw new IllegalArgumentException(
+                    "Column '" + colName + "' is marked as updatable=false on entity " + meta.entityType().getName());
         }
-        return w;
+        if (meta.generatedColumns().contains(colName)) {
+            throw new IllegalArgumentException(
+                    "Column '" + colName + "' is database-generated and cannot be updated on entity "
+                            + meta.entityType().getName());
+        }
+        return colName;
+    }
+
+    private static SqlNode buildExprNode(String colName, String sqlExpr, @Nullable Object[] args) {
+        if (sqlExpr == null || sqlExpr.isBlank()) {
+            throw new IllegalArgumentException("sqlExpr must not be null or blank");
+        }
+        String formatted = SqlFormatUtils.underlineColumn(sqlExpr.trim());
+        formatted = SqlFormatUtils.getJdbcStyleSql(formatted);
+        formatted = SqlFormatUtils.stripTableAlias(formatted);
+        int expected = SqlFormatUtils.countPlaceholders(formatted);
+        int actual = args == null ? 0 : args.length;
+        if (expected != actual) {
+            throw new IllegalArgumentException("Placeholder count mismatch in setExpr(\"" + sqlExpr
+                    + "\"): expected " + expected + " parameter(s), got " + actual);
+        }
+        if (actual == 0) {
+            return SqlNodes.raw(formatted);
+        }
+        List<SqlParameter> params = new ArrayList<>(actual);
+        for (int i = 0; i < actual; i++) {
+            params.add(SqlParameter.of(i + 1, colName, args[i], ParameterSource.SET));
+        }
+        return SqlNodes.raw(formatted, params);
     }
 }

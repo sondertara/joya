@@ -404,8 +404,40 @@ class TxSemanticsTest {
             tx.sql("UPDATE t SET a = 1").update();
         });
 
-        assertEquals(1, customAcquireCount.get(), "JdbcTxEngine 应走自定义 ConnectionProvider");
+        assertEquals(1, customAcquireCount.get(), "TxEngine.JDBC 应走自定义 ConnectionProvider");
         assertEquals(12, spy.queryTimeoutSeconds(), "自定义 provider 空超时时必须回退 ExecutionOptions");
+    }
+
+    @Test
+    void customConnectionProviderAndBuilderQueryTimeout_areHonoredInAutocommitToo() {
+        ConnectionSpy spy = ConnectionSpy.autoCommitPool();
+        java.util.concurrent.atomic.AtomicInteger customAcquireCount = new java.util.concurrent.atomic.AtomicInteger(0);
+        com.sondertara.joya.core.kernel.connection.ConnectionProvider customProvider =
+                new com.sondertara.joya.core.kernel.connection.ConnectionProvider() {
+                    @Override
+                    public java.sql.Connection acquire() throws java.sql.SQLException {
+                        customAcquireCount.incrementAndGet();
+                        return spy.dataSource().getConnection();
+                    }
+
+                    @Override
+                    public void release(java.sql.Connection connection) throws java.sql.SQLException {
+                        connection.close();
+                    }
+                };
+
+        JoyaClient joya = JoyaClient.builder(spy.dataSource())
+                .settings(com.sondertara.joya.core.JoyaSettings.builder().queryTimeoutSeconds(12).build())
+                .queryTimeoutSeconds(9)
+                .connectionProvider(customProvider)
+                .build();
+
+        joya.sql("UPDATE t SET a = 1").update();
+
+        assertEquals(9, joya.settings().executionOptions().queryTimeoutSeconds(),
+                "Builder.queryTimeoutSeconds 应按调用顺序直接更新 JoyaSettings");
+        assertEquals(1, customAcquireCount.get(), "自动提交执行应走自定义 ConnectionProvider");
+        assertEquals(9, spy.queryTimeoutSeconds(), "自动提交模式下自定义 provider 空超时同样回退 ExecutionOptions");
     }
 
     @Test
@@ -536,6 +568,20 @@ class TxSemanticsTest {
     }
 
     @Test
+    void illegalSecondRollback_isRejectedConsistently() {
+        ConnectionSpy spy = ConnectionSpy.autoCommitPool();
+        Tx tx = client(spy).tx().begin();
+        java.util.concurrent.atomic.AtomicReference<TxOutcome> outcome = new java.util.concurrent.atomic.AtomicReference<>();
+        tx.afterCompletion(outcome::set);
+        tx.rollback();
+
+        assertThrows(IllegalTxStateException.class, tx::rollback);
+
+        assertEquals(TxOutcome.ROLLED_BACK, outcome.get(), "非法状态异常不得污染已知 ROLLED_BACK 结局");
+        tx.close();
+    }
+
+    @Test
     void closeAfterSuccessfulRollbackAndFailedRestore_preservesRolledBackOutcome() {
         ConnectionSpy spy = ConnectionSpy.autoCommitPool().failOnRestoreAutoCommit();
         Tx tx = client(spy).tx().begin();
@@ -568,7 +614,15 @@ class TxSemanticsTest {
         ConnectionSpy spy = ConnectionSpy.autoCommitPool();
         TxConnection delegate = new TxConnection(spy.connection());
         delegate.begin(TxOptions.DEFAULT);
-        TxImpl tx = new TxImpl(client(spy).template(), rejectAfterCommitRegistration(delegate));
+        com.sondertara.joya.core.kernel.ExecutionKernel rootKernel =
+                new com.sondertara.joya.core.kernel.ExecutionKernel(new com.sondertara.joya.core.kernel.ExecutionKernel.Config(
+                        spy.dataSource(),
+                        List.of(),
+                        List.of(),
+                        List.of(),
+                        new com.sondertara.joya.core.kernel.connection.DataSourceConnectionProvider(spy.dataSource(), 0),
+                        null, null, null, null, null, null));
+        TxImpl tx = new TxImpl(rootKernel, rejectAfterCommitRegistration(delegate));
         java.util.concurrent.atomic.AtomicBoolean callbackRan = new java.util.concurrent.atomic.AtomicBoolean();
 
         assertThrows(TxException.class, () -> tx.savepoint(sp ->

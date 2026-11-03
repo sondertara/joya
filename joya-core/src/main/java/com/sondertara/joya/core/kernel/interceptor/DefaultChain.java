@@ -1,5 +1,6 @@
 package com.sondertara.joya.core.kernel.interceptor;
 
+import com.sondertara.joya.core.kernel.support.Ordered;
 import com.sondertara.joya.core.kernel.statement.SqlStatement;
 
 import java.util.List;

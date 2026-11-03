@@ -1,6 +1,5 @@
 package com.sondertara.joya.core.model;
 
-import lombok.Data;
 import org.jspecify.annotations.Nullable;
 
 import java.io.Serializable;
@@ -8,44 +7,57 @@ import java.util.Objects;
 import java.util.Optional;
 
 /**
- * Column info for query
+ * 不可变查询列别名描述值对象。
  *
  * @author huangxiaohu
  * @date 2021/11/15 17:17
  * @since 1.0.0
  */
-@Data
-public class ColumnAlias implements Serializable {
+public final class ColumnAlias implements Serializable {
 
-    /**
-     * table name of database
-     * eg: user
-     */
-    private String tableName;
-
-    /**
-     * column name form database which has parsed to lowercase
-     * eg: user_name
-     */
-    private String columnName;
-
-    /**
-     * table alias
-     * eg: t0
-     */
-    private String tableAlias;
-    /**
-     * column alias
-     * eg: userName
-     */
     @Nullable
-    private String columnAlias;
+    private final String tableName;
+    private final String columnName;
+    @Nullable
+    private final String tableAlias;
+    @Nullable
+    private final String columnAlias;
+
+    public ColumnAlias(
+            @Nullable String tableName,
+            String columnName,
+            @Nullable String tableAlias,
+            @Nullable String columnAlias
+    ) {
+        this.tableName = tableName;
+        this.columnName = Objects.requireNonNull(columnName, "columnName must not be null");
+        this.tableAlias = tableAlias;
+        this.columnAlias = columnAlias;
+    }
+
+    public @Nullable String getTableName() {
+        return tableName;
+    }
+
+    public String getColumnName() {
+        return columnName;
+    }
+
+    public @Nullable String getTableAlias() {
+        return tableAlias;
+    }
+
+    public @Nullable String getColumnAlias() {
+        return columnAlias;
+    }
+
+    public ColumnAlias withColumnAlias(@Nullable String newColumnAlias) {
+        return new ColumnAlias(tableName, columnName, tableAlias, newColumnAlias);
+    }
 
     public String identity() {
         return Optional.ofNullable(tableAlias).map(s -> s + ".").orElse("") + columnName;
     }
-
-
 
     @Override
     public boolean equals(Object o) {

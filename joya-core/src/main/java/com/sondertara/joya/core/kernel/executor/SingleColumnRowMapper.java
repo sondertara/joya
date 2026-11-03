@@ -34,7 +34,8 @@ public class SingleColumnRowMapper<T> implements RowMapper<T> {
             return (T) val;
         } catch (Exception e) {
             log.error("get column error.", e);
-            throw new DbException("Get column error.", e);
+            throw new DbException("Failed to read column 1 as " + (clazz == null ? "unknown type" : clazz.getName())
+                    + ": " + e.getMessage(), e);
         }
     }
 }

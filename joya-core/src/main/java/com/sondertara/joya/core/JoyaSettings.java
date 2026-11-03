@@ -1,6 +1,6 @@
 package com.sondertara.joya.core;
 
-import com.sondertara.joya.core.kernel.ExecutionOptions;
+import com.sondertara.joya.core.kernel.executor.ExecutionOptions;
 import com.sondertara.joya.core.kernel.dialect.QuoteStyle;
 import com.sondertara.joya.core.naming.NamingPolicy;
 import com.sondertara.joya.core.naming.TableNameResolver;
@@ -32,28 +32,6 @@ public record JoyaSettings(
         namingPolicy = Objects.requireNonNullElse(namingPolicy, NamingPolicy.DEFAULT);
     }
 
-    // ===== 便捷委托访问器 =====
-
-    public int queryTimeoutSeconds() {
-        return executionOptions.queryTimeoutSeconds();
-    }
-
-    public int batchSize() {
-        return executionOptions.batchSize();
-    }
-
-    public int maxJoinTable() {
-        return namingPolicy.maxJoinTable();
-    }
-
-    public boolean columnUppercase() {
-        return namingPolicy.columnUppercase();
-    }
-
-    public boolean tableUppercase() {
-        return namingPolicy.tableUppercase();
-    }
-
     public static JoyaSettings of(ExecutionOptions executionOptions, NamingPolicy namingPolicy) {
         return new JoyaSettings(executionOptions, namingPolicy);
     }
@@ -70,14 +48,7 @@ public record JoyaSettings(
     }
 
     public JoyaSettings withTableNameResolver(TableNameResolver tableNameResolver) {
-        return withNamingPolicy(new NamingPolicy(
-                namingPolicy.maxJoinTable(),
-                namingPolicy.columnUppercase(),
-                namingPolicy.tableUppercase(),
-                tableNameResolver,
-                namingPolicy.openQuote(),
-                namingPolicy.closeQuote()
-        ));
+        return withNamingPolicy(namingPolicy.withTableNameResolver(tableNameResolver));
     }
 
     public JoyaSettings withQuoteStyle(QuoteStyle quoteStyle) {

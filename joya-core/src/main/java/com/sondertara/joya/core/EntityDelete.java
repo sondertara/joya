@@ -1,6 +1,6 @@
 package com.sondertara.joya.core;
 
-import com.sondertara.joya.core.kernel.JoyaTemplate;
+import com.sondertara.joya.core.kernel.ExecutionKernel;
 import com.sondertara.joya.core.kernel.statement.SqlStatement;
 import com.sondertara.joya.core.metadata.EntityMetadataContext;
 import com.sondertara.joya.core.statement.MutationContext;
@@ -24,13 +24,13 @@ import java.util.function.UnaryOperator;
  */
 public final class EntityDelete<T> {
 
-    private final JoyaTemplate template;
+    private final ExecutionKernel template;
     private final EntityMetadataContext meta;
     private final List<UnaryOperator<WhereCriterion>> whereCallbacks = new ArrayList<>();
-    private WhereCriterion explicitCriterion;
+    private final List<WhereCriterion> explicitCriteria = new ArrayList<>();
     private boolean allowAll;
 
-    EntityDelete(JoyaTemplate template, EntityMetadataContext meta) {
+    EntityDelete(ExecutionKernel template, EntityMetadataContext meta) {
         this.template = Objects.requireNonNull(template, "template must not be null");
         this.meta = Objects.requireNonNull(meta, "meta must not be null");
     }
@@ -42,9 +42,12 @@ public final class EntityDelete<T> {
         return this;
     }
 
-    /** 使用预构建的 {@link WhereCriterion}。 */
+    /** 追加预构建的 {@link WhereCriterion}（多次调用以 AND 合并）。 */
     public EntityDelete<T> where(WhereCriterion criterion) {
-        this.explicitCriterion = Objects.requireNonNull(criterion, "criterion must not be null");
+        Objects.requireNonNull(criterion, "criterion must not be null");
+        WhereCriterion snapshot = criterion.copy();
+        this.explicitCriteria.add(snapshot);
+        this.whereCallbacks.add(w -> w.and(inner -> snapshot.copy()));
         return this;
     }
 
@@ -68,15 +71,9 @@ public final class EntityDelete<T> {
     }
 
     private WhereCriterion buildWhere() {
-        if (explicitCriterion == null && whereCallbacks.isEmpty()) {
-            return null;
+        if (explicitCriteria.size() == 1 && whereCallbacks.size() == 1) {
+            return explicitCriteria.get(0).copy();
         }
-        WhereCriterion w = explicitCriterion != null
-                ? explicitCriterion
-                : WhereCriterion.forEntity(meta.entityType());
-        for (UnaryOperator<WhereCriterion> cb : whereCallbacks) {
-            cb.apply(w);
-        }
-        return w;
+        return WhereCriterion.merge(null, whereCallbacks);
     }
 }

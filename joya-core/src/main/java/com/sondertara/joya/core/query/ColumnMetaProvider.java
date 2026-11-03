@@ -1,17 +1,15 @@
 package com.sondertara.joya.core.query;
 
 import com.sondertara.joya.core.function.IGetter;
+import com.sondertara.joya.core.kernel.statement.SqlNode;
+import com.sondertara.joya.core.kernel.statement.SqlNodes;
 import com.sondertara.joya.core.model.ColumnAlias;
-import com.sondertara.joya.core.query.dsl.Expr;
 import com.sondertara.joya.utils.LambdaUtils;
-import com.sondertara.joya.utils.SqlFormatUtils;
+import com.sondertara.joya.core.kernel.statement.SqlFormatUtils;
 import com.sondertara.joya.utils.Strings;
 import org.jspecify.annotations.Nullable;
 
-import java.util.Collections;
-import java.util.Map;
 import java.util.Objects;
-import java.util.WeakHashMap;
 import java.util.regex.Pattern;
 
 /**
@@ -30,20 +28,42 @@ import java.util.regex.Pattern;
 public sealed interface ColumnMetaProvider
         permits ColumnMetaProvider.GetterColumnMetaProvider,
                 ColumnMetaProvider.NameColumnMetaProvider,
-                ColumnMetaProvider.ExprColumnMetaProvider,
-                ColumnMetaProvider.DynamicLambdaColumnMetaProvider {
+                ColumnMetaProvider.ExprColumnMetaProvider {
 
     /** 合法的列或字段标识符正则（可选一段前缀：alias.col 或 Table.field）。 */
     Pattern SAFE_IDENTIFIER = Pattern.compile("^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)?$");
 
-    /** 无捕获 Getter 合成类到 ColumnMetaProvider 的全局弱引用缓存（避免热重载场景 ClassLoader 泄漏）。 */
-    Map<Class<?>, ColumnMetaProvider> GETTER_PROVIDER_CACHE = Collections.synchronizedMap(new WeakHashMap<>());
+    /** 合法的表别名或列别名正则（纯标识符，不含点号、空格、引号或分号）。 */
+    Pattern SAFE_ALIAS = Pattern.compile("^[A-Za-z_][A-Za-z0-9_]*$");
+
+    /** 无捕获方法引用合成类到 GetterColumnMetaProvider 的 ClassValue 缓存（不持有 Lambda 实例，避免锁争用与泄漏）。 */
+    final class ProviderCache {
+        static final ClassValue<ProviderCache> CACHE = new ClassValue<>() {
+            @Override
+            protected ProviderCache computeValue(Class<?> type) {
+                return new ProviderCache(type.getDeclaredFields().length == 0);
+            }
+        };
+        final boolean stateless;
+        volatile @Nullable ColumnMetaProvider provider;
+
+        ProviderCache(boolean stateless) {
+            this.stateless = stateless;
+        }
+    }
 
     /**
      * 所属实体类型（若为字符串列名或聚合表达式则为 {@code null}）。
      */
     @Nullable
     Class<?> entityClass();
+
+    /**
+     * 显式绑定的表别名（如由 {@code Exprs.col("mgr", Emp::getName)} 指定时返回 {@code "mgr"}，其余返回 {@code null}）。
+     */
+    default @Nullable String tableAlias() {
+        return null;
+    }
 
     /**
      * 实体属性名或表达式别名。
@@ -68,6 +88,12 @@ public sealed interface ColumnMetaProvider
         return resolveAlias(ctx).identity();
     }
 
+    /** 解析为结构化列节点；表达式提供器可覆盖为 Raw/Function。 */
+    default SqlNode resolveNode(RenderContext ctx) {
+        ColumnAlias alias = resolveAlias(ctx);
+        return SqlNodes.column(alias.getTableAlias(), alias.getColumnName());
+    }
+
     /**
      * 从 {@link IGetter}（方法引用或 {@link Expr}）构造列元数据提供器。
      */
@@ -77,8 +103,17 @@ public sealed interface ColumnMetaProvider
             return new ExprColumnMetaProvider(expr);
         }
         Class<?> getterClass = getter.getClass();
-        if (getterClass.getDeclaredFields().length == 0) {
-            return GETTER_PROVIDER_CACHE.computeIfAbsent(getterClass, k -> parseGetter(getter));
+        ProviderCache holder = ProviderCache.CACHE.get(getterClass);
+        if (holder.stateless) {
+            ColumnMetaProvider cached = holder.provider;
+            if (cached != null) {
+                return cached;
+            }
+            ColumnMetaProvider parsed = parseGetter(getter);
+            if (parsed instanceof GetterColumnMetaProvider) {
+                holder.provider = parsed;
+            }
+            return parsed;
         }
         return parseGetter(getter);
     }
@@ -97,7 +132,9 @@ public sealed interface ColumnMetaProvider
     private static ColumnMetaProvider parseGetter(IGetter<?, ?> getter) {
         String methodName = LambdaUtils.getImplMethodName(getter);
         if (methodName.startsWith("lambda$")) {
-            return new DynamicLambdaColumnMetaProvider(getter);
+            throw new IllegalArgumentException(
+                    "Synthetic lambda is not supported as a column reference; use an entity getter method reference "
+                            + "(e.g. User::getName) or Exprs.* instead");
         }
         Class<?> entityClass = LambdaUtils.getReceiverClass(getter);
         String propertyName = LambdaUtils.getPropertyName(getter);
@@ -167,7 +204,12 @@ public sealed interface ColumnMetaProvider
 
         @Override
         public @Nullable Class<?> entityClass() {
-            return null;
+            return expr.entityClass();
+        }
+
+        @Override
+        public @Nullable String tableAlias() {
+            return expr.tableAlias();
         }
 
         @Override
@@ -177,60 +219,34 @@ public sealed interface ColumnMetaProvider
 
         @Override
         public String canonicalKey() {
+            if (expr.entityClass() != null && expr.alias() != null) {
+                String prefix = expr.tableAlias() != null ? expr.tableAlias() + "@" : "";
+                return prefix + expr.entityClass().getName() + "#" + expr.alias();
+            }
             return "expr:" + System.identityHashCode(expr);
         }
 
         @Override
         public ColumnAlias resolveAlias(RenderContext ctx) {
-            String rendered = expr.render(ctx);
-            ColumnAlias alias = new ColumnAlias();
-            alias.setColumnName(rendered);
-            alias.setColumnAlias(expr.alias());
-            return alias;
+            ColumnAlias colAlias = expr.resolveColumnAlias(ctx);
+            if (colAlias != null) {
+                return expr.alias() != null ? colAlias.withColumnAlias(expr.alias()) : colAlias;
+            }
+            return new ColumnAlias(null, expr.render(ctx), null, expr.alias());
         }
 
         @Override
         public String resolveSql(RenderContext ctx) {
             return expr.render(ctx);
         }
-    }
-
-    /**
-     * 兼容手写合成 Lambda（如 {@code u -> "SUM(t0.age)"}）的提供器。
-     */
-    record DynamicLambdaColumnMetaProvider(IGetter<?, ?> fn) implements ColumnMetaProvider {
-
-        public DynamicLambdaColumnMetaProvider {
-            Objects.requireNonNull(fn, "fn must not be null");
-        }
 
         @Override
-        public @Nullable Class<?> entityClass() {
-            return null;
-        }
-
-        @Override
-        public @Nullable String propertyName() {
-            Object val = fn.apply(null);
-            ColumnPair pair = RawColumnParser.parse(Objects.toString(val, ""));
-            return pair != null ? pair.getValue() : null;
-        }
-
-        @Override
-        public String canonicalKey() {
-            return "lambda:" + Objects.toString(fn.apply(null), "");
-        }
-
-        @Override
-        public ColumnAlias resolveAlias(RenderContext ctx) {
-            Object val = fn.apply(null);
-            ColumnPair pair = RawColumnParser.parse(Objects.toString(val, ""), ctx.namingPolicy().columnUppercase());
-            ColumnAlias alias = new ColumnAlias();
-            if (pair != null) {
-                alias.setColumnName(pair.getKey());
-                alias.setColumnAlias(pair.getValue());
+        public SqlNode resolveNode(RenderContext ctx) {
+            ColumnAlias colAlias = expr.resolveColumnAlias(ctx);
+            if (colAlias != null) {
+                return SqlNodes.column(colAlias.getTableAlias(), colAlias.getColumnName());
             }
-            return alias;
+            return SqlNodes.raw(expr.render(ctx), expr.parameters());
         }
     }
 }

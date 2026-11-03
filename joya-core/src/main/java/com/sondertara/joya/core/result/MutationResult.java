@@ -164,7 +164,17 @@ public record MutationResult(
                 .toList();
     }
 
-    // ========== 状态判断 ==========
+    // ========== 状态判断与数值转换 ==========
+
+    /**
+     * 获取 int 类型的影响行数（超过 {@link Integer#MAX_VALUE} 时饱和截断为 {@link Integer#MAX_VALUE}）。
+     */
+    public int affectedRowsInt() {
+        if (affectedRows <= 0L) {
+            return 0;
+        }
+        return affectedRows > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) affectedRows;
+    }
 
     public boolean isEmpty() {
         return affectedRows == 0;

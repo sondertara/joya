@@ -1,19 +1,25 @@
 package com.sondertara.joya.spring.test.user;
 
-import com.sondertara.joya.core.jdbc.dao.JoyaMapper;
-import com.sondertara.joya.core.jdbc.support.annotation.Query;
+import com.sondertara.joya.core.mapper.JoyaMapper;
 
 import java.util.List;
 import java.util.Optional;
 
 public interface UserAccountMapper extends JoyaMapper<UserAccount> {
 
-    Optional<UserAccount> findByUserName(String userName);
+    default Optional<UserAccount> findByUserName(String userName) {
+        return query().where(w -> w.eq(UserAccount::getUserName, userName)).one();
+    }
 
-    List<UserAccount> findByAgeGreaterThanEqual(Integer minAge);
+    default List<UserAccount> findByAgeGreaterThanEqual(Integer minAge) {
+        return query().where(w -> w.gte(UserAccount::getAge, minAge)).list();
+    }
 
-    long countByAgeGreaterThan(Integer age);
+    default long countByAgeGreaterThan(Integer age) {
+        return query().where(w -> w.gt(UserAccount::getAge, age)).count();
+    }
 
-    @Query("SELECT * FROM t_user_account WHERE user_name = ?1")
-    Optional<UserAccount> selectByRawName(String name);
+    default Optional<UserAccount> selectByRawName(String name) {
+        return sql("SELECT * FROM t_user_account WHERE user_name = ?", name).one(UserAccount.class);
+    }
 }

@@ -3,13 +3,20 @@ package com.sondertara.joya.spring.autoconfigure;
 import com.sondertara.joya.core.JoyaClient;
 import com.sondertara.joya.core.JoyaSettings;
 import com.sondertara.joya.core.kernel.dialect.DialectStrategy;
+import com.sondertara.joya.core.listener.EntityListener;
+import com.sondertara.joya.core.kernel.error.SqlExceptionTranslator;
+import com.sondertara.joya.core.kernel.executor.RowMapperFactory;
+import com.sondertara.joya.core.kernel.interceptor.RewriteContext;
 import com.sondertara.joya.core.kernel.interceptor.SqlInterceptor;
+import com.sondertara.joya.core.kernel.interceptor.SqlRewriter;
+import com.sondertara.joya.core.kernel.observe.SqlExecutionListener;
 import com.sondertara.joya.spring.autoconfigure.JoyaProperties.JoyaDataSourceProperties;
 import com.sondertara.joya.spring.autoconfigure.JoyaProperties.PrimaryDataSourceProperties;
 import com.sondertara.joya.spring.support.SpringConnectionProvider;
 import com.sondertara.joya.spring.support.SpringTxEngine;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.BeanCurrentlyInCreationException;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.AnnotatedBeanDefinition;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -36,6 +43,8 @@ import org.springframework.transaction.support.ResourceTransactionManager;
 
 import javax.sql.DataSource;
 import java.lang.annotation.Annotation;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Proxy;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -91,11 +100,11 @@ public class JoyaAutoConfiguration {
                 primaryTxManager = resolvePrimaryTransactionManager(primaryDataSource, txManagerProvider);
             } else {
                 validateSelfManagedDataSource("joya.primary", primaryProps);
-                primaryDataSource = primaryProps.initializeDataSourceBuilder().build();
+                primaryDataSource = buildSelfManagedDataSource("joya.primary", primaryProps);
                 if (primaryDataSource instanceof AutoCloseable closeable) {
                     managedResources.add(closeable);
                 }
-                primaryTxManager = new DataSourceTransactionManager(primaryDataSource);
+                primaryTxManager = null;
             }
 
             clients.put(primaryName, buildClient(
@@ -120,16 +129,15 @@ public class JoyaAutoConfiguration {
                     throw new IllegalArgumentException("Duplicate Joya datasource name '" + name + "'.");
                 }
                 validateSelfManagedDataSource("joya.datasources[" + index + "]", dsProps);
-                DataSource extraDataSource = dsProps.initializeDataSourceBuilder().build();
+                DataSource extraDataSource = buildSelfManagedDataSource("joya.datasources[" + index + "]", dsProps);
                 if (extraDataSource instanceof AutoCloseable closeable) {
                     managedResources.add(closeable);
                 }
-                PlatformTransactionManager extraTxManager = new DataSourceTransactionManager(extraDataSource);
                 clients.put(name, buildClient(
                         name,
                         dsProps,
                         extraDataSource,
-                        extraTxManager,
+                        null,
                         properties,
                         beanFactory,
                         customizers
@@ -154,7 +162,10 @@ public class JoyaAutoConfiguration {
     @ConditionalOnProperty(prefix = "joya", name = "sql-log", havingValue = "true")
     public SqlInterceptor joyaSqlLogInterceptor(JoyaProperties properties) {
         return (context, chain) -> {
-            if (properties.isSqlLogPrintArgs()) {
+            if (context.isBatch()) {
+                log.info("[Joya SQL] {} | batch rows={}", context.statement().sql(),
+                        context.attr(RewriteContext.ATTR_BATCH_ROWS));
+            } else if (properties.isSqlLogPrintArgs()) {
                 log.info("[Joya SQL] {} | args={}", context.statement().sql(), context.statement().args());
             } else {
                 log.info("[Joya SQL] {} | paramCount={}", context.statement().sql(), context.statement().args().size());
@@ -173,22 +184,62 @@ public class JoyaAutoConfiguration {
             List<JoyaClientCustomizer> customizers) {
 
         JoyaSettings settings = rootProperties.toSettings(dsProps);
+        if ((dsProps != null && dsProps.getDialect() != null && Boolean.TRUE.equals(dsProps.getDynamicDialect()))
+                || (rootProperties.getDialect() != null && rootProperties.isDynamicDialect())) {
+            log.warn("[Joya] Both 'dialect' and 'dynamic-dialect=true' are configured on datasource '{}'; "
+                    + "'dynamic-dialect' takes precedence and 'dialect' will be ignored.", clientName);
+        }
         DialectStrategy dialectStrategy = rootProperties.toDialectStrategy(dsProps, dataSource);
-        SpringConnectionProvider connectionProvider = new SpringConnectionProvider(dataSource, settings.queryTimeoutSeconds());
-        SpringTxEngine txEngine = new SpringTxEngine(dataSource, txManager);
-        List<SqlInterceptor> interceptors = resolveInterceptorsForClient(beanFactory, clientName);
-
+        // 扩展点按类型 + @Qualifier(clientName) 路由：无限定符的 Bean 对所有客户端生效，带限定符的只对同名客户端生效
         JoyaClient.Builder builder = JoyaClient.builder(dataSource)
                 .settings(settings)
                 .dialectStrategy(dialectStrategy)
-                .connectionProvider(connectionProvider)
-                .txEngine(txEngine)
-                .interceptors(interceptors);
+                .interceptors(resolveForClient(beanFactory, SqlInterceptor.class, clientName))
+                .rewriters(resolveForClient(beanFactory, SqlRewriter.class, clientName))
+                .executionListeners(resolveForClient(beanFactory, SqlExecutionListener.class, clientName))
+                .entityListeners(resolveForClient(beanFactory, EntityListener.class, clientName));
+        RowMapperFactory rowMapperFactory = resolveSingleForClient(beanFactory, RowMapperFactory.class, clientName);
+        if (rowMapperFactory != null) {
+            builder.rowMapperFactory(rowMapperFactory);
+        }
+        SqlExceptionTranslator exceptionTranslator =
+                resolveSingleForClient(beanFactory, SqlExceptionTranslator.class, clientName);
+        if (exceptionTranslator != null) {
+            builder.exceptionTranslator(exceptionTranslator);
+        }
+
+        if (txManager != null) {
+            SpringConnectionProvider connectionProvider = new SpringConnectionProvider(dataSource, settings.executionOptions().queryTimeoutSeconds());
+            SpringTxEngine txEngine = new SpringTxEngine(dataSource, txManager);
+            builder.connectionProvider(connectionProvider).txEngine(txEngine);
+        }
 
         for (JoyaClientCustomizer customizer : customizers) {
             customizer.customize(clientName, dataSource, builder);
         }
         return builder.build();
+    }
+
+    private static DataSource buildSelfManagedDataSource(
+            String propertyPath,
+            JoyaDataSourceProperties props) {
+        DataSource dataSource = props.initializeDataSourceBuilder().build();
+        Map<String, Object> hikariProps = props.getHikari();
+        if (hikariProps != null && !hikariProps.isEmpty()) {
+            try {
+                org.springframework.boot.context.properties.bind.Binder binder =
+                        new org.springframework.boot.context.properties.bind.Binder(
+                                new org.springframework.boot.context.properties.source.MapConfigurationPropertySource(hikariProps));
+                binder.bind(
+                        org.springframework.boot.context.properties.source.ConfigurationPropertyName.EMPTY,
+                        org.springframework.boot.context.properties.bind.Bindable.ofInstance(dataSource));
+            } catch (Exception e) {
+                throw new IllegalStateException(
+                        "Failed to bind '" + propertyPath + ".hikari' properties onto DataSource of type "
+                                + dataSource.getClass().getName(), e);
+            }
+        }
+        return dataSource;
     }
 
     private static void validateSelfManagedDataSource(
@@ -271,71 +322,143 @@ public class JoyaAutoConfiguration {
                         + "Mark your primary DataSource with @Primary or set joya.primary.use-spring=false.");
     }
 
+    /**
+     * 解析主库关联的 Spring 事务管理器：仅复用资源工厂直接匹配主 {@link DataSource} 的 {@link ResourceTransactionManager}
+     * （如 {@link DataSourceTransactionManager} / {@code JdbcTransactionManager} 体系），以确保 {@code DataSourceUtils}
+     * 连接同步契约成立；若容器中仅存在非 {@link DataSource} 资源工厂的事务管理器（如 {@code JpaTransactionManager}），
+     * 则记录告警并为 Joya 主客户端创建独立的 {@link DataSourceTransactionManager}。
+     */
     private static PlatformTransactionManager resolvePrimaryTransactionManager(
             DataSource primaryDataSource,
             ObjectProvider<PlatformTransactionManager> txManagerProvider) {
         for (PlatformTransactionManager tm : txManagerProvider) {
             if (tm instanceof ResourceTransactionManager rtm
-                    && matchesDataSource(rtm.getResourceFactory(), primaryDataSource)) {
+                    && SpringTxEngine.matchesDataSource(rtm.getResourceFactory(), primaryDataSource)) {
                 return tm;
             }
         }
         PlatformTransactionManager ifUnique = txManagerProvider.getIfUnique();
-        if (ifUnique != null && !(ifUnique instanceof ResourceTransactionManager)) {
-            return ifUnique;
+        if (ifUnique != null) {
+            log.warn("Found Spring PlatformTransactionManager [{}] whose resourceFactory does not match primary DataSource; "
+                    + "Joya @Transactional connection sharing only supports DataSourceTransactionManager-based managers. "
+                    + "Creating a dedicated DataSourceTransactionManager for the primary JoyaClient.",
+                    ifUnique.getClass().getName());
         }
         return new DataSourceTransactionManager(primaryDataSource);
     }
 
-    private static boolean matchesDataSource(Object resourceFactory, DataSource targetDataSource) {
-        if (resourceFactory == null || targetDataSource == null) {
-            return false;
-        }
-        if (resourceFactory == targetDataSource || resourceFactory.equals(targetDataSource)) {
-            return true;
-        }
-        Object unwrappedFactory = unwrapResourceFactory(resourceFactory);
-        Object unwrappedTarget = unwrapResourceFactory(targetDataSource);
-        return unwrappedFactory == unwrappedTarget || unwrappedFactory.equals(unwrappedTarget);
-    }
-
-    private static Object unwrapResourceFactory(Object candidate) {
-        Object current = candidate;
-        while (current != null) {
-            if (current instanceof InfrastructureProxy proxy) {
-                Object unwrapped = proxy.getWrappedObject();
-                if (unwrapped != null && unwrapped != current) {
-                    current = unwrapped;
-                    continue;
-                }
-            }
-            if (current instanceof DelegatingDataSource delegating) {
-                DataSource target = delegating.getTargetDataSource();
-                if (target != null && target != current) {
-                    current = target;
-                    continue;
-                }
-            }
-            break;
-        }
-        return current;
-    }
-
-    private static List<SqlInterceptor> resolveInterceptorsForClient(
+    /**
+     * 收集对指定客户端生效的扩展点 Bean：无 {@code @Qualifier} 的全局 Bean + 限定为 {@code clientName} 的 Bean。
+     */
+    private static <T> List<T> resolveForClient(
             ConfigurableListableBeanFactory beanFactory,
+            Class<T> type,
             String clientName) {
-        String[] beanNames = beanFactory.getBeanNamesForType(SqlInterceptor.class, false, false);
+        String[] beanNames = beanFactory.getBeanNamesForType(type, false, false);
         if (beanNames.length == 0) {
             return List.of();
         }
-        List<SqlInterceptor> matched = new ArrayList<>();
+        List<T> matched = new ArrayList<>();
         for (String beanName : beanNames) {
             Set<String> qualifiers = extractQualifierValues(beanFactory, beanName);
             if (qualifiers.isEmpty() || qualifiers.contains(clientName)) {
-                matched.add(beanFactory.getBean(beanName, SqlInterceptor.class));
+                matched.add(resolveExtensionBean(beanFactory, beanName, type));
             }
         }
         return matched;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T> T resolveExtensionBean(
+            ConfigurableListableBeanFactory beanFactory,
+            String beanName,
+            Class<T> type) {
+        try {
+            return beanFactory.getBean(beanName, type);
+        } catch (RuntimeException ex) {
+            if (!isCurrentlyInCreationFailure(ex) || !type.isInterface()) {
+                throw ex;
+            }
+            return (T) Proxy.newProxyInstance(
+                    type.getClassLoader(),
+                    new Class<?>[]{type},
+                    new java.lang.reflect.InvocationHandler() {
+                        private volatile T delegate;
+
+                        private T target() {
+                            T resolved = delegate;
+                            if (resolved == null) {
+                                synchronized (this) {
+                                    resolved = delegate;
+                                    if (resolved == null) {
+                                        resolved = beanFactory.getBean(beanName, type);
+                                        delegate = resolved;
+                                    }
+                                }
+                            }
+                            return resolved;
+                        }
+
+                        @Override
+                        public Object invoke(Object proxy, java.lang.reflect.Method method, Object[] args)
+                                throws Throwable {
+                            String name = method.getName();
+                            if ("order".equals(name) && (args == null || args.length == 0) && delegate == null) {
+                                return 0;
+                            }
+                            if ("equals".equals(name)) {
+                                return proxy == (args != null && args.length > 0 ? args[0] : null);
+                            }
+                            if ("hashCode".equals(name)) {
+                                return System.identityHashCode(proxy);
+                            }
+                            if ("toString".equals(name)) {
+                                return "LazyJoyaExtensionProxy[" + beanName + "]";
+                            }
+                            try {
+                                return method.invoke(target(), args);
+                            } catch (InvocationTargetException ite) {
+                                throw ite.getTargetException();
+                            }
+                        }
+                    });
+        }
+    }
+
+    private static boolean isCurrentlyInCreationFailure(Throwable ex) {
+        for (Throwable cur = ex; cur != null; cur = cur.getCause()) {
+            if (cur instanceof BeanCurrentlyInCreationException) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 解析单例型扩展点（如 {@code RowMapperFactory}、{@code SqlExceptionTranslator}）：
+     * 限定为当前客户端的 Bean 优先，否则取全局 Bean；同一级别出现多个候选时显式报错，避免静默二选一。
+     */
+    private static <T> T resolveSingleForClient(
+            ConfigurableListableBeanFactory beanFactory,
+            Class<T> type,
+            String clientName) {
+        List<String> scoped = new ArrayList<>();
+        List<String> global = new ArrayList<>();
+        for (String beanName : beanFactory.getBeanNamesForType(type, false, false)) {
+            Set<String> qualifiers = extractQualifierValues(beanFactory, beanName);
+            if (qualifiers.contains(clientName)) {
+                scoped.add(beanName);
+            } else if (qualifiers.isEmpty()) {
+                global.add(beanName);
+            }
+        }
+        List<String> candidates = scoped.isEmpty() ? global : scoped;
+        if (candidates.size() > 1) {
+            throw new IllegalStateException("Multiple " + type.getSimpleName() + " beans match Joya client '"
+                    + clientName + "': " + candidates + ". Keep exactly one global bean, or qualify one per client "
+                    + "with @Qualifier(\"" + clientName + "\").");
+        }
+        return candidates.isEmpty() ? null : beanFactory.getBean(candidates.get(0), type);
     }
 
     private static Set<String> extractQualifierValues(ConfigurableListableBeanFactory beanFactory, String beanName) {

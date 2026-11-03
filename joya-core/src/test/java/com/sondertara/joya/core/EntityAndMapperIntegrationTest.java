@@ -1,10 +1,9 @@
 package com.sondertara.joya.core;
 
-import com.sondertara.joya.core.cache.CacheHolder;
-import com.sondertara.joya.core.jdbc.dao.JoyaMapper;
+import com.sondertara.joya.core.metadata.LocalTableMetaCache;
+import com.sondertara.joya.core.mapper.JoyaMapper;
 import com.sondertara.joya.core.jdbc.resultset.mapper.BeanRowMapper;
-import com.sondertara.joya.core.jdbc.support.annotation.Query;
-import com.sondertara.joya.core.jdbc.support.listener.EntityListener;
+import com.sondertara.joya.core.listener.EntityListener;
 import com.sondertara.joya.core.kernel.interceptor.Chain;
 import com.sondertara.joya.core.kernel.interceptor.RewriteContext;
 import com.sondertara.joya.core.kernel.interceptor.SqlInterceptor;
@@ -16,6 +15,9 @@ import com.sondertara.joya.core.kernel.statement.SqlParameter;
 import com.sondertara.joya.core.kernel.statement.SqlStatement;
 import com.sondertara.joya.core.kernel.statement.StatementMetadata;
 import com.sondertara.joya.core.kernel.statement.TableRef;
+import com.sondertara.joya.core.kernel.observe.SqlExecutionContext;
+import com.sondertara.joya.core.kernel.observe.SqlExecutionListener;
+import com.sondertara.joya.core.kernel.observe.SqlExecutionResult;
 import com.sondertara.joya.core.metadata.EntityMetadataContext;
 import com.sondertara.joya.core.naming.NamingPolicy;
 import com.sondertara.joya.core.query.criterion.WhereCriterion;
@@ -334,47 +336,104 @@ class EntityAndMapperIntegrationTest {
         }
     }
 
-    /** 自定义 Mapper 接口：同时验证 JoyaMapper 基础方法、派生查询、@Query 注解与 default 方法。 */
+    /** 自定义 Mapper 接口：验证 JoyaMapper 基础方法与 default 方法（query / ops / sql）。 */
     public interface AccountMapper extends JoyaMapper<Account> {
 
-        List<Account> findByUserName(String userName);
+        default List<Account> findByUserName(String userName) {
+            return query().where(w -> w.eq(Account::getUserName, userName)).list();
+        }
 
-        List<Account> findByDeptIdAndAgeGreaterThan(Long deptId, Integer minAge);
+        default List<Account> findByDeptIdAndAgeGreaterThan(Long deptId, Integer minAge) {
+            return query().where(w -> w.eq(Account::getDeptId, deptId).gt(Account::getAge, minAge)).list();
+        }
 
-        List<Account> findByUserNameStartingWithOrAgeBetween(String prefix, Integer lowAge, Integer highAge);
+        default List<Account> findByUserNameStartingWithOrAgeBetween(String prefix, Integer lowAge, Integer highAge) {
+            return query()
+                    .where(w -> w.or(sub -> sub.startsWith(Account::getUserName, prefix)
+                            .between(Account::getAge, lowAge, highAge)))
+                    .list();
+        }
 
-        List<Account> findByIdIn(Collection<Long> ids);
+        default List<Account> findByIdIn(Collection<Long> ids) {
+            return query().where(w -> w.in(Account::getId, ids)).list();
+        }
 
-        long countByDeptId(Long deptId);
+        default long countByDeptId(Long deptId) {
+            return query().where(w -> w.eq(Account::getDeptId, deptId)).count();
+        }
 
-        boolean existsByUserName(String userName);
+        default boolean existsByUserName(String userName) {
+            return query().where(w -> w.eq(Account::getUserName, userName)).exists();
+        }
 
-        List<Account> findFirst2ByDeptId(Long deptId);
+        default List<Account> findFirst2ByDeptId(Long deptId) {
+            return query().where(w -> w.eq(Account::getDeptId, deptId)).limit(2).list();
+        }
 
-        List<Account> findByDeptIdOrderByAgeDesc(Long deptId);
+        default List<Account> findByDeptIdOrderByAgeDesc(Long deptId) {
+            return query().where(w -> w.eq(Account::getDeptId, deptId)).orderByDesc(Account::getAge).list();
+        }
 
-        List<Account> findByDeptIdOrderByAgeAscIdDesc(Long deptId);
+        default List<Account> findByDeptIdOrderByAgeAscIdDesc(Long deptId) {
+            return query()
+                    .where(w -> w.eq(Account::getDeptId, deptId))
+                    .orderByAsc(Account::getAge)
+                    .orderByDesc(Account::getId)
+                    .list();
+        }
 
-        List<Account> findAllByOrderByIdDesc();
+        default List<Account> findAllByOrderByIdDesc() {
+            return query().orderByDesc(Account::getId).list();
+        }
 
-        int updateUserNameAndAgeById(String userName, Integer age, Long id);
+        default int updateUserNameAndAgeById(String userName, Integer age, Long id) {
+            return (int) ops().update()
+                    .set(Account::getUserName, userName)
+                    .set(Account::getAge, age)
+                    .where(w -> w.eq(Account::getId, id))
+                    .execute()
+                    .affectedRows();
+        }
 
-        int updateAgeAndUserNameById(Integer age, String userName, Long id);
+        default int updateAgeAndUserNameById(Integer age, String userName, Long id) {
+            return (int) ops().update()
+                    .set(Account::getAge, age)
+                    .set(Account::getUserName, userName)
+                    .where(w -> w.eq(Account::getId, id))
+                    .execute()
+                    .affectedRows();
+        }
 
-        int updateById(Account entity, Long id);
+        default int updateById(Account entity, Long id) {
+            entity.setId(id);
+            return (int) ops().update(entity).affectedRows();
+        }
 
-        int updateIgnoreNullByUserName(Account patch, String userName);
+        default int updateIgnoreNullByUserName(Account patch, String userName) {
+            return (int) ops().update()
+                    .setIfPresent(Account::getUserName, patch.getUserName())
+                    .setIfPresent(Account::getAge, patch.getAge())
+                    .where(w -> w.eq(Account::getUserName, userName))
+                    .execute()
+                    .affectedRows();
+        }
 
-        int deleteByUserName(String userName);
+        default int deleteByUserName(String userName) {
+            return (int) ops().delete().where(w -> w.eq(Account::getUserName, userName)).execute().affectedRows();
+        }
 
-        @Query("SELECT * FROM t_account WHERE dept_id = ?2 AND age >= ?1 ORDER BY id ASC")
-        List<Account> findByOutOfOrderParams(Integer minAge, Long deptId);
+        default List<Account> findByOutOfOrderParams(Integer minAge, Long deptId) {
+            return sql("SELECT * FROM t_account WHERE dept_id = ? AND age >= ? ORDER BY id ASC", deptId, minAge)
+                    .list(Account.class);
+        }
 
-        @Query("SELECT balance FROM t_account WHERE id = ?1")
-        Optional<BigDecimal> findBalanceById(Long id);
+        default Optional<BigDecimal> findBalanceById(Long id) {
+            return sql("SELECT balance FROM t_account WHERE id = ?", id).value(BigDecimal.class);
+        }
 
-        @Query("UPDATE t_account SET age = ?2 WHERE id = ?1")
-        int updateAgeById(Long id, Integer newAge);
+        default int updateAgeById(Long id, Integer newAge) {
+            return sql("UPDATE t_account SET age = ? WHERE id = ?", newAge, id).update();
+        }
 
         default Optional<Account> findFirstByName(String name) {
             List<Account> list = findByUserName(name);
@@ -383,6 +442,7 @@ class EntityAndMapperIntegrationTest {
     }
 
     private List<SqlStatement> executedStatements;
+    private List<SqlStatement> executedBatches;
     private JoyaClient joya;
 
     @BeforeEach
@@ -391,12 +451,21 @@ class EntityAndMapperIntegrationTest {
         ds.setURL("jdbc:h2:mem:joya_entity_mapper_test;DB_CLOSE_DELAY=-1");
 
         executedStatements = new ArrayList<>();
+        executedBatches = new ArrayList<>();
         SqlInterceptor recorder = (RewriteContext context, Chain chain) -> {
             executedStatements.add(context.statement());
             return chain.proceed(context);
         };
+        SqlExecutionListener batchRecorder = new SqlExecutionListener() {
+            @Override
+            public void beforeExecute(SqlExecutionContext ctx) {
+                if (ctx.batch()) {
+                    executedBatches.add(ctx.statement());
+                }
+            }
+        };
 
-        joya = JoyaClient.builder(ds).interceptor(recorder).build();
+        joya = JoyaClient.builder(ds).interceptor(recorder).executionListener(batchRecorder).build();
         joya.sql("""
                 DROP TABLE IF EXISTS t_account;
                 CREATE TABLE t_account (
@@ -607,10 +676,16 @@ class EntityAndMapperIntegrationTest {
         Account bob = joya.of(Account.class).findById(2L).orElseThrow();
         bob.setAge(23);
         executedStatements.clear();
+        executedBatches.clear();
         joya.of(Account.class).updateAll(List.of(bob));
-        assertEquals(1, executedStatements.size());
+        assertEquals(1, executedBatches.size(), "批量写由执行观测记录一次");
+        assertEquals(Account.class, executedBatches.get(0).metadata().entityType());
+        assertTrue(executedBatches.get(0).metadata().tables().contains(TableRef.of("t_account")));
+        assertEquals(1, executedStatements.size(), "批量写同样经过文本拦截链，整批仅一次");
+        assertEquals(Operation.UPDATE, executedStatements.get(0).metadata().operation());
         assertEquals(Account.class, executedStatements.get(0).metadata().entityType());
-        assertTrue(executedStatements.get(0).metadata().tables().contains(TableRef.of("t_account")));
+        assertNotNull(executedStatements.get(0).metadata().dbType(), "批量语句应注入 dbType");
+        assertTrue(executedStatements.get(0).parameters().isEmpty(), "批量探针不携带参数");
 
         executedStatements.clear();
         joya.of(Account.class).truncate();
@@ -899,7 +974,7 @@ class EntityAndMapperIntegrationTest {
         assertTrue(executedStatements.isEmpty(), "所有零列 INSERT 都必须在规划期失败且不得部分写入");
         assertEquals(0L, ops.count());
 
-        EntityMetadataContext meta = CacheHolder.tableMetaCache().getMetadataContext(GeneratedOnlyEntity.class);
+        EntityMetadataContext meta = LocalTableMetaCache.getMetadataContext(GeneratedOnlyEntity.class);
         assertThrows(IllegalStateException.class, () -> InsertStatementFactory.createBatch(
                 meta, List.of(), List.of(), NamingPolicy.DEFAULT, 100, false));
 
@@ -910,7 +985,7 @@ class EntityAndMapperIntegrationTest {
 
     @Test
     void batchFactories_rejectReadonlyAndGeneratedColumns_andKeepExplicitPrimaryKey() {
-        EntityMetadataContext meta = CacheHolder.tableMetaCache().getMetadataContext(BatchGuardEntity.class);
+        EntityMetadataContext meta = LocalTableMetaCache.getMetadataContext(BatchGuardEntity.class);
 
         BatchSqlStatement explicitKeyInsert = InsertStatementFactory.createBatch(
                 meta,

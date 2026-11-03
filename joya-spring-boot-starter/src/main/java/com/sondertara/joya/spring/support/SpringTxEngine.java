@@ -1,37 +1,39 @@
 package com.sondertara.joya.spring.support;
 
-import com.sondertara.joya.core.kernel.JoyaTemplate;
+import com.sondertara.joya.core.kernel.ExecutionKernel;
+import com.sondertara.joya.core.kernel.connection.ConnectionProvider;
 import com.sondertara.joya.core.tx.IllegalTxStateException;
 import com.sondertara.joya.core.tx.Tx;
 import com.sondertara.joya.core.tx.TxEngine;
 import com.sondertara.joya.core.tx.TxException;
-import com.sondertara.joya.core.tx.TxImpl;
 import com.sondertara.joya.core.tx.TxOptions;
 import com.sondertara.joya.core.tx.TxOutcome;
 import com.sondertara.joya.core.tx.TxSession;
+import com.sondertara.joya.core.tx.TxSessionSupport;
 import com.sondertara.joya.core.tx.TxState;
 import com.sondertara.joya.core.tx.TxTimeoutException;
 import com.sondertara.joya.core.tx.UnexpectedRollbackException;
+import org.springframework.core.InfrastructureProxy;
+import org.springframework.jdbc.datasource.DelegatingDataSource;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.TransactionException;
 import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.support.DefaultTransactionDefinition;
+import org.springframework.transaction.support.ResourceTransactionManager;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import javax.sql.DataSource;
 import java.sql.Connection;
 import java.sql.SQLException;
-import java.util.ArrayDeque;
-import java.util.Deque;
 import java.util.Objects;
 import java.util.OptionalInt;
 import java.util.function.Consumer;
 
 /**
  * Spring 环境事务引擎：将 {@code joya.tx(...)} 显式事务委托给 {@link PlatformTransactionManager}，
- * 通过 {@link TxSession} 适配并统一复用 {@link TxImpl}。
+ * 通过 {@link TxSession} 适配；{@link Tx} 门面由 {@code TxStarter} 统一包装为 {@code TxImpl}。
  *
  * <ul>
  *   <li>当外层已有针对同一 {@link DataSource} 的 {@code @Transactional} 时，以 {@code PROPAGATION_REQUIRED}
@@ -48,10 +50,54 @@ public final class SpringTxEngine implements TxEngine {
     public SpringTxEngine(DataSource dataSource, PlatformTransactionManager transactionManager) {
         this.dataSource = Objects.requireNonNull(dataSource, "dataSource must not be null");
         this.transactionManager = Objects.requireNonNull(transactionManager, "transactionManager must not be null");
+        if (!(transactionManager instanceof ResourceTransactionManager rtm)
+                || !matchesDataSource(rtm.getResourceFactory(), dataSource)) {
+            throw new IllegalArgumentException(
+                    "SpringTxEngine requires a ResourceTransactionManager (such as DataSourceTransactionManager) "
+                            + "whose resourceFactory matches the configured DataSource, got: "
+                            + transactionManager.getClass().getName());
+        }
+    }
+
+    /**
+     * 判断事务管理器关联的 {@code resourceFactory} 是否与目标 {@link DataSource} 属于同一物理数据源（支持剥离代理与委托包装）。
+     */
+    public static boolean matchesDataSource(Object resourceFactory, DataSource targetDataSource) {
+        if (resourceFactory == null || targetDataSource == null) {
+            return false;
+        }
+        if (resourceFactory == targetDataSource || resourceFactory.equals(targetDataSource)) {
+            return true;
+        }
+        Object unwrappedFactory = unwrapResourceFactory(resourceFactory);
+        Object unwrappedTarget = unwrapResourceFactory(targetDataSource);
+        return unwrappedFactory == unwrappedTarget || unwrappedFactory.equals(unwrappedTarget);
+    }
+
+    private static Object unwrapResourceFactory(Object candidate) {
+        Object current = candidate;
+        while (current != null) {
+            if (current instanceof InfrastructureProxy proxy) {
+                Object unwrapped = proxy.getWrappedObject();
+                if (unwrapped != null && unwrapped != current) {
+                    current = unwrapped;
+                    continue;
+                }
+            }
+            if (current instanceof DelegatingDataSource delegating) {
+                DataSource target = delegating.getTargetDataSource();
+                if (target != null && target != current) {
+                    current = target;
+                    continue;
+                }
+            }
+            break;
+        }
+        return current;
     }
 
     @Override
-    public Tx begin(JoyaTemplate rootTemplate, TxOptions options) {
+    public TxSession open(ExecutionKernel rootTemplate, TxOptions options) {
         Objects.requireNonNull(rootTemplate, "rootTemplate must not be null");
         Objects.requireNonNull(options, "options must not be null");
 
@@ -77,14 +123,13 @@ public final class SpringTxEngine implements TxEngine {
             def.setReadOnly(true);
         }
         if (options.timeout() != null) {
-            int timeoutSec = (int) Math.max(1, (options.timeout().toNanos() + 999_999_999L) / 1_000_000_000L);
-            def.setTimeout(timeoutSec);
+            def.setTimeout(TxSessionSupport.ceilSeconds(options.timeout()));
         }
 
         TransactionStatus status = null;
         try {
             status = transactionManager.getTransaction(def);
-            return new TxImpl(rootTemplate, new SpringTxSession(rootTemplate, transactionManager, status, options));
+            return new SpringTxSession(rootTemplate, transactionManager, status, options);
         } catch (Throwable beginFailure) {
             if (status != null) {
                 try {
@@ -116,36 +161,73 @@ public final class SpringTxEngine implements TxEngine {
         return transactionManager;
     }
 
+    @Override
+    public void validateConfiguration(DataSource clientDataSource, ConnectionProvider connectionProvider) {
+        if (clientDataSource != this.dataSource) {
+            throw new IllegalArgumentException(
+                    "SpringTxEngine DataSource must match JoyaClient DataSource");
+        }
+        if (!(this.transactionManager instanceof ResourceTransactionManager rtm)
+                || !matchesDataSource(rtm.getResourceFactory(), clientDataSource)) {
+            throw new IllegalArgumentException(
+                    "SpringTxEngine requires a ResourceTransactionManager whose resourceFactory matches JoyaClient DataSource");
+        }
+        ConnectionProvider unwrapped = connectionProvider == null ? null : connectionProvider.unwrap();
+        if (!(unwrapped instanceof SpringConnectionProvider scp)) {
+            throw new IllegalArgumentException(
+                    "SpringTxEngine requires a matching SpringConnectionProvider on JoyaClient.Builder");
+        }
+        if (scp.dataSource() != this.dataSource) {
+            throw new IllegalArgumentException(
+                    "SpringTxEngine DataSource must match SpringConnectionProvider DataSource");
+        }
+    }
+
     private static final class SpringTxSession implements TxSession {
 
-        private final JoyaTemplate rootTemplate;
+        private final ExecutionKernel rootTemplate;
         private final PlatformTransactionManager txManager;
         private final TransactionStatus status;
-        private final Thread ownerThread;
-        private final long deadlineNanos;
-        private final Deque<Object> savepoints = new ArrayDeque<>();
+        private final boolean synchronizationActiveAtStart;
+        private final TxSessionSupport<Object> support = new TxSessionSupport<>();
         private TxOutcome terminalOutcome;
         private boolean physicalRollbackConfirmed;
         private boolean rollbackOnly;
         private boolean completed;
         private boolean closed;
 
-        SpringTxSession(JoyaTemplate rootTemplate, PlatformTransactionManager txManager,
+        SpringTxSession(ExecutionKernel rootTemplate, PlatformTransactionManager txManager,
                         TransactionStatus status, TxOptions options) {
             this.rootTemplate = rootTemplate;
             this.txManager = txManager;
             this.status = status;
-            this.ownerThread = Thread.currentThread();
-            this.deadlineNanos = options.timeout() == null ? 0L : System.nanoTime() + options.timeout().toNanos();
+            this.synchronizationActiveAtStart = TransactionSynchronizationManager.isActualTransactionActive();
+            this.support.startDeadline(options.timeout());
+            if (!status.isNewTransaction() && TransactionSynchronizationManager.isSynchronizationActive()) {
+                TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                    @Override
+                    public void afterCompletion(int syncStatus) {
+                        completed = true;
+                        if (terminalOutcome == null) {
+                            terminalOutcome = switch (syncStatus) {
+                                case STATUS_COMMITTED -> TxOutcome.COMMITTED;
+                                case STATUS_ROLLED_BACK -> TxOutcome.ROLLED_BACK;
+                                default -> TxOutcome.UNKNOWN;
+                            };
+                        }
+                    }
+                });
+            }
         }
 
         @Override
         public Connection acquire() throws SQLException {
-            checkOwner();
-            if (closed || completed) {
-                throw new IllegalTxStateException(TxState.COMMITTED, TxState.ACTIVE, TxState.COMMITTED.allowedTransitions());
+            support.checkOwner();
+            if (closed || !isActive()) {
+                TxState current = terminalOutcome == TxOutcome.ROLLED_BACK ? TxState.ROLLED_BACK : TxState.COMMITTED;
+                throw new IllegalTxStateException(current, TxState.ACTIVE, current.allowedTransitions());
             }
-            checkDeadline();
+            support.checkDeadline(this::markRollbackOnly);
             return rootTemplate.connections().acquire();
         }
 
@@ -156,23 +238,14 @@ public final class SpringTxEngine implements TxEngine {
 
         @Override
         public OptionalInt queryTimeoutSeconds() {
-            if (deadlineNanos != 0L) {
-                long remaining = deadlineNanos - System.nanoTime();
-                return OptionalInt.of((int) Math.max(1, (remaining + 999_999_999L) / 1_000_000_000L));
-            }
-            OptionalInt providerTimeout = rootTemplate.connections().queryTimeoutSeconds();
-            if (providerTimeout != null && providerTimeout.isPresent()) {
-                return providerTimeout;
-            }
-            int configuredTimeout = rootTemplate.executionOptions().queryTimeoutSeconds();
-            return configuredTimeout > 0 ? OptionalInt.of(configuredTimeout) : OptionalInt.empty();
+            return support.resolveQueryTimeoutSeconds(TxSessionSupport.resolveDefaultQueryTimeout(rootTemplate));
         }
 
         @Override
         public void enterSavepoint() {
-            checkOwner();
+            support.checkOwner();
             try {
-                savepoints.push(status.createSavepoint());
+                support.pushSavepoint(status.createSavepoint());
             } catch (TransactionException e) {
                 throw new TxException("Failed to create savepoint", e);
             }
@@ -180,8 +253,8 @@ public final class SpringTxEngine implements TxEngine {
 
         @Override
         public void exitSavepointCommit() {
-            checkOwner();
-            Object savepoint = savepoints.pop();
+            support.checkOwner();
+            Object savepoint = support.popSavepoint();
             try {
                 status.releaseSavepoint(savepoint);
             } catch (TransactionException e) {
@@ -195,8 +268,8 @@ public final class SpringTxEngine implements TxEngine {
 
         @Override
         public void exitSavepointRollback() {
-            checkOwner();
-            Object savepoint = savepoints.pop();
+            support.checkOwner();
+            Object savepoint = support.popSavepoint();
             try {
                 status.rollbackToSavepoint(savepoint);
             } catch (Throwable rollbackFailure) {
@@ -263,7 +336,7 @@ public final class SpringTxEngine implements TxEngine {
 
         @Override
         public void exitCommit() {
-            checkOwner();
+            support.checkOwner();
             if (rollbackOnly || status.isRollbackOnly()) {
                 completed = true;
                 if (!status.isCompleted()) {
@@ -274,6 +347,18 @@ public final class SpringTxEngine implements TxEngine {
                 }
                 terminalOutcome = TxOutcome.ROLLED_BACK;
                 throw new UnexpectedRollbackException("Transaction was marked rollback-only; commit refused (invariant I7).");
+            }
+            if (support.isDeadlineExpired()) {
+                this.rollbackOnly = true;
+                completed = true;
+                if (!status.isCompleted()) {
+                    txManager.rollback(status);
+                    if (status.isNewTransaction()) {
+                        physicalRollbackConfirmed = true;
+                    }
+                }
+                terminalOutcome = TxOutcome.ROLLED_BACK;
+                throw new TxTimeoutException("Transaction timed out; it has been marked rollback-only.");
             }
             try {
                 txManager.commit(status);
@@ -296,7 +381,7 @@ public final class SpringTxEngine implements TxEngine {
 
         @Override
         public void exitRollback() {
-            checkOwner();
+            support.checkOwner();
             completed = true;
             try {
                 if (!status.isCompleted()) {
@@ -317,7 +402,7 @@ public final class SpringTxEngine implements TxEngine {
 
         @Override
         public void markRollbackOnly() {
-            checkOwner();
+            support.checkOwner();
             this.rollbackOnly = true;
             if (!status.isCompleted()) {
                 status.setRollbackOnly();
@@ -331,7 +416,9 @@ public final class SpringTxEngine implements TxEngine {
 
         @Override
         public boolean isActive() {
-            return !completed && !status.isCompleted();
+            return !completed
+                    && !status.isCompleted()
+                    && (!synchronizationActiveAtStart || TransactionSynchronizationManager.isActualTransactionActive());
         }
 
         @Override
@@ -351,13 +438,20 @@ public final class SpringTxEngine implements TxEngine {
 
         @Override
         public void close() {
-            checkOwner();
+            support.checkOwner();
             if (closed) {
                 return;
             }
             closed = true;
             if (!completed) {
+                boolean activeBeforeClose = isActive();
                 completed = true;
+                if (!activeBeforeClose) {
+                    if (terminalOutcome == null) {
+                        terminalOutcome = TxOutcome.UNKNOWN;
+                    }
+                    return;
+                }
                 try {
                     if (!status.isCompleted()) {
                         txManager.rollback(status);
@@ -373,21 +467,6 @@ public final class SpringTxEngine implements TxEngine {
                     terminalOutcome = TxOutcome.UNKNOWN;
                     throw e;
                 }
-            }
-        }
-
-        private void checkOwner() {
-            if (Thread.currentThread() != ownerThread) {
-                throw new TxException("Transaction is owned by thread [" + ownerThread.getName()
-                        + "] but was used by [" + Thread.currentThread().getName()
-                        + "]. A transaction must not cross threads (invariant I9).");
-            }
-        }
-
-        private void checkDeadline() {
-            if (deadlineNanos != 0L && System.nanoTime() > deadlineNanos) {
-                markRollbackOnly();
-                throw new TxTimeoutException("Transaction timed out; it has been marked rollback-only.");
             }
         }
     }

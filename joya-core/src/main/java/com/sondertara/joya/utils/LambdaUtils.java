@@ -19,7 +19,7 @@ import java.util.Objects;
 public final class LambdaUtils {
 
     private record LambdaMeta(
-            SerializedLambda serializedLambda,
+            String implMethodName,
             Class<?> receiverClass,
             Class<?> returnType,
             String propertyName
@@ -44,14 +44,15 @@ public final class LambdaUtils {
      * 解析 Lambda 表达式获取 {@link SerializedLambda}。
      */
     public static <T> SerializedLambda resolve(IGetter<T, ?> function) {
-        return resolveMeta(function).serializedLambda();
+        Objects.requireNonNull(function, "Lambda function must not be null");
+        return extractSerializedLambda(function);
     }
 
     /**
      * 获取方法引用的底层方法名（如 {@code getUserName}）。
      */
     public static <T> String getImplMethodName(IGetter<T, ?> function) {
-        return resolveMeta(function).serializedLambda().getImplMethodName();
+        return resolveMeta(function).implMethodName();
     }
 
     /**
@@ -90,10 +91,12 @@ public final class LambdaUtils {
 
     private static LambdaMeta parseMeta(IGetter<?, ?> function) {
         SerializedLambda lambda = extractSerializedLambda(function);
-        Class<?> receiverClass = parseReceiverClass(lambda);
-        Class<?> returnType = parseReturnType(lambda);
-        String propertyName = parsePropertyName(lambda.getImplMethodName());
-        return new LambdaMeta(lambda, receiverClass, returnType, propertyName);
+        ClassLoader preferredLoader = function.getClass().getClassLoader();
+        String implMethodName = lambda.getImplMethodName();
+        Class<?> receiverClass = parseReceiverClass(lambda, preferredLoader);
+        Class<?> returnType = parseReturnType(lambda, preferredLoader);
+        String propertyName = parsePropertyName(implMethodName);
+        return new LambdaMeta(implMethodName, receiverClass, returnType, propertyName);
     }
 
     private static SerializedLambda extractSerializedLambda(IGetter<?, ?> function) {
@@ -110,23 +113,23 @@ public final class LambdaUtils {
         }
     }
 
-    private static Class<?> parseReceiverClass(SerializedLambda lambda) {
+    private static Class<?> parseReceiverClass(SerializedLambda lambda, ClassLoader preferredLoader) {
         String type = lambda.getInstantiatedMethodType();
         if (type != null && type.startsWith("(L")) {
             int end = type.indexOf(';');
             if (end > 2) {
-                return loadClass(type.substring(2, end).replace('/', '.'));
+                return loadClass(type.substring(2, end).replace('/', '.'), preferredLoader);
             }
         }
-        return loadClass(lambda.getImplClass().replace('/', '.'));
+        return loadClass(lambda.getImplClass().replace('/', '.'), preferredLoader);
     }
 
-    private static Class<?> parseReturnType(SerializedLambda lambda) {
+    private static Class<?> parseReturnType(SerializedLambda lambda, ClassLoader preferredLoader) {
         String type = lambda.getInstantiatedMethodType();
         if (type == null || type.indexOf(')') < 0) {
             type = lambda.getImplMethodSignature();
         }
-        return boxed(descriptorToClass(type.substring(type.indexOf(')') + 1)));
+        return boxed(descriptorToClass(type.substring(type.indexOf(')') + 1), preferredLoader));
     }
 
     private static String parsePropertyName(String method) {
@@ -155,7 +158,7 @@ public final class LambdaUtils {
         return Void.class;
     }
 
-    private static Class<?> descriptorToClass(String descriptor) {
+    private static Class<?> descriptorToClass(String descriptor, ClassLoader preferredLoader) {
         return switch (descriptor.charAt(0)) {
             case 'I' -> int.class;
             case 'J' -> long.class;
@@ -166,16 +169,28 @@ public final class LambdaUtils {
             case 'B' -> byte.class;
             case 'C' -> char.class;
             case 'V' -> void.class;
-            case 'L' -> loadClass(descriptor.substring(1, descriptor.length() - 1).replace('/', '.'));
-            case '[' -> loadClass(descriptor.replace('/', '.'));
+            case 'L' -> loadClass(descriptor.substring(1, descriptor.length() - 1).replace('/', '.'), preferredLoader);
+            case '[' -> loadClass(descriptor.replace('/', '.'), preferredLoader);
             default -> throw new TaraException("Unsupported type descriptor: " + descriptor);
         };
     }
 
     /** 按线程上下文类加载器优先加载类。 */
     public static Class<?> loadClass(String className) {
+        return loadClass(className, null);
+    }
+
+    /** 按指定类加载器（如 Lambda 所在类加载器）→ 线程上下文类加载器 → 当前类加载器依次加载类。 */
+    public static Class<?> loadClass(String className, ClassLoader preferredLoader) {
+        if (preferredLoader != null) {
+            try {
+                return Class.forName(className, false, preferredLoader);
+            } catch (ClassNotFoundException ignored) {
+                // 回退到线程上下文类加载器
+            }
+        }
         ClassLoader contextLoader = Thread.currentThread().getContextClassLoader();
-        if (contextLoader != null) {
+        if (contextLoader != null && contextLoader != preferredLoader) {
             try {
                 return Class.forName(className, false, contextLoader);
             } catch (ClassNotFoundException ignored) {

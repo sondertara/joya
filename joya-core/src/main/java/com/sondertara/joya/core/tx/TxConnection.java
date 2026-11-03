@@ -4,9 +4,8 @@ import com.sondertara.joya.core.kernel.connection.ConnectionProvider;
 
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.sql.SQLFeatureNotSupportedException;
 import java.sql.Savepoint;
-import java.util.ArrayDeque;
-import java.util.Deque;
 import java.util.OptionalInt;
 
 /**
@@ -14,8 +13,7 @@ import java.util.OptionalInt;
  *
  * <p>核心不变量：
  * <ul>
- *   <li><b>I2 显式状态</b>：事务存在性由 {@link TxStatus} 表达，
- *       <b>绝不</b>从 {@code connection.getAutoCommit()} 反推。</li>
+ *   <li><b>I2 显式状态</b>：事务存在性由 {@link TxState} 表达，<b>绝不</b>从 {@code connection.getAutoCommit()} 反推。</li>
  *   <li><b>I4 还原点只捕获一次</b>：开启事务时捕获 {@code autoCommit / isolation / readOnly}，关闭时还原。</li>
  *   <li><b>I5 连接不可替换</b>：{@code connection} 是 {@code final}，事务期内不调 {@code isValid()}。</li>
  *   <li><b>I6 close 幂等</b>：归还连接池恰好一次。</li>
@@ -34,17 +32,15 @@ public final class TxConnection implements TxSession {
     /** 全局默认查询超时秒数（无事务 deadline 时回退使用）。 */
     private final OptionalInt defaultQueryTimeoutSeconds;
 
-    /** 所有者线程：虚拟线程下尤其重要，跨线程使用必须响亮失败（I9）。 */
-    private final Thread ownerThread;
+    /** 会话公共支撑：所有者线程守卫（I9）、截止时间计时与嵌套保存点栈。 */
+    private final TxSessionSupport<Savepoint> support = new TxSessionSupport<>();
 
     private final long startedAtNanos = System.nanoTime();
 
     private RestorePoint restorePoint;
-    private TxStatus status = TxStatus.initial();
-    /** 保存点栈：支持 savepoint 内再开 savepoint。 */
-    private final Deque<Savepoint> savepoints = new ArrayDeque<>();
-    /** 截止时间（纳秒）；0 表示不限时。 */
-    private long deadlineNanos;
+    private TxState state = TxState.NONE;
+    private int depth;
+    private boolean globalRollbackOnly;
     private boolean commitFailed;
     private boolean rollbackFailed;
     private boolean physicalRollbackConfirmed;
@@ -67,7 +63,6 @@ public final class TxConnection implements TxSession {
         this.connection = connection;
         this.baseConnections = baseConnections;
         this.defaultQueryTimeoutSeconds = defaultQueryTimeoutSeconds != null ? defaultQueryTimeoutSeconds : OptionalInt.empty();
-        this.ownerThread = Thread.currentThread();
     }
 
     // ===== 生命周期 =====
@@ -76,33 +71,38 @@ public final class TxConnection implements TxSession {
      * 开启物理事务：捕获还原点（I4）、施加选项、启动超时计时。
      */
     public void begin(TxOptions options) throws SQLException {
-        checkOwner();
-        if (status.state() != TxState.NONE) {
-            throw new IllegalTxStateException(status.state(), TxState.ACTIVE, status.state().allowedTransitions());
+        support.checkOwner();
+        if (state != TxState.NONE) {
+            throw new IllegalTxStateException(state, TxState.ACTIVE, state.allowedTransitions());
         }
         restorePoint = RestorePoint.capture(connection);
         beginIncomplete = true;
         applyOptions(options);
-        if (options.timeout() != null) {
-            deadlineNanos = System.nanoTime() + options.timeout().toNanos();
-        }
-        status = status.transitionTo(TxState.ACTIVE).enter();
+        support.startDeadline(options.timeout());
+        transitionTo(TxState.ACTIVE);
+        depth++;
         beginIncomplete = false;
     }
 
     /**
      * 提交物理事务；若期间被标记仅回滚，则转为回滚并抛 {@link UnexpectedRollbackException}（I7）。
      */
+    @Override
     public void exitCommit() throws SQLException {
-        checkOwner();
-        status = status.exit();
-        if (!status.isOutermost()) {
+        support.checkOwner();
+        depth = Math.max(0, depth - 1);
+        if (depth > 0) {
             return;
         }
-        if (status.globalRollbackOnly()) {
+        if (globalRollbackOnly) {
             doRollback();
             throw new UnexpectedRollbackException(
                     "Transaction was marked rollback-only; commit refused (invariant I7).");
+        }
+        if (support.isDeadlineExpired()) {
+            markRollbackOnlyState();
+            doRollback();
+            throw new TxTimeoutException("Transaction timed out; it has been marked rollback-only.");
         }
         doCommit();
     }
@@ -110,59 +110,65 @@ public final class TxConnection implements TxSession {
     /**
      * 回滚物理事务。
      */
+    @Override
     public void exitRollback() throws SQLException {
-        checkOwner();
-        status = status.exit();
-        if (!status.isOutermost()) {
-            status = status.markRollbackOnly();
+        support.checkOwner();
+        depth = Math.max(0, depth - 1);
+        if (depth > 0) {
+            markRollbackOnlyState();
             return;
         }
-        if (status.isActive()) {
+        if (isActive()) {
             doRollback();
         }
     }
 
     /** 主动标记仅回滚（业务校验失败但不抛异常时使用）。 */
+    @Override
     public void markRollbackOnly() {
-        checkOwner();
-        if (status.isActive()) {
-            status = status.markRollbackOnly();
+        support.checkOwner();
+        if (isActive()) {
+            markRollbackOnlyState();
         }
     }
 
     // ===== 保存点（Tx#savepoint / Tx#savepointCall） =====
 
     /** 创建保存点并进入一层。保存点创建成功后才增加深度，失败不留下半状态。 */
+    @Override
     public void enterSavepoint() throws SQLException {
-        checkOwner();
+        support.checkOwner();
         requireActive();
-        savepoints.push(connection.setSavepoint());
-        status = status.enter();
+        support.pushSavepoint(connection.setSavepoint());
+        depth++;
     }
 
     /** 成功退出保存点层：释放保存点，不影响外层物理事务。 */
+    @Override
     public void exitSavepointCommit() throws SQLException {
-        checkOwner();
-        Savepoint sp = savepoints.pop();
-        status = status.exit();
+        support.checkOwner();
+        Savepoint sp = support.popSavepoint();
+        depth = Math.max(0, depth - 1);
         try {
             connection.releaseSavepoint(sp);
+        } catch (SQLFeatureNotSupportedException ignored) {
+            // 部分数据库驱动（如 Oracle / SQL Server）不支持显式释放保存点，保存点将在外层事务结束时自动释放
         } catch (SQLException | RuntimeException | Error e) {
-            // 保存点写入是否仍有效已无法保证，禁止外层继续提交。
-            status = status.markRollbackOnly();
+            markRollbackOnlyState();
             throw e;
         }
     }
 
     /** 失败退出保存点层：回滚到保存点；若保存点回滚自身失败，立即标记外层事务为仅回滚。 */
+    @Override
     public void exitSavepointRollback() throws SQLException {
-        checkOwner();
-        Savepoint sp = savepoints.pop();
-        status = status.exit();
+        support.checkOwner();
+        Savepoint sp = support.popSavepoint();
+        depth = Math.max(0, depth - 1);
         try {
             connection.rollback(sp);
         } catch (SQLException | RuntimeException | Error e) {
-            status = status.markRollbackOnly();
+            markRollbackOnlyState();
             throw e;
         }
     }
@@ -171,13 +177,12 @@ public final class TxConnection implements TxSession {
 
     @Override
     public Connection acquire() {
-        checkOwner();
+        support.checkOwner();
         if (closed) {
-            throw new IllegalTxStateException(status.state(), TxState.ACTIVE, status.state().allowedTransitions());
+            throw new IllegalTxStateException(state, TxState.ACTIVE, state.allowedTransitions());
         }
         requireActive();
-        checkDeadline();
-        status = status.incrementStatements();
+        support.checkDeadline(this::markRollbackOnlyState);
         return connection;
     }
 
@@ -188,37 +193,22 @@ public final class TxConnection implements TxSession {
 
     @Override
     public OptionalInt queryTimeoutSeconds() {
-        if (deadlineNanos == 0) {
-            return defaultQueryTimeoutSeconds.isPresent()
-                    ? defaultQueryTimeoutSeconds
-                    : (baseConnections != null ? baseConnections.queryTimeoutSeconds() : OptionalInt.empty());
-        }
-        long remaining = deadlineNanos - System.nanoTime();
-        // JDBC 超时单位为秒且 0 表示不限，向上取整并至少为 1
-        return OptionalInt.of((int) Math.max(1, (remaining + 999_999_999L) / 1_000_000_000L));
-    }
-
-    private void checkDeadline() {
-        if (deadlineNanos != 0 && System.nanoTime() > deadlineNanos) {
-            status = status.markRollbackOnly();
-            throw new TxTimeoutException("Transaction timed out; it has been marked rollback-only.");
-        }
+        OptionalInt fallback = defaultQueryTimeoutSeconds.isPresent()
+                ? defaultQueryTimeoutSeconds
+                : (baseConnections != null ? baseConnections.queryTimeoutSeconds() : OptionalInt.empty());
+        return support.resolveQueryTimeoutSeconds(fallback);
     }
 
     // ===== 状态查询 =====
 
-    public TxStatus status() {
-        return status;
-    }
-
     @Override
     public boolean isRollbackOnly() {
-        return status.globalRollbackOnly();
+        return globalRollbackOnly;
     }
 
     @Override
     public boolean isActive() {
-        return status.isActive();
+        return state == TxState.ACTIVE || state == TxState.MARKED_ROLLBACK;
     }
 
     public Connection connection() {
@@ -232,10 +222,10 @@ public final class TxConnection implements TxSession {
 
     @Override
     public TxOutcome terminalOutcome() {
-        if (status.state() == TxState.COMMITTED) {
+        if (state == TxState.COMMITTED) {
             return TxOutcome.COMMITTED;
         }
-        if (status.state() == TxState.ROLLED_BACK) {
+        if (state == TxState.ROLLED_BACK) {
             return TxOutcome.ROLLED_BACK;
         }
         return null;
@@ -254,7 +244,7 @@ public final class TxConnection implements TxSession {
 
     @Override
     public void close() throws SQLException {
-        checkOwner();
+        support.checkOwner();
         if (closed) {
             return;
         }
@@ -262,12 +252,12 @@ public final class TxConnection implements TxSession {
         SQLException primaryError = null;
         try {
             // 未显式结束（包括 begin 选项设置失败）的事务一律回滚：安全默认，绝不隐式提交
-            if ((status.isActive() || beginIncomplete) && !rollbackFailed) {
+            if ((isActive() || beginIncomplete) && !rollbackFailed) {
                 try {
                     connection.rollback();
                     if (!commitFailed) {
                         physicalRollbackConfirmed = true;
-                        status = status.transitionTo(TxState.ROLLED_BACK);
+                        transitionTo(TxState.ROLLED_BACK);
                     }
                     beginIncomplete = false;
                 } catch (SQLException e) {
@@ -276,13 +266,15 @@ public final class TxConnection implements TxSession {
                 }
             }
         } finally {
+            boolean restoreFailed = false;
             try {
                 // 仅当提交/回滚未失败且事务已正常脱离 ACTIVE 状态时才还原 autoCommit，
                 // 严禁在 rollback()/commit() 失败后调用 setAutoCommit(true) 导致未决事务被 JDBC 隐式提交！
-                if (!commitFailed && !rollbackFailed && !status.isActive() && restorePoint != null) {
+                if (!commitFailed && !rollbackFailed && !isActive() && restorePoint != null) {
                     restorePoint.restore(connection);
                 }
             } catch (SQLException restoreEx) {
+                restoreFailed = true;
                 if (primaryError != null) {
                     primaryError.addSuppressed(restoreEx);
                 } else {
@@ -290,7 +282,7 @@ public final class TxConnection implements TxSession {
                 }
             } finally {
                 try {
-                    if (baseConnections != null && !commitFailed && !rollbackFailed && !status.isActive()) {
+                    if (baseConnections != null && !commitFailed && !rollbackFailed && !restoreFailed && !isActive()) {
                         baseConnections.release(connection);
                     } else {
                         connection.close();   // 归还池或关闭污染连接
@@ -311,6 +303,18 @@ public final class TxConnection implements TxSession {
 
     // ===== 内部 =====
 
+    private void transitionTo(TxState target) {
+        state.assertTransitionTo(target);
+        state = target;
+    }
+
+    private void markRollbackOnlyState() {
+        if (state != TxState.MARKED_ROLLBACK) {
+            transitionTo(TxState.MARKED_ROLLBACK);
+        }
+        globalRollbackOnly = true;
+    }
+
     private void applyOptions(TxOptions options) throws SQLException {
         if (connection.getAutoCommit()) {
             connection.setAutoCommit(false);
@@ -320,13 +324,15 @@ public final class TxConnection implements TxSession {
         }
         if (options.readOnly()) {
             connection.setReadOnly(true);
+        } else if (connection.isReadOnly()) {
+            connection.setReadOnly(false);
         }
     }
 
     private void doCommit() throws SQLException {
         try {
             connection.commit();
-            status = status.transitionTo(TxState.COMMITTED);
+            transitionTo(TxState.COMMITTED);
         } catch (SQLException | RuntimeException | Error e) {
             commitFailed = true;
             throw e;
@@ -337,26 +343,66 @@ public final class TxConnection implements TxSession {
         try {
             connection.rollback();
             physicalRollbackConfirmed = true;
-            status = status.transitionTo(TxState.ROLLED_BACK);
+            transitionTo(TxState.ROLLED_BACK);
         } catch (SQLException | RuntimeException | Error e) {
             rollbackFailed = true;
             throw e;
         }
     }
 
-    private void checkOwner() {
-        if (Thread.currentThread() != ownerThread) {
-            throw new TxException(
-                    "Transaction is owned by thread [" + ownerThread.getName()
-                            + "] but was used by [" + Thread.currentThread().getName()
-                            + "]. A transaction must not cross threads (invariant I9).");
+    private void requireActive() {
+        if (!isActive()) {
+            throw new IllegalTxStateException(state, TxState.ACTIVE, state.allowedTransitions());
         }
     }
 
-    private void requireActive() {
-        if (!status.isActive()) {
-            throw new IllegalTxStateException(status.state(), TxState.ACTIVE,
-                    status.state().allowedTransitions());
+    /**
+     * 连接属性还原点（不变量 I4）：在事务最外层捕获一次连接的原始属性（autoCommit / 隔离级别 / readOnly），
+     * 事务结束时逐项比对还原。
+     */
+    private record RestorePoint(boolean autoCommit, int isolation, boolean readOnly) {
+
+        static RestorePoint capture(Connection connection) throws SQLException {
+            return new RestorePoint(
+                    connection.getAutoCommit(),
+                    connection.getTransactionIsolation(),
+                    connection.isReadOnly());
+        }
+
+        void restore(Connection connection) throws SQLException {
+            SQLException primary = null;
+            try {
+                if (connection.getAutoCommit() != autoCommit) {
+                    connection.setAutoCommit(autoCommit);
+                }
+            } catch (SQLException e) {
+                primary = e;
+            }
+            try {
+                if (connection.getTransactionIsolation() != isolation) {
+                    connection.setTransactionIsolation(isolation);
+                }
+            } catch (SQLException e) {
+                if (primary == null) {
+                    primary = e;
+                } else {
+                    primary.addSuppressed(e);
+                }
+            }
+            try {
+                if (connection.isReadOnly() != readOnly) {
+                    connection.setReadOnly(readOnly);
+                }
+            } catch (SQLException e) {
+                if (primary == null) {
+                    primary = e;
+                } else {
+                    primary.addSuppressed(e);
+                }
+            }
+            if (primary != null) {
+                throw primary;
+            }
         }
     }
 }

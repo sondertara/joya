@@ -3,14 +3,17 @@ package com.sondertara.joya.core.query.criterion;
 import com.sondertara.joya.utils.CollectionUtils;
 import com.sondertara.joya.core.function.IGetter;
 import com.sondertara.joya.core.kernel.statement.ParameterSource;
+import com.sondertara.joya.core.kernel.statement.SqlNode;
+import com.sondertara.joya.core.kernel.statement.SqlNodes;
 import com.sondertara.joya.core.kernel.statement.SqlParameterList;
 import com.sondertara.joya.core.model.ColumnAlias;
 import com.sondertara.joya.core.query.ColumnMetaProvider;
 import com.sondertara.joya.core.query.LinkType;
+import com.sondertara.joya.core.query.OnPredicate;
 import com.sondertara.joya.core.query.RenderContext;
 import com.sondertara.joya.core.query.SqlPredicate;
 import com.sondertara.joya.exceptions.DbException;
-import com.sondertara.joya.utils.SqlFormatUtils;
+import com.sondertara.joya.core.kernel.statement.SqlFormatUtils;
 import com.sondertara.joya.utils.Strings;
 import lombok.Getter;
 import org.jspecify.annotations.Nullable;
@@ -41,7 +44,7 @@ import java.util.function.UnaryOperator;
  * @date 2021/11/15 16:44
  * @since 1.0.0
  */
-public class WhereCriterion {
+public class WhereCriterion implements OnPredicate {
 
     private static final int MAX_IN_SIZE = 1000;
 
@@ -66,10 +69,23 @@ public class WhereCriterion {
     }
 
     /**
-     * 兼容静态工厂方法：创建一个空的 {@code AND} 条件构建器（延迟绑定架构下无需预注册实体表别名）。
+     * 合并预构建的 {@link WhereCriterion} 与链式回调列表（全部为空时返回 {@code null}）。
      */
-    public static WhereCriterion forEntity(Class<?>... entityTypes) {
-        return new WhereCriterion(LinkType.AND);
+    public static @Nullable WhereCriterion merge(@Nullable WhereCriterion explicitCriterion,
+                                                 List<UnaryOperator<WhereCriterion>> whereCallbacks) {
+        if (explicitCriterion == null && (whereCallbacks == null || whereCallbacks.isEmpty())) {
+            return null;
+        }
+        if (whereCallbacks == null || whereCallbacks.isEmpty()) {
+            return explicitCriterion.copy();
+        }
+        WhereCriterion w = explicitCriterion != null
+                ? explicitCriterion.copy()
+                : WhereCriterion.create();
+        for (UnaryOperator<WhereCriterion> cb : whereCallbacks) {
+            cb.apply(w);
+        }
+        return w;
     }
 
     /**
@@ -82,21 +98,29 @@ public class WhereCriterion {
     /**
      * 将当前条件构建器中的所有谓词渲染到目标 SQL 缓冲与参数列表中。
      */
+    @Override
     public void render(RenderContext ctx, StringBuilder sql, SqlParameterList params, ParameterSource source) {
-        String delimiter = " " + currentOpt.name() + " ";
-        boolean first = true;
+        GroupPredicate.renderChildren(currentOpt, predicates, ctx, sql, params, source);
+    }
+
+    /**
+     * 把当前条件树转换为主干与叶子均结构化的 {@link SqlNode}（仅调用方通过 {@link #addCondition}
+     * 显式传入的原生 SQL 片段使用 {@link SqlNode.Raw} 承载）。
+     */
+    @Override
+    public @Nullable SqlNode toNode(RenderContext ctx, ParameterSource source) {
+        if (isEmpty()) {
+            return null;
+        }
+        SqlNode result = null;
         for (SqlPredicate predicate : predicates) {
-            StringBuilder itemSql = new StringBuilder();
-            predicate.render(ctx, itemSql, params, source);
-            if (itemSql.isEmpty()) {
+            SqlNode node = predicate.toNode(ctx, source);
+            if (node == null) {
                 continue;
             }
-            if (!first) {
-                sql.append(delimiter);
-            }
-            sql.append(itemSql);
-            first = false;
+            result = result == null ? node : new SqlNode.Binary(currentOpt.name(), result, node);
         }
+        return result;
     }
 
     /**
@@ -107,17 +131,21 @@ public class WhereCriterion {
             return this;
         }
         Object[] capturedParams = params == null ? new Object[0] : params.clone();
-        predicates.add((ctx, sql, paramList, source) -> {
+        predicates.add(new NodePredicate((ctx, source) -> {
             String formatted = SqlFormatUtils.underlineColumn(part.trim());
             formatted = SqlFormatUtils.getJdbcStyleSql(formatted);
             if (!ctx.isAliased()) {
                 formatted = SqlFormatUtils.stripTableAlias(formatted);
             }
-            sql.append(formatted);
+            if (formatted.isEmpty()) {
+                return null;
+            }
+            SqlParameterList paramList = new SqlParameterList();
             for (Object param : capturedParams) {
                 paramList.add(null, param, source);
             }
-        });
+            return SqlNodes.raw(formatted, paramList.toList());
+        }));
         return this;
     }
 
@@ -131,6 +159,10 @@ public class WhereCriterion {
         return addBinaryComparison(ColumnMetaProvider.fromName(columnName), " = ?", requireValue("eq", value));
     }
 
+    public <L, R> WhereCriterion eq(IGetter<L, ?> left, IGetter<R, ?> right) {
+        return addColumnComparison("eq", left, right, "=");
+    }
+
     public <T> WhereCriterion ne(IGetter<T, ?> fn, Object value) {
         return addBinaryComparison(ColumnMetaProvider.fromGetter(fn), " <> ?", requireValue("ne", value));
     }
@@ -139,16 +171,8 @@ public class WhereCriterion {
         return addBinaryComparison(ColumnMetaProvider.fromName(columnName), " <> ?", requireValue("ne", value));
     }
 
-    public <T, R> WhereCriterion ne(IGetter<T, ?> left, IGetter<R, ?> right) {
-        Objects.requireNonNull(left, "left getter must not be null");
-        Objects.requireNonNull(right, "right getter must not be null");
-        ColumnMetaProvider leftProvider = ColumnMetaProvider.fromGetter(left);
-        ColumnMetaProvider rightProvider = ColumnMetaProvider.fromGetter(right);
-        predicates.add((ctx, sql, params, source) ->
-                sql.append(leftProvider.resolveSql(ctx))
-                        .append(" != ")
-                        .append(rightProvider.resolveSql(ctx)));
-        return this;
+    public <L, R> WhereCriterion ne(IGetter<L, ?> left, IGetter<R, ?> right) {
+        return addColumnComparison("ne", left, right, "<>");
     }
 
     public <T> WhereCriterion gt(IGetter<T, ?> fn, Object value) {
@@ -159,12 +183,20 @@ public class WhereCriterion {
         return addBinaryComparison(ColumnMetaProvider.fromName(columnName), " > ?", requireValue("gt", value));
     }
 
+    public <L, R> WhereCriterion gt(IGetter<L, ?> left, IGetter<R, ?> right) {
+        return addColumnComparison("gt", left, right, ">");
+    }
+
     public <T> WhereCriterion gte(IGetter<T, ?> fn, Object value) {
         return addBinaryComparison(ColumnMetaProvider.fromGetter(fn), " >= ?", requireValue("gte", value));
     }
 
     public WhereCriterion gte(String columnName, Object value) {
         return addBinaryComparison(ColumnMetaProvider.fromName(columnName), " >= ?", requireValue("gte", value));
+    }
+
+    public <L, R> WhereCriterion gte(IGetter<L, ?> left, IGetter<R, ?> right) {
+        return addColumnComparison("gte", left, right, ">=");
     }
 
     public <T> WhereCriterion lt(IGetter<T, ?> fn, Object value) {
@@ -175,12 +207,32 @@ public class WhereCriterion {
         return addBinaryComparison(ColumnMetaProvider.fromName(columnName), " < ?", requireValue("lt", value));
     }
 
+    public <L, R> WhereCriterion lt(IGetter<L, ?> left, IGetter<R, ?> right) {
+        return addColumnComparison("lt", left, right, "<");
+    }
+
     public <T> WhereCriterion lte(IGetter<T, ?> fn, Object value) {
         return addBinaryComparison(ColumnMetaProvider.fromGetter(fn), " <= ?", requireValue("lte", value));
     }
 
     public WhereCriterion lte(String columnName, Object value) {
         return addBinaryComparison(ColumnMetaProvider.fromName(columnName), " <= ?", requireValue("lte", value));
+    }
+
+    public <L, R> WhereCriterion lte(IGetter<L, ?> left, IGetter<R, ?> right) {
+        return addColumnComparison("lte", left, right, "<=");
+    }
+
+    private WhereCriterion addColumnComparison(String method, IGetter<?, ?> left, IGetter<?, ?> right, String operator) {
+        if (left == null) {
+            throw new IllegalArgumentException("WhereCriterion." + method + " left column must not be null");
+        }
+        requireValue(method, right);
+        ColumnMetaProvider leftProvider = ColumnMetaProvider.fromGetter(left);
+        ColumnMetaProvider rightProvider = ColumnMetaProvider.fromGetter(right);
+        predicates.add(new NodePredicate((ctx, source) ->
+                new SqlNode.Binary(operator, leftProvider.resolveNode(ctx), rightProvider.resolveNode(ctx))));
+        return this;
     }
 
     // ==================== 动态可选比较条件（值为 null / 空白 / 空集合时显式跳过） ====================
@@ -364,8 +416,52 @@ public class WhereCriterion {
         boolean escaped = containsLikeMetaChar(str);
         String body = escaped ? escapeLikeCharacters(str) : str;
         String pattern = (prefix ? "%" : "") + body + (suffix ? "%" : "");
-        String op = (negated ? " NOT LIKE ?" : " LIKE ?") + (escaped ? " ESCAPE '\\'" : "");
-        return addBinaryComparison(col, op, pattern);
+        predicates.add(new NodePredicate((ctx, source) -> {
+            ColumnAlias alias = col.resolveAlias(ctx);
+            return new SqlNode.Like(
+                    SqlNodes.column(alias.getTableAlias(), alias.getColumnName()),
+                    SqlNodes.param(alias.getColumnName(), pattern, source),
+                    negated, escaped);
+        }));
+        return this;
+    }
+
+    private WhereCriterion addRawLikeComparison(ColumnMetaProvider col, boolean negated, Object rawPattern) {
+        String pattern = rawPattern.toString();
+        predicates.add(new NodePredicate((ctx, source) -> {
+            ColumnAlias alias = col.resolveAlias(ctx);
+            return new SqlNode.Like(
+                    SqlNodes.column(alias.getTableAlias(), alias.getColumnName()),
+                    SqlNodes.param(alias.getColumnName(), pattern, source),
+                    negated, false);
+        }));
+        return this;
+    }
+
+    /**
+     * 原样模式 LIKE（不自动追加 {@code %}，也不转义调用方传入的 {@code %} / {@code _} 通配符）。
+     */
+    public <T> WhereCriterion like(IGetter<T, ?> fn, Object pattern) {
+        Object v = requireValue("like", pattern);
+        return addRawLikeComparison(ColumnMetaProvider.fromGetter(fn), false, v);
+    }
+
+    public WhereCriterion like(String columnName, Object pattern) {
+        Object v = requireValue("like", pattern);
+        return addRawLikeComparison(ColumnMetaProvider.fromName(columnName), false, v);
+    }
+
+    /**
+     * 原样模式 NOT LIKE（不自动追加 {@code %}，也不转义调用方传入的 {@code %} / {@code _} 通配符）。
+     */
+    public <T> WhereCriterion notLike(IGetter<T, ?> fn, Object pattern) {
+        Object v = requireValue("notLike", pattern);
+        return addRawLikeComparison(ColumnMetaProvider.fromGetter(fn), true, v);
+    }
+
+    public WhereCriterion notLike(String columnName, Object pattern) {
+        Object v = requireValue("notLike", pattern);
+        return addRawLikeComparison(ColumnMetaProvider.fromName(columnName), true, v);
     }
 
     public <T> WhereCriterion contains(IGetter<T, ?> fn, Object value) {
@@ -518,6 +614,60 @@ public class WhereCriterion {
         return addInCondition(ColumnMetaProvider.fromGetter(fn), values, true);
     }
 
+    /**
+     * 可变参数 {@code IN} 条件（至少传入 1 个值）。
+     */
+    public WhereCriterion in(String columnName, Object first, Object... rest) {
+        return in(columnName, toVarargsList("in", first, rest));
+    }
+
+    /**
+     * 可变参数类型安全 {@code IN} 条件（至少传入 1 个值）。
+     */
+    @SafeVarargs
+    public final <T, V> WhereCriterion in(IGetter<T, V> fn, V first, V... rest) {
+        return in(fn, toVarargsList("in", first, rest));
+    }
+
+    /**
+     * 可变参数 {@code NOT IN} 条件（至少传入 1 个值）。
+     */
+    public WhereCriterion notIn(String columnName, Object first, Object... rest) {
+        return notIn(columnName, toVarargsList("notIn", first, rest));
+    }
+
+    /**
+     * 可变参数类型安全 {@code NOT IN} 条件（至少传入 1 个值）。
+     */
+    @SafeVarargs
+    public final <T, V> WhereCriterion notIn(IGetter<T, V> fn, V first, V... rest) {
+        return notIn(fn, toVarargsList("notIn", first, rest));
+    }
+
+    /**
+     * 显式分片 {@code IN} 条件：当集合元素数量超过 {@value #MAX_IN_SIZE} 时，自动按 {@value #MAX_IN_SIZE} 拆分为
+     * {@code (col IN (...) OR col IN (...))} 括号子组，避免超出数据库 {@code IN} 列表上限。
+     */
+    public WhereCriterion inChunked(String columnName, Collection<?> values) {
+        if (CollectionUtils.isEmpty(values)) {
+            throw new IllegalArgumentException(
+                    "WhereCriterion.inChunked values must not be null or empty (use inIfNotEmpty for optional filtering)");
+        }
+        return addChunkedInCondition(ColumnMetaProvider.fromName(columnName), values);
+    }
+
+    /**
+     * 显式分片类型安全 {@code IN} 条件：当集合元素数量超过 {@value #MAX_IN_SIZE} 时，自动按 {@value #MAX_IN_SIZE} 拆分为
+     * {@code (col IN (...) OR col IN (...))} 括号子组，避免超出数据库 {@code IN} 列表上限。
+     */
+    public <T> WhereCriterion inChunked(IGetter<T, ?> fn, Collection<?> values) {
+        if (CollectionUtils.isEmpty(values)) {
+            throw new IllegalArgumentException(
+                    "WhereCriterion.inChunked values must not be null or empty (use inIfNotEmpty for optional filtering)");
+        }
+        return addChunkedInCondition(ColumnMetaProvider.fromGetter(fn), values);
+    }
+
     public WhereCriterion inIfNotEmpty(String columnName, @Nullable Collection<?> values) {
         if (CollectionUtils.isEmpty(values)) {
             return this;
@@ -550,52 +700,143 @@ public class WhereCriterion {
 
     public <T> WhereCriterion isNull(IGetter<T, ?> fn) {
         ColumnMetaProvider provider = ColumnMetaProvider.fromGetter(fn);
-        predicates.add((ctx, sql, params, source) -> sql.append(provider.resolveSql(ctx)).append(" IS NULL"));
+        predicates.add(new NodePredicate((ctx, source) -> {
+            ColumnAlias alias = provider.resolveAlias(ctx);
+            return new SqlNode.Unary("IS NULL",
+                    SqlNodes.column(alias.getTableAlias(), alias.getColumnName()));
+        }));
         return this;
     }
 
     public WhereCriterion isNull(String columnName) {
         ColumnMetaProvider provider = ColumnMetaProvider.fromName(columnName);
-        predicates.add((ctx, sql, params, source) -> sql.append(provider.resolveSql(ctx)).append(" IS NULL"));
+        predicates.add(new NodePredicate((ctx, source) -> {
+            ColumnAlias alias = provider.resolveAlias(ctx);
+            return new SqlNode.Unary("IS NULL",
+                    SqlNodes.column(alias.getTableAlias(), alias.getColumnName()));
+        }));
         return this;
     }
 
     public <T> WhereCriterion isNotNull(IGetter<T, ?> fn) {
         ColumnMetaProvider provider = ColumnMetaProvider.fromGetter(fn);
-        predicates.add((ctx, sql, params, source) -> sql.append(provider.resolveSql(ctx)).append(" IS NOT NULL"));
+        predicates.add(new NodePredicate((ctx, source) -> {
+            ColumnAlias alias = provider.resolveAlias(ctx);
+            return new SqlNode.Unary("IS NOT NULL",
+                    SqlNodes.column(alias.getTableAlias(), alias.getColumnName()));
+        }));
         return this;
     }
 
     public WhereCriterion isNotNull(String columnName) {
         ColumnMetaProvider provider = ColumnMetaProvider.fromName(columnName);
-        predicates.add((ctx, sql, params, source) -> sql.append(provider.resolveSql(ctx)).append(" IS NOT NULL"));
+        predicates.add(new NodePredicate((ctx, source) -> {
+            ColumnAlias alias = provider.resolveAlias(ctx);
+            return new SqlNode.Unary("IS NOT NULL",
+                    SqlNodes.column(alias.getTableAlias(), alias.getColumnName()));
+        }));
         return this;
     }
 
     // ==================== 组合与嵌套（AND / OR） ====================
 
+    /**
+     * 追加一个 AND 子条件组。
+     *
+     * <p>子组内部按子组自身的连接符渲染；子组与当前层已有条件之间使用当前层的连接符。
+     * 当当前层为 OR 时，子组会被括号包裹以保证优先级。
+     */
     public WhereCriterion and(UnaryOperator<WhereCriterion> fn) {
-        WhereCriterion child = fn.apply(new WhereCriterion(LinkType.AND));
-        boolean wrap = this.currentOpt == LinkType.OR && child.predicates.size() > 1;
-        return addChildCriterion(child, wrap);
+        return append(fn, LinkType.AND, false);
     }
 
+    /**
+     * 追加一个 OR 子条件组；子组与当前层已有条件之间仍使用当前层的连接符（通常为 AND）。
+     *
+     * <p>例如 {@code eq(active, true).or(c -> c.eq(deptId, 10).eq(age, 40))} 渲染为
+     * {@code active = ? AND (dept_id = ? OR age = ?)}，而不是 {@code active = ? OR ...}。
+     * 若需要 OR 与已有条件同级，请使用 {@code new WhereCriterion(LinkType.OR)} 作为根条件
+     * （{@code Query.where(WhereCriterion)} 会为多谓词 OR 根自动加括号）。
+     *
+     * <p>当子组只有一个谓词时，追加结果与 {@link #and(UnaryOperator)} 等价。这通常意味着调用方
+     * 误用了 OR 语义，因此直接抛出 {@link IllegalArgumentException}，避免静默返回错误结果。
+     */
     public WhereCriterion or(UnaryOperator<WhereCriterion> fn) {
+        Objects.requireNonNull(fn, "criterion function must not be null");
         WhereCriterion child = fn.apply(new WhereCriterion(LinkType.OR));
-        boolean wrap = this.currentOpt == LinkType.AND && child.predicates.size() > 1;
-        return addChildCriterion(child, wrap);
+        if (child == null || child.isEmpty()) {
+            return this;
+        }
+        if (!this.predicates.isEmpty() && child.predicates.size() == 1) {
+            throw new IllegalArgumentException(
+                    "WhereCriterion.or(...) appends an OR group which is combined with existing conditions by "
+                            + this.currentOpt.name() + "; a single-predicate group is equivalent to and(...). "
+                            + "Use anyOf(...) / andAnyOf(...) for dynamic OR groups, and(...) for an AND condition, "
+                            + "orNested(...) for a parenthesized group, or build a WhereCriterion(LinkType.OR) root "
+                            + "when a real OR with existing conditions is required.");
+        }
+        return appendChild(child, false);
     }
 
+    /**
+     * 追加一个“满足任一即可”的 OR 子条件组（语义为 {@code AND (cond1 OR cond2 ...)}）。
+     *
+     * <p>与 {@link #or(UnaryOperator)} 不同，本方法专为动态可选条件组合（如内部含多个 {@code *IfPresent}）设计：
+     * 即使动态过滤后子组内仅剩 1 个谓词，也会正常追加而不会抛出异常；若子组为空则自动跳过。
+     */
+    public WhereCriterion anyOf(UnaryOperator<WhereCriterion> fn) {
+        return append(fn, LinkType.OR, false);
+    }
+
+    /**
+     * {@link #anyOf(UnaryOperator)} 的语义别名，显式表达 {@code AND (cond1 OR cond2 ...)}。
+     */
+    public WhereCriterion andAnyOf(UnaryOperator<WhereCriterion> fn) {
+        return anyOf(fn);
+    }
+
+    /** 追加一个强制括号包裹的 AND 子条件组。 */
     public WhereCriterion andNested(UnaryOperator<WhereCriterion> fn) {
-        WhereCriterion child = fn.apply(new WhereCriterion(LinkType.AND));
-        return addChildCriterion(child, true);
+        return append(fn, LinkType.AND, true);
     }
 
+    /** 追加一个强制括号包裹的 OR 子条件组；子组与当前层已有条件之间仍使用当前层的连接符。 */
     public WhereCriterion orNested(UnaryOperator<WhereCriterion> fn) {
-        WhereCriterion child = fn.apply(new WhereCriterion(LinkType.OR));
-        return addChildCriterion(child, true);
+        return append(fn, LinkType.OR, true);
     }
 
+    private WhereCriterion append(UnaryOperator<WhereCriterion> fn, LinkType childLink, boolean forceGroup) {
+        Objects.requireNonNull(fn, "criterion function must not be null");
+        WhereCriterion child = fn.apply(new WhereCriterion(childLink));
+        if (child == null || child.isEmpty()) {
+            return this;
+        }
+        return appendChild(child, forceGroup);
+    }
+
+    /**
+     * 把子条件并入当前层：连接符相同则直接展开，不同则收拢为一个 {@link GroupPredicate}，
+     * 由子组自己负责内部连接符与括号，父层不再猜测需要几层括号。
+     */
+    private WhereCriterion appendChild(WhereCriterion child, boolean forceGroup) {
+        if (!forceGroup && this.currentOpt == child.currentOpt) {
+            this.predicates.addAll(child.predicates);
+        } else {
+            this.predicates.add(new GroupPredicate(child.currentOpt, child.predicates, forceGroup));
+        }
+        return this;
+    }
+
+    /**
+     * 创建当前条件构建器的独立副本（复制连接符与已收集的谓词列表，后续追加互不影响）。
+     */
+    public WhereCriterion copy() {
+        WhereCriterion copied = new WhereCriterion(this.currentOpt);
+        copied.predicates.addAll(this.predicates);
+        return copied;
+    }
+
+    @Override
     public boolean isEmpty() {
         return this.predicates.isEmpty();
     }
@@ -611,22 +852,25 @@ public class WhereCriterion {
     }
 
     private WhereCriterion addBinaryComparison(ColumnMetaProvider provider, String operatorWithPlaceholder, Object value) {
-        predicates.add((ctx, sql, params, source) -> {
+        String operator = operatorWithPlaceholder.replace("?", "").trim();
+        predicates.add(new NodePredicate((ctx, source) -> {
             ColumnAlias alias = provider.resolveAlias(ctx);
-            sql.append(alias.identity()).append(operatorWithPlaceholder);
-            params.add(alias.getColumnName(), value, source);
-        });
+            return new SqlNode.Binary(operator,
+                    SqlNodes.column(alias.getTableAlias(), alias.getColumnName()),
+                    SqlNodes.param(alias.getColumnName(), value, source));
+        }));
         return this;
     }
 
     private WhereCriterion addBetween(ColumnMetaProvider provider, Object leftValue, Object rightValue, boolean notBetween) {
-        String op = notBetween ? " NOT BETWEEN ? AND ?" : " BETWEEN ? AND ?";
-        predicates.add((ctx, sql, params, source) -> {
+        predicates.add(new NodePredicate((ctx, source) -> {
             ColumnAlias alias = provider.resolveAlias(ctx);
-            sql.append(alias.identity()).append(op);
-            params.add(alias.getColumnName(), leftValue, source);
-            params.add(alias.getColumnName(), rightValue, source);
-        });
+            return new SqlNode.Between(
+                    SqlNodes.column(alias.getTableAlias(), alias.getColumnName()),
+                    SqlNodes.param(alias.getColumnName(), leftValue, source),
+                    SqlNodes.param(alias.getColumnName(), rightValue, source),
+                    notBetween);
+        }));
         return this;
     }
 
@@ -642,35 +886,57 @@ public class WhereCriterion {
             }
             snapshot.add(val);
         }
-        String prefix = notIn ? " NOT IN " : " IN ";
-        predicates.add((ctx, sql, params, source) -> {
+        predicates.add(new NodePredicate((ctx, source) -> {
             ColumnAlias alias = provider.resolveAlias(ctx);
-            StringJoiner sj = new StringJoiner(",", "(", ")");
+            List<SqlNode> nodes = new ArrayList<>(snapshot.size());
             for (Object val : snapshot) {
-                sj.add("?");
-                params.add(alias.getColumnName(), val, source);
+                nodes.add(SqlNodes.param(alias.getColumnName(), val, source));
             }
-            sql.append(alias.identity()).append(prefix).append(sj);
-        });
+            return new SqlNode.In(
+                    SqlNodes.column(alias.getTableAlias(), alias.getColumnName()),
+                    nodes, notIn);
+        }));
         return this;
     }
 
-    private WhereCriterion addChildCriterion(WhereCriterion child, boolean wrapParentheses) {
-        if (child == null || child.isEmpty()) {
-            return this;
+    private WhereCriterion addChunkedInCondition(ColumnMetaProvider provider, Collection<?> values) {
+        if (values.size() <= MAX_IN_SIZE) {
+            return addInCondition(provider, values, false);
         }
-        predicates.add((ctx, sql, params, source) -> {
-            StringBuilder childSql = new StringBuilder();
-            child.render(ctx, childSql, params, source);
-            if (childSql.isEmpty()) {
-                return;
+        List<Object> snapshot = new ArrayList<>(values.size());
+        for (Object val : values) {
+            if (val == null) {
+                throw new IllegalArgumentException(
+                        "WhereCriterion.inChunked collection must not contain null elements (use isNull explicitly)");
             }
-            if (wrapParentheses) {
-                sql.append('(').append(childSql).append(')');
-            } else {
-                sql.append(childSql);
-            }
-        });
-        return this;
+            snapshot.add(val);
+        }
+        WhereCriterion chunkGroup = new WhereCriterion(LinkType.OR);
+        for (int start = 0; start < snapshot.size(); start += MAX_IN_SIZE) {
+            int end = Math.min(start + MAX_IN_SIZE, snapshot.size());
+            chunkGroup.addInCondition(provider, snapshot.subList(start, end), false);
+        }
+        return appendChild(chunkGroup, true);
     }
+
+    private static List<Object> toVarargsList(String method, Object first, Object[] rest) {
+        if (first == null) {
+            throw new IllegalArgumentException(
+                    "WhereCriterion." + method + " elements must not be null (use isNull or isNotNull explicitly)");
+        }
+        if (rest == null) {
+            throw new IllegalArgumentException("WhereCriterion." + method + " varargs array must not be null");
+        }
+        List<Object> list = new ArrayList<>(1 + rest.length);
+        list.add(first);
+        for (Object item : rest) {
+            if (item == null) {
+                throw new IllegalArgumentException(
+                        "WhereCriterion." + method + " elements must not be null (use isNull or isNotNull explicitly)");
+            }
+            list.add(item);
+        }
+        return list;
+    }
+
 }

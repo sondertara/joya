@@ -46,10 +46,16 @@ public interface Tx extends DataOps, AutoCloseable {
      */
     <R> R savepointCall(TxCallback<R> body);
 
-    /** 注册提交成功后执行的回调（如发送消息）。回调异常只记录日志，不影响已提交的数据。 */
+    /**
+     * 注册提交成功后执行的回调（如发送消息）。必须在事务仍处于活跃状态时注册；
+     * 回调异常只记录日志，不影响已提交的数据。
+     */
     void afterCommit(Runnable callback);
 
-    /** 注册事务结束后执行的回调（无论提交还是回滚，恰好一次）。 */
+    /**
+     * 注册事务结束后执行的回调（无论提交还是回滚，恰好一次）。必须在事务仍处于活跃状态时注册；
+     * 若开启了死锁重试（{@link TxStarter#retryOnDeadlock}），仅在最终尝试结束时触发该尝试上注册的回调。
+     */
     void afterCompletion(Consumer<TxOutcome> callback);
 
     // ===== 生命周期 =====

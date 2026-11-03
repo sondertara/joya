@@ -1,5 +1,7 @@
 package com.sondertara.joya.core.statement.factory;
 
+import com.sondertara.joya.core.kernel.statement.SqlNode;
+import com.sondertara.joya.core.kernel.statement.SqlNodes;
 import com.sondertara.joya.core.kernel.statement.SqlRenderer;
 
 import com.sondertara.joya.core.naming.NamingPolicy;
@@ -7,7 +9,6 @@ import com.sondertara.joya.core.kernel.statement.BatchSqlStatement;
 import com.sondertara.joya.core.kernel.statement.ColumnBinding;
 import com.sondertara.joya.core.kernel.statement.Operation;
 import com.sondertara.joya.core.kernel.statement.ParameterSource;
-import com.sondertara.joya.core.kernel.statement.SqlParameterList;
 import com.sondertara.joya.core.kernel.statement.SqlStatement;
 import com.sondertara.joya.core.kernel.statement.StatementMetadata;
 import com.sondertara.joya.core.kernel.statement.TableRef;
@@ -46,11 +47,9 @@ public final class UpdateStatementFactory {
                 ? meta.updatableColumns()
                 : new ArrayList<>(ctx.declaredColumns());
 
-        SqlParameterList params = new SqlParameterList();
+        // 2. 收集 SET 赋值（参数顺序：SET 先于 WHERE）
+        List<SqlNode.Assignment> assignments = new ArrayList<>();
         Set<String> nonUpdatable = meta.nonUpdatableColumns();
-
-        // 2. 先渲染 SET 和 SET 参数
-        List<String> finalSetColumns = new ArrayList<>();
         for (String col : setColumns) {
             String canonical = meta.canonicalColumn(col);
             String checkedColumn = canonical != null ? canonical : col;
@@ -67,25 +66,24 @@ public final class UpdateStatementFactory {
             if (ctx.ignoreNull() && value == null) {
                 continue;
             }
-            finalSetColumns.add(meta.formatColumn(col, namingPolicy));
-            params.add(col, value, ParameterSource.SET);
+            SqlNode rhs = (value instanceof SqlNode nodeValue)
+                    ? nodeValue
+                    : SqlNodes.param(col, value, ParameterSource.SET);
+            assignments.add(SqlNodes.assignment(meta.formatColumn(col, namingPolicy), rhs));
         }
-        if (finalSetColumns.isEmpty()) {
+        if (assignments.isEmpty()) {
             throw new IllegalStateException("UPDATE statement has no columns to set");
         }
 
-        // 3. 再通过单表 RenderContext 直接渲染 WHERE 与 WHERE 参数（排在 SET 之后）
-        StringBuilder whereSql = new StringBuilder();
+        // 3. WHERE 条件与查询共用同一条 AST 路径；参数由 SqlRenderer 按 SET → WHERE 顺序重排
+        SqlNode whereNode = null;
         if (where != null && !where.isEmpty()) {
             RenderContext renderContext = RenderContext.forSingleTable(meta, namingPolicy);
-            where.render(renderContext, whereSql, params, ParameterSource.WHERE);
+            whereNode = where.toNode(renderContext, ParameterSource.WHERE);
         }
 
-        // 4. 统一由 SqlRenderer 生成 SQL
+        // 4. 元数据
         String tableName = meta.qualifiedTableName(namingPolicy);
-        String sql = SqlRenderer.renderUpdate(tableName, finalSetColumns, whereSql.toString());
-
-        // 5. 元数据
         Set<TableRef> tables = new LinkedHashSet<>();
         tables.add(TableRef.ofQualified(tableName, ""));
         StatementMetadata metadata = StatementMetadata.builder(Operation.UPDATE)
@@ -93,7 +91,12 @@ public final class UpdateStatementFactory {
                 .entityType(meta.entityType())
                 .build();
 
-        return SqlStatement.of(sql, params.toList(), metadata);
+        // 5. AST-lite：统一渲染
+        SqlNode.Update update = new SqlNode.Update(
+                SqlNodes.table(meta.tableName(), tableName),
+                assignments,
+                whereNode);
+        return SqlRenderer.render(update, metadata);
     }
 
     /**
@@ -134,17 +137,29 @@ public final class UpdateStatementFactory {
                 .entityType(meta.entityType())
                 .build();
         List<ColumnBinding> bindings = new ArrayList<>(setColumns.size() + 1);
-        for (String col : setColumns) {
-            bindings.add(ColumnBinding.of(col));
+        List<SqlNode.Assignment> assignments = new ArrayList<>(setColumns.size());
+        for (int i = 0; i < setColumns.size(); i++) {
+            bindings.add(ColumnBinding.of(setColumns.get(i)));
+            assignments.add(SqlNodes.assignment(formattedSetColumns.get(i),
+                    SqlNodes.param(setColumns.get(i), null, ParameterSource.SET)));
         }
         bindings.add(ColumnBinding.of(pk));
+        SqlNode.Table table = SqlNodes.table(meta.tableName(), tableName);
+        SqlNode where = SqlNodes.eq(
+                SqlNodes.column((SqlNode.Table) null, formattedPk),
+                SqlNodes.param(pk, null, ParameterSource.WHERE));
+        SqlNode.Update ast = new SqlNode.Update(table, assignments, where);
+        SqlStatement rendered = SqlRenderer.render(ast, metadata);
         return new BatchSqlStatement(
-                SqlRenderer.renderUpdate(tableName, formattedSetColumns, formattedPk + " = ?"),
+                rendered.sql(),
                 bindings,
                 rows,
                 metadata,
                 batchSize,
-                false
+                false,
+                ast,
+                List.of(),
+                List.of()
         );
     }
 }

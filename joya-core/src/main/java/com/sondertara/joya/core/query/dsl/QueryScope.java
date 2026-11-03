@@ -1,7 +1,7 @@
 package com.sondertara.joya.core.query.dsl;
 
 import com.sondertara.joya.core.query.criterion.WhereCriterion;
-import com.sondertara.joya.core.query.pagination.OrderParam;
+import com.sondertara.joya.core.query.pagination.SortCondition;
 
 import java.util.function.UnaryOperator;
 
@@ -17,7 +17,7 @@ public interface QueryScope {
     QueryScope where(UnaryOperator<WhereCriterion> condition);
 
     /** 追加动态排序（字段名经 from / join 实体元数据白名单校验）。 */
-    QueryScope orderBy(OrderParam... orderParams);
+    QueryScope orderBy(SortCondition... sorts);
 
     /**
      * 把外部传入的字段名或列名解析为带表别名的列（例如 {@code name} → {@code t0.name}）。

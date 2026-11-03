@@ -58,10 +58,33 @@ public enum QuoteStyle {
         if (part.isEmpty() || "*".equals(part)) {
             return part;
         }
-        if (part.length() >= 2 && part.charAt(0) == openQuote && part.charAt(part.length() - 1) == closeQuote) {
+        if (isProperlyQuoted(part, openQuote, closeQuote)) {
             return part;
         }
         String escaped = part.replace(String.valueOf(closeQuote), String.valueOf(closeQuote) + closeQuote);
         return openQuote + escaped + closeQuote;
+    }
+
+    private static boolean isProperlyQuoted(String part, char open, char close) {
+        if (open == '\0' || close == '\0' || part.length() < 2) {
+            return false;
+        }
+        if (part.charAt(0) != open || part.charAt(part.length() - 1) != close) {
+            return false;
+        }
+        int end = part.length() - 1;
+        for (int i = 1; i < end; i++) {
+            char c = part.charAt(i);
+            if (c == close) {
+                if (i + 1 < end && part.charAt(i + 1) == close) {
+                    i++;
+                } else {
+                    return false;
+                }
+            } else if (open != close && c == open) {
+                return false;
+            }
+        }
+        return true;
     }
 }

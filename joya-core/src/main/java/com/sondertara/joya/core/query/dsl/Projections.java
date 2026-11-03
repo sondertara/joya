@@ -1,13 +1,15 @@
 package com.sondertara.joya.core.query.dsl;
 
+import com.sondertara.joya.core.query.Expr;
 import com.sondertara.joya.core.function.IGetter;
-import com.sondertara.joya.core.jdbc.resultset.mapper.BeanRowMapper;
+import com.sondertara.joya.core.kernel.executor.ResultType;
+import com.sondertara.joya.core.kernel.statement.SqlNode;
+import com.sondertara.joya.core.kernel.statement.SqlNodes;
 import com.sondertara.joya.core.metadata.PersistenceAnnotations;
 import com.sondertara.joya.core.model.ColumnAlias;
 import com.sondertara.joya.core.query.ColumnMetaProvider;
 import com.sondertara.joya.core.query.RenderContext;
 import com.sondertara.joya.utils.LambdaUtils;
-import com.sondertara.joya.utils.SqlFormatUtils;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
@@ -24,7 +26,7 @@ import java.util.function.Function;
  * 投影计划构建：把「挑哪些列 + 装进什么类型」通过 {@link RenderContext} 翻译为 SELECT 列表与行映射器。
  *
  * <ul>
- *   <li>{@link #auto}：未写 select，按结果类型推列（实体 → 该表全部列；DTO → 按字段名在参与表中唯一匹配）。</li>
+ *   <li>{@link #auto}：未写 select，按结果类型推列（已注册实体 → 该表全部列；单表 DTO/Record → 按字段名匹配主表列；联表非实体 DTO 要求显式 {@code select(...)}）。</li>
  *   <li>{@link #named}：select 后按名字映射（{@code list(X.class)}）。</li>
  *   <li>{@link #single}：select 单列直接取值。</li>
  *   <li>{@link #positional}：select 后按位置映射（{@code list(X::new)}）。</li>
@@ -38,57 +40,75 @@ final class Projections {
     // ===== 未写 select：由结果类型决定列 =====
 
     static <V> Projection<V> auto(Class<V> type, RenderContext ctx) {
+        ResultType kind = ResultType.classify(type);
+        if (kind == ResultType.MAP) {
+            throw new IllegalArgumentException("Cannot map all columns to " + type.getName()
+                    + " without select; use select(...).list(" + type.getSimpleName()
+                    + ".class) or SqlOps.listMap()");
+        }
+        if (kind == ResultType.SCALAR) {
+            throw new IllegalArgumentException("Cannot map rows to " + type.getName()
+                    + " without select; use select(column).list() for a single column");
+        }
+        if (kind == ResultType.UNSUPPORTED) {
+            throw new IllegalArgumentException("Cannot map rows to " + type.getName()
+                    + ": use a concrete DTO or record type");
+        }
         Collection<Class<?>> sources = ctx.registeredEntities();
         if (sources.contains(type)) {
             return entity(type, ctx);
         }
-        if (SqlFormatUtils.isPrimitive(type)) {
-            throw new IllegalArgumentException("Cannot map rows to " + type.getName()
-                    + " without select; use select(column).list() for a single column");
+        if (ctx.hasJoins()) {
+            throw new IllegalStateException("Cannot auto-project non-entity type " + type.getSimpleName()
+                    + " across joined tables without explicit select(...); use select(...).list("
+                    + type.getSimpleName() + "::new) or select(...).list(" + type.getSimpleName() + ".class)");
         }
         List<String> columns = new ArrayList<>();
+        List<SqlNode> nodes = new ArrayList<>();
         for (Field field : properties(type)) {
             String property = field.getName();
             String declaredColumn = PersistenceAnnotations.findColumnName(field).orElse(null);
-            List<ColumnAlias> matches = new ArrayList<>();
-            List<String> matchedTables = new ArrayList<>();
-            for (Class<?> source : sources) {
-                ColumnAlias match = ctx.findColumn(source, property, declaredColumn);
-                if (match != null) {
-                    matches.add(match);
-                    matchedTables.add(match.getTableName());
-                }
-            }
-            if (matches.isEmpty()) {
+            ColumnAlias match = ctx.findColumn(ctx.rootType(), property, declaredColumn);
+            if (match == null) {
                 throw new IllegalStateException("Property '" + property + "' of " + type.getSimpleName()
-                        + " matches no column of the queried tables; use select(...).list(" + type.getSimpleName() + "::new)");
+                        + " matches no column of " + ctx.rootType().getSimpleName()
+                        + "; use select(...).list(" + type.getSimpleName() + "::new)");
             }
-            if (matches.size() > 1) {
-                throw new IllegalStateException("Property '" + property + "' of " + type.getSimpleName()
-                        + " is ambiguous across tables " + matchedTables + "; use select(...).list(" + type.getSimpleName() + "::new)");
-            }
-            columns.add(matches.get(0).identity() + " AS " + property);
+            columns.add(match.identity() + " AS " + property);
+            nodes.add(SqlNodes.alias(node(match), property));
         }
         if (columns.isEmpty()) {
             throw new IllegalStateException("No mappable property found on " + type.getName());
         }
-        return new Projection<>(columns, BeanRowMapper.of(type));
+        return Projection.typed(columns, nodes, kind, type, false, ctx);
     }
 
     /** 实体全部列（按实体元数据映射）。 */
     static <V> Projection<V> entity(Class<V> type, RenderContext ctx) {
         List<ColumnAlias> allColumns = ctx.getAllColumns(type);
         List<String> columns = new ArrayList<>(allColumns.size());
+        List<SqlNode> nodes = new ArrayList<>(allColumns.size());
         for (ColumnAlias column : allColumns) {
             columns.add(column.identity());
+            nodes.add(node(column));
         }
-        return new Projection<>(columns, BeanRowMapper.of(type));
+        return Projection.typed(columns, nodes, ResultType.BEAN, type, false, ctx);
     }
 
     // ===== 写了 select =====
 
     static <V> Projection<V> named(List<IGetter<?, ?>> selected, Class<V> type, RenderContext ctx) {
+        ResultType kind = ResultType.classify(type);
+        if (kind == ResultType.UNSUPPORTED) {
+            throw new IllegalArgumentException("Cannot map query results to " + type.getName()
+                    + ": use a concrete DTO or record type");
+        }
+        if (kind == ResultType.SCALAR && selected.size() > 1) {
+            throw new IllegalArgumentException("Cannot map " + selected.size() + " columns to scalar type "
+                    + type.getName() + "; use a concrete DTO or record type, or select a single column");
+        }
         List<String> columns = new ArrayList<>(selected.size());
+        List<SqlNode> nodes = new ArrayList<>(selected.size());
         Set<String> labels = new HashSet<>();
         for (IGetter<?, ?> column : selected) {
             if (column instanceof Expr<?> expr && expr.alias() == null) {
@@ -102,8 +122,9 @@ final class Projections {
                         + type.getSimpleName() + "::new) to map by position");
             }
             columns.add(provider.resolveSql(ctx) + " AS " + label);
+            nodes.add(SqlNodes.alias(provider.resolveNode(ctx), label));
         }
-        return new Projection<>(columns, BeanRowMapper.of(type));
+        return Projection.typed(columns, nodes, kind, type, hasAggregate(selected), ctx);
     }
 
     @SuppressWarnings("unchecked")
@@ -111,18 +132,24 @@ final class Projections {
         Class<?> type = valueType(column);
         ColumnMetaProvider provider = ColumnMetaProvider.fromGetter(column);
         String sql = provider.resolveSql(ctx) + " AS c1";
-        return new Projection<>(List.of(sql), rs -> (A) ColumnValues.read(rs, 1, type));
+        return Projection.mapped(List.of(sql),
+                List.of(SqlNodes.alias(provider.resolveNode(ctx), "c1")),
+                rs -> (A) ColumnValues.read(rs, 1, type),
+                column instanceof Expr<?> expr && expr.isAggregate(),
+                ctx);
     }
 
     static <V> Projection<V> positional(List<IGetter<?, ?>> selected, Function<Object[], V> factory, Object mapper,
                                         RenderContext ctx) {
         List<String> columns = new ArrayList<>(selected.size());
+        List<SqlNode> nodes = new ArrayList<>(selected.size());
         Class<?>[] types = new Class<?>[selected.size()];
         List<String> names = new ArrayList<>(selected.size());
         for (int i = 0; i < selected.size(); i++) {
             IGetter<?, ?> column = selected.get(i);
             ColumnMetaProvider provider = ColumnMetaProvider.fromGetter(column);
             columns.add(provider.resolveSql(ctx) + " AS c" + (i + 1));
+            nodes.add(SqlNodes.alias(provider.resolveNode(ctx), "c" + (i + 1)));
             types[i] = valueType(column);
             names.add((column instanceof Expr<?> expr && expr.alias() == null) ? null : provider.propertyName());
         }
@@ -132,7 +159,21 @@ final class Projections {
             RecordOrderVerifier.verify(record, names);
             parameterTypes = RecordOrderVerifier.parameterTypes(record);
         }
-        return new Projection<>(columns, new PositionalRowMapper<>(types, parameterTypes, factory));
+        return Projection.mapped(columns, nodes, new PositionalRowMapper<>(types, parameterTypes, factory),
+                hasAggregate(selected), ctx);
+    }
+
+    private static SqlNode node(ColumnAlias alias) {
+        return SqlNodes.column(alias.getTableAlias(), alias.getColumnName());
+    }
+
+    private static boolean hasAggregate(List<IGetter<?, ?>> selected) {
+        for (IGetter<?, ?> column : selected) {
+            if (column instanceof Expr<?> expr && expr.isAggregate()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     static Class<?> valueType(IGetter<?, ?> column) {

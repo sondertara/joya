@@ -24,6 +24,18 @@ public final class SqlParameterList {
         return "?";
     }
 
+    /**
+     * 追加一个已有参数，并按当前列表位置重排 {@code index}。
+     * <p>用于 AST 中的 {@code Raw} 节点在渲染时把片段自带的参数并入总参数列表。
+     */
+    public void add(SqlParameter parameter) {
+        if (parameter == null) {
+            return;
+        }
+        parameters.add(new SqlParameter(parameters.size() + 1, parameter.name(), parameter.value(),
+                parameter.source(), parameter.binder()));
+    }
+
     /** 当前参数数量。 */
     public int size() {
         return parameters.size();

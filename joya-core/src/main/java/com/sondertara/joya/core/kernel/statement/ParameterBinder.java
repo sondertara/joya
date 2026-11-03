@@ -1,6 +1,5 @@
 package com.sondertara.joya.core.kernel.statement;
 
-import com.sondertara.joya.core.kernel.dialect.DbType;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;

@@ -1,8 +1,8 @@
 package com.sondertara.joya.core.kernel.executor;
 
+import com.sondertara.joya.core.kernel.connection.ConnectionProvider;
+import com.sondertara.joya.core.kernel.error.SqlExceptionTranslator;
 import com.sondertara.joya.core.kernel.connection.ConnectionCallback;
-import com.sondertara.joya.core.kernel.executor.ResultSetExtractor;
-import com.sondertara.joya.core.kernel.executor.RowMapper;
 import com.sondertara.joya.core.kernel.statement.BatchSqlStatement;
 import com.sondertara.joya.core.kernel.statement.SqlStatement;
 
@@ -17,6 +17,15 @@ import java.util.stream.Stream;
  * 连接来源由实现注入的 {@code ConnectionProvider} 决定。
  */
 public interface Executor {
+
+    /**
+     * 执行器工厂：{@code ExecutionKernel} 在构造与 {@code bind(...)} 派生事务视图时，
+     * 用对应的连接来源与异常翻译器创建执行器，使执行器成为真正可替换的接缝。
+     */
+    @FunctionalInterface
+    interface Factory {
+        Executor create(ConnectionProvider connections, SqlExceptionTranslator exceptionTranslator);
+    }
 
     <T> T query(SqlStatement statement, ResultSetExtractor<T> extractor);
 
@@ -37,28 +46,15 @@ public interface Executor {
 
     int update(SqlStatement statement);
 
-    /** 插入并返回首个生成键；无生成键时返回 {@code null}。 */
-    Object insert(SqlStatement statement);
-
     /** 单条 INSERT 执行结果切片（受影响行数 + 首个生成键）。 */
     record InsertSlice(int affectedRows, Object generatedKey) {
     }
 
     /** 执行 INSERT 并返回真实受影响行数与首个生成键。 */
-    default InsertSlice insertExecute(SqlStatement statement) {
-        return new InsertSlice(1, insert(statement));
-    }
-
-    /** 列级绑定的批量执行（返回逐行计数数组）。 */
-    int[] batchUpdate(BatchSqlStatement batch);
+    InsertSlice insertExecute(SqlStatement statement);
 
     /** 列级绑定的批量执行（支持分片 Flush 与生成键收集）。 */
-    default BatchSlice batchExecute(BatchSqlStatement batch) {
-        return BatchSlice.of(batchUpdate(batch), null);
-    }
-
-    /** 以 {@code template.sql()} 为模板，对每组参数各执行一次（template 自身参数忽略）。 */
-    int[] batchUpdate(SqlStatement template, List<Object[]> rows);
+    BatchSlice batchExecute(BatchSqlStatement batch);
 
     /** 在一条连接上执行回调（逃生舱）。 */
     <T> T withConnection(ConnectionCallback<T> action);

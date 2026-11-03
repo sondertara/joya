@@ -1,7 +1,7 @@
 package com.sondertara.joya.spring.autoconfigure;
 
 import com.sondertara.joya.core.JoyaSettings;
-import com.sondertara.joya.core.kernel.dialect.DbType;
+import com.sondertara.joya.core.kernel.statement.DbType;
 import com.sondertara.joya.core.kernel.dialect.DialectStrategy;
 import org.springframework.boot.autoconfigure.jdbc.DataSourceProperties;
 import org.springframework.boot.context.properties.ConfigurationProperties;
@@ -130,6 +130,9 @@ public class JoyaProperties {
     }
 
     public void setQueryTimeoutSeconds(int queryTimeoutSeconds) {
+        if (queryTimeoutSeconds < 0) {
+            throw new IllegalArgumentException("queryTimeoutSeconds must not be negative: " + queryTimeoutSeconds);
+        }
         this.queryTimeoutSeconds = queryTimeoutSeconds;
     }
 
@@ -227,6 +230,9 @@ public class JoyaProperties {
         /** 单库动态方言探测开关覆写。 */
         private Boolean dynamicDialect;
 
+        /** 单库 Hikari 连接池属性透传绑定（如 maximum-pool-size、minimum-idle）。 */
+        private java.util.Map<String, Object> hikari = new java.util.LinkedHashMap<>();
+
         @Override
         public String getName() {
             return name;
@@ -242,6 +248,9 @@ public class JoyaProperties {
         }
 
         public void setQueryTimeoutSeconds(Integer queryTimeoutSeconds) {
+            if (queryTimeoutSeconds != null && queryTimeoutSeconds < 0) {
+                throw new IllegalArgumentException("queryTimeoutSeconds must not be negative: " + queryTimeoutSeconds);
+            }
             this.queryTimeoutSeconds = queryTimeoutSeconds;
         }
 
@@ -291,6 +300,14 @@ public class JoyaProperties {
 
         public void setDynamicDialect(Boolean dynamicDialect) {
             this.dynamicDialect = dynamicDialect;
+        }
+
+        public java.util.Map<String, Object> getHikari() {
+            return hikari;
+        }
+
+        public void setHikari(java.util.Map<String, Object> hikari) {
+            this.hikari = hikari == null ? new java.util.LinkedHashMap<>() : new java.util.LinkedHashMap<>(hikari);
         }
     }
 

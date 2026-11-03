@@ -6,13 +6,10 @@ import java.lang.invoke.SerializedLambda;
 import java.lang.reflect.Method;
 import java.lang.reflect.RecordComponent;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 import java.util.Optional;
-import java.util.WeakHashMap;
 
 /**
  * 位置映射的 record 顺序校验。
@@ -23,8 +20,16 @@ import java.util.WeakHashMap;
  */
 final class RecordOrderVerifier {
 
-    private static final Map<Class<?>, Optional<Class<?>>> CONSTRUCTED_RECORDS =
-            Collections.synchronizedMap(new WeakHashMap<>());
+    private static final class Holder {
+        volatile Optional<Class<?>> recordType;
+    }
+
+    private static final ClassValue<Holder> CONSTRUCTED_RECORDS = new ClassValue<>() {
+        @Override
+        protected Holder computeValue(Class<?> type) {
+            return new Holder();
+        }
+    };
 
     private RecordOrderVerifier() {
     }
@@ -36,7 +41,13 @@ final class RecordOrderVerifier {
         if (mapper == null) {
             return null;
         }
-        return CONSTRUCTED_RECORDS.computeIfAbsent(mapper.getClass(), k -> resolve(mapper)).orElse(null);
+        Holder holder = CONSTRUCTED_RECORDS.get(mapper.getClass());
+        Optional<Class<?>> resolved = holder.recordType;
+        if (resolved == null) {
+            resolved = resolve(mapper);
+            holder.recordType = resolved;
+        }
+        return resolved.orElse(null);
     }
 
     /**
@@ -84,7 +95,8 @@ final class RecordOrderVerifier {
             writeReplace.setAccessible(true);
             Object replaced = writeReplace.invoke(mapper);
             if (replaced instanceof SerializedLambda lambda && "<init>".equals(lambda.getImplMethodName())) {
-                Class<?> type = LambdaUtils.loadClass(lambda.getImplClass().replace('/', '.'));
+                Class<?> type = LambdaUtils.loadClass(
+                        lambda.getImplClass().replace('/', '.'), mapper.getClass().getClassLoader());
                 if (type.isRecord()) {
                     return Optional.of(type);
                 }

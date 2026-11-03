@@ -30,13 +30,17 @@ public enum TxState {
     ROLLED_BACK;
 
     private static final Map<TxState, Set<TxState>> TRANSITIONS = Map.of(
-            NONE,            EnumSet.of(ACTIVE, ROLLED_BACK),
-            ACTIVE,          EnumSet.of(ACTIVE, MARKED_ROLLBACK, COMMITTED, ROLLED_BACK),
+            NONE,            immutable(EnumSet.of(ACTIVE, ROLLED_BACK)),
+            ACTIVE,          immutable(EnumSet.of(MARKED_ROLLBACK, COMMITTED, ROLLED_BACK)),
             // I7：标记回滚后只能走向 ROLLED_BACK，绝不能 COMMITTED
-            MARKED_ROLLBACK, EnumSet.of(ROLLED_BACK),
-            COMMITTED,       EnumSet.noneOf(TxState.class),
-            ROLLED_BACK,     EnumSet.noneOf(TxState.class)
+            MARKED_ROLLBACK, immutable(EnumSet.of(ROLLED_BACK)),
+            COMMITTED,       immutable(EnumSet.noneOf(TxState.class)),
+            ROLLED_BACK,     immutable(EnumSet.noneOf(TxState.class))
     );
+
+    private static Set<TxState> immutable(Set<TxState> states) {
+        return Set.copyOf(states);
+    }
 
     /**
      * 断言可以迁移到目标状态，非法迁移抛异常。

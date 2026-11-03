@@ -1,5 +1,6 @@
 package com.sondertara.joya.core.jdbc.resultset.mapper;
 
+import com.sondertara.joya.core.kernel.executor.ResultType;
 import com.sondertara.joya.core.kernel.executor.RowMapper;
 import com.sondertara.joya.core.kernel.executor.SingleColumnRowMapper;
 
@@ -8,15 +9,14 @@ import com.sondertara.joya.utils.ClassUtils;
 import com.sondertara.joya.utils.CollectionUtils;
 import com.sondertara.joya.utils.ConvertUtils;
 import com.sondertara.joya.utils.LinkedCaseInsensitiveMap;
-import com.sondertara.joya.utils.PropertyUtils;
 import com.sondertara.joya.utils.Strings;
 import com.sondertara.joya.core.jdbc.resultset.FieldAlias;
-import com.sondertara.joya.core.cache.CacheHolder;
+import com.sondertara.joya.core.metadata.LocalTableMetaCache;
 import com.sondertara.joya.core.metadata.EntityMetadataContext;
 import com.sondertara.joya.core.metadata.PersistenceAnnotations;
 import com.sondertara.joya.exceptions.DbException;
 import com.sondertara.joya.utils.SqlDataUtils;
-import com.sondertara.joya.utils.SqlFormatUtils;
+import com.sondertara.joya.utils.TypeUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.jspecify.annotations.Nullable;
 
@@ -116,11 +116,16 @@ public class BeanRowMapper<T> implements RowMapper<T> {
         } catch (NoSuchMethodException ignored) {
         }
         if (PersistenceAnnotations.isTableOrEntityPresent(type)) {
-            metadataContext = CacheHolder.tableMetaCache().getMetadataContext(type);
+            metadataContext = LocalTableMetaCache.getMetadataContext(type);
         }
 
         Map<String, Method> writeMethods = new HashMap<>();
-        Collection<PropertyDescriptor> descriptors = PropertyUtils.getPropertyDescriptors(type);
+        Collection<PropertyDescriptor> descriptors;
+        try {
+            descriptors = java.util.Arrays.asList(java.beans.Introspector.getBeanInfo(type).getPropertyDescriptors());
+        } catch (java.beans.IntrospectionException e) {
+            throw new DbException("Failed to introspect bean: " + type.getName(), e);
+        }
         for (PropertyDescriptor pd : descriptors) {
             Method writeMethod = pd.getWriteMethod();
             if (writeMethod != null) {
@@ -288,7 +293,7 @@ public class BeanRowMapper<T> implements RowMapper<T> {
 
     private static boolean isSimpleValueType(Class<?> clazz) {
         return clazz.isPrimitive()
-                || SqlFormatUtils.isPrimitive(clazz)
+                || TypeUtils.isPrimitiveOrNumber(clazz)
                 || CharSequence.class.isAssignableFrom(clazz)
                 || Date.class.isAssignableFrom(clazz)
                 || java.time.temporal.Temporal.class.isAssignableFrom(clazz)
@@ -315,6 +320,10 @@ public class BeanRowMapper<T> implements RowMapper<T> {
                 return mapRecord(row, metaData, count);
             }
             if (this.mappedTargets.isEmpty()) {
+                if (!ResultType.isScalar(type)) {
+                    throw new IllegalStateException("Cannot map result set to " + type.getName()
+                            + ": no writable properties; use a concrete DTO/record or listMap() for Map rows");
+                }
                 return (T) setSingleField(row);
             }
             Constructor<T> ctor = defaultConstructor != null ? defaultConstructor : type.getDeclaredConstructor();
@@ -331,11 +340,15 @@ public class BeanRowMapper<T> implements RowMapper<T> {
                     continue;
                 }
                 Class<?> propertyType = target.type();
-                Object value = SqlDataUtils.getResultSetValue(row, i, propertyType);
+                Object value;
                 if (fieldTypeConverterMap.containsKey(target.name())) {
-                    value = fieldTypeConverterMap.get(target.name()).convert(value);
-                } else if (value != null && !wrapPrimitive(propertyType).isInstance(value)) {
-                    value = ConvertUtils.convert(value, propertyType);
+                    Object rawValue = SqlDataUtils.getResultSetValue(row, i);
+                    value = fieldTypeConverterMap.get(target.name()).convert(rawValue);
+                } else {
+                    value = SqlDataUtils.getResultSetValue(row, i, propertyType);
+                    if (value != null && !wrapPrimitive(propertyType).isInstance(value)) {
+                        value = ConvertUtils.convert(value, propertyType);
+                    }
                 }
                 if (value != null || !propertyType.isPrimitive()) {
                     try {
@@ -377,11 +390,15 @@ public class BeanRowMapper<T> implements RowMapper<T> {
             }
             RecordComponent rc = recordComponents[compIdx];
             Class<?> compType = rc.getType();
-            Object value = SqlDataUtils.getResultSetValue(row, i, compType);
+            Object value;
             if (fieldTypeConverterMap.containsKey(rc.getName())) {
-                value = fieldTypeConverterMap.get(rc.getName()).convert(value);
-            } else if (value != null && ! wrapPrimitive(compType).isInstance(value)) {
-                value = ConvertUtils.convert(value, compType);
+                Object rawValue = SqlDataUtils.getResultSetValue(row, i);
+                value = fieldTypeConverterMap.get(rc.getName()).convert(rawValue);
+            } else {
+                value = SqlDataUtils.getResultSetValue(row, i, compType);
+                if (value != null && !wrapPrimitive(compType).isInstance(value)) {
+                    value = ConvertUtils.convert(value, compType);
+                }
             }
             if (value != null || !compType.isPrimitive()) {
                 args[compIdx] = value;

@@ -1,6 +1,8 @@
 package com.sondertara.joya.core.query;
 
 import com.sondertara.joya.core.kernel.statement.ParameterSource;
+import com.sondertara.joya.core.kernel.statement.SqlNode;
+import com.sondertara.joya.core.kernel.statement.SqlNodes;
 import com.sondertara.joya.core.kernel.statement.SqlParameterList;
 
 /**
@@ -23,4 +25,14 @@ public interface SqlPredicate {
      * @param source 参数来源标记（如 {@link ParameterSource#WHERE}）
      */
     void render(RenderContext ctx, StringBuilder sql, SqlParameterList params, ParameterSource source);
+
+    /**
+     * 产出 AST 叶子节点；默认把当前谓词渲染为 Raw，具体谓词可覆盖为结构化节点。
+     */
+    default SqlNode toNode(RenderContext ctx, ParameterSource source) {
+        StringBuilder sql = new StringBuilder();
+        SqlParameterList params = new SqlParameterList();
+        render(ctx, sql, params, source);
+        return sql.isEmpty() ? null : SqlNodes.raw(sql.toString(), params.toList());
+    }
 }

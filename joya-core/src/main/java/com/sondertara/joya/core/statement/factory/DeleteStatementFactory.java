@@ -1,10 +1,12 @@
 package com.sondertara.joya.core.statement.factory;
 
+import com.sondertara.joya.core.kernel.statement.SqlNode;
+import com.sondertara.joya.core.kernel.statement.SqlNodes;
 import com.sondertara.joya.core.kernel.statement.SqlRenderer;
+import com.sondertara.joya.core.naming.NamingPolicy;
 
 import com.sondertara.joya.core.kernel.statement.Operation;
 import com.sondertara.joya.core.kernel.statement.ParameterSource;
-import com.sondertara.joya.core.kernel.statement.SqlParameterList;
 import com.sondertara.joya.core.kernel.statement.SqlStatement;
 import com.sondertara.joya.core.kernel.statement.StatementMetadata;
 import com.sondertara.joya.core.kernel.statement.TableRef;
@@ -38,16 +40,13 @@ public final class DeleteStatementFactory {
             throw new IllegalStateException("DELETE without WHERE is not allowed; use allowAll() explicitly");
         }
 
-        SqlParameterList params = new SqlParameterList();
-        StringBuilder whereSql = new StringBuilder();
+        SqlNode whereNode = null;
         if (where != null && !where.isEmpty()) {
             RenderContext renderContext = RenderContext.forSingleTable(meta, namingPolicy);
-            where.render(renderContext, whereSql, params, ParameterSource.WHERE);
+            whereNode = where.toNode(renderContext, ParameterSource.WHERE);
         }
 
         String tableName = meta.qualifiedTableName(namingPolicy);
-        String sql = SqlRenderer.renderDelete(tableName, whereSql.toString());
-
         Set<TableRef> tables = new LinkedHashSet<>();
         tables.add(TableRef.ofQualified(tableName, ""));
         StatementMetadata metadata = StatementMetadata.builder(Operation.DELETE)
@@ -55,6 +54,19 @@ public final class DeleteStatementFactory {
                 .entityType(meta.entityType())
                 .build();
 
-        return SqlStatement.of(sql, params.toList(), metadata);
+        SqlNode.Delete delete = new SqlNode.Delete(
+                SqlNodes.table(meta.tableName(), tableName),
+                whereNode);
+        return SqlRenderer.render(delete, metadata);
+    }
+
+    /** 构建 TRUNCATE 语句（表名仍由 NamingPolicy/TableNameResolver 决定）。 */
+    public static SqlStatement createTruncate(EntityMetadataContext meta, NamingPolicy namingPolicy) {
+        String tableName = meta.qualifiedTableName(namingPolicy);
+        StatementMetadata metadata = StatementMetadata.builder(Operation.DELETE)
+                .table(TableRef.ofQualified(tableName, ""))
+                .entityType(meta.entityType())
+                .build();
+        return SqlRenderer.render(new SqlNode.Truncate(SqlNodes.table(meta.tableName(), tableName)), metadata);
     }
 }

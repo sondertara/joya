@@ -55,7 +55,7 @@ class InterceptorChainTest {
     @Test
     void chain_executesInRegistrationOrder() {
         List<String> executed = new ArrayList<>();
-        // DefaultChain 本身不排序：排序职责在 JoyaTemplate 构造时完成（见 templateSortsInterceptorsByOrder）
+        // DefaultChain 本身不排序：排序职责在 ExecutionKernel 构造时完成（见 templateSortsInterceptorsByOrder）
         List<SqlInterceptor> interceptors = List.of(
                 new TaggingInterceptor("first", 10, true, executed),
                 new TaggingInterceptor("second", 5, true, executed));
@@ -70,7 +70,7 @@ class InterceptorChainTest {
     @Test
     void templateSortsInterceptorsByOrder() {
         List<String> executed = new ArrayList<>();
-        // 故意乱序注册，验证 JoyaTemplate 构造时按 order 升序排列
+        // 故意乱序注册，验证 ExecutionKernel 构造时按 order 升序排列
         List<SqlInterceptor> unordered = new ArrayList<>();
         unordered.add(new TaggingInterceptor("later", 10, true, executed));
         unordered.add(new TaggingInterceptor("earlier", 5, true, executed));
@@ -78,8 +78,11 @@ class InterceptorChainTest {
 
         org.h2.jdbcx.JdbcDataSource ds = new org.h2.jdbcx.JdbcDataSource();
         ds.setURL("jdbc:h2:mem:chain_sort;DB_CLOSE_DELAY=-1");
-        com.sondertara.joya.core.kernel.JoyaTemplate template =
-                new com.sondertara.joya.core.kernel.JoyaTemplate(ds, unordered);
+        com.sondertara.joya.core.kernel.ExecutionKernel template =
+                new com.sondertara.joya.core.kernel.ExecutionKernel(new com.sondertara.joya.core.kernel.ExecutionKernel.Config(
+                        ds, unordered, List.of(), List.of(),
+                        new com.sondertara.joya.core.kernel.connection.DataSourceConnectionProvider(ds, 0),
+                        null, null, null, null, null, null));
 
         List<String> orders = template.interceptors().stream()
                 .map(i -> ((TaggingInterceptor) i).tag)

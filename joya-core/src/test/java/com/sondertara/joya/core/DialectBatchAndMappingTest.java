@@ -1,10 +1,9 @@
 package com.sondertara.joya.core;
 
-import com.sondertara.joya.core.jdbc.dao.JoyaMapper;
-import com.sondertara.joya.core.kernel.dialect.DbType;
-import com.sondertara.joya.core.jdbc.support.annotation.Query;
+import com.sondertara.joya.core.mapper.JoyaMapper;
+import com.sondertara.joya.core.kernel.statement.DbType;
 import com.sondertara.joya.core.kernel.PageSlice;
-import com.sondertara.joya.core.kernel.dialect.Dialects;
+import com.sondertara.joya.core.kernel.dialect.Dialect;
 import com.sondertara.joya.core.kernel.dialect.PaginationStyle;
 import com.sondertara.joya.core.kernel.dialect.QuoteStyle;
 import com.sondertara.joya.core.kernel.statement.Operation;
@@ -236,46 +235,52 @@ class DialectBatchAndMappingTest {
 
     public interface ChainUserMapper extends JoyaMapper<ChainUser> {
 
-        @Query("SELECT * FROM t_chain_user WHERE id IN (?1) AND dept_id = ?2 ORDER BY id ASC")
-        List<ChainUser> findByIdsAndDept(List<Long> ids, Long deptId);
+        default List<ChainUser> findByIdsAndDept(List<Long> ids, Long deptId) {
+            return query()
+                    .where(w -> w.in(ChainUser::getId, ids).eq(ChainUser::getDeptId, deptId))
+                    .orderByAsc(ChainUser::getId)
+                    .list();
+        }
 
-        @Query("""
-                /* leading ?99 ' */
-                SELECT * FROM t_chain_user
-                WHERE id IN (?1)
-                  AND `dept_id` = ?2
-                  AND user_name <> 'it''s ?98'
-                  -- trailing ?97 "
-                ORDER BY id ASC
-                """)
-        List<ChainUser> findByArrayIdsAndDeptWithLexicalNoise(long[] ids, Long deptId);
+        default List<ChainUser> findByArrayIdsAndDeptWithLexicalNoise(long[] ids, Long deptId) {
+            List<Long> idList = java.util.Arrays.stream(ids).boxed().toList();
+            return query()
+                    .where(w -> w.in(ChainUser::getId, idList)
+                            .eq(ChainUser::getDeptId, deptId)
+                            .ne(ChainUser::getUserName, "it's ?98"))
+                    .orderByAsc(ChainUser::getId)
+                    .list();
+        }
 
-        @Query("# hash ?96 '\nSELECT * FROM t_chain_user WHERE id = ?1 AND dept_id = ?2")
-        List<ChainUser> findWithHashComment(Long id, Long deptId);
+        default int updateNameWithLeadingHint(String newName, Long id) {
+            return sql("/*+ INDEX(t_chain_user) */ UPDATE t_chain_user SET user_name = ? WHERE id = ?", newName, id)
+                    .update();
+        }
 
-        @Query("/*+ INDEX(t_chain_user) */ UPDATE t_chain_user SET user_name = ?1 WHERE id = ?2")
-        int updateNameWithLeadingHint(String newName, Long id);
+        default int deleteWithLineComment(Long id) {
+            return sql("-- line comment\nDELETE FROM t_chain_user WHERE id = ?", id).update();
+        }
 
-        @Query("-- line comment\nDELETE FROM t_chain_user WHERE id = ?1")
-        int deleteWithLineComment(Long id);
+        default List<ChainUser> findWithQuestionMarksInCommentsAndLiterals(Long id) {
+            return sql("/* ?99 */ SELECT * FROM t_chain_user WHERE user_name <> '?88' AND id = ? -- ?77", id)
+                    .list(ChainUser.class);
+        }
 
-        @Query("/* ?99 */ SELECT * FROM t_chain_user WHERE user_name <> '?88' AND id = ?1 -- ?77")
-        List<ChainUser> findWithQuestionMarksInCommentsAndLiterals(Long id);
+        default PageResult<ChainUser> findByDeptIdOrderByIdAsc(Long deptId, PageRequest page) {
+            return query().where(w -> w.eq(ChainUser::getDeptId, deptId)).orderByAsc(ChainUser::getId).page(page);
+        }
 
-        @Query("# leading hash comment\nUPDATE t_chain_user SET user_name = 'a\\' b', dept_id = ?2 WHERE id = ?1")
-        int updateWithMysqlHashCommentAndBackslashQuote(Long id, Long deptId);
-
-        @Query("SELECT * FROM t_chain_user WHERE id = ?0")
-        List<ChainUser> findWithZeroIndexedPlaceholder(Long id);
-
-        PageResult<ChainUser> findByDeptIdOrderByIdAsc(Long deptId, PageRequest page);
-
-        List<ChainUser> findByDeptIdOrderByIdDesc(Long deptId, PageRequest page);
+        default List<ChainUser> findByDeptIdOrderByIdDesc(Long deptId, PageRequest page) {
+            return sql(
+                    "SELECT * FROM t_chain_user WHERE dept_id = ? ORDER BY id DESC",
+                    deptId)
+                    .limit(ChainUser.class, page.getOffsetAsLong(), page.getSize());
+        }
     }
 
     @Entity
     @Table(name = "t_chain_user")
-    public static class MapperAuditedUser implements com.sondertara.joya.core.jdbc.support.listener.EntityListener {
+    public static class MapperAuditedUser implements com.sondertara.joya.core.listener.EntityListener {
         @Id
         @Column(name = "id")
         private Long id;
@@ -310,7 +315,10 @@ class DialectBatchAndMappingTest {
     }
 
     public interface MapperAuditedUserMapper extends JoyaMapper<MapperAuditedUser> {
-        int updateById(MapperAuditedUser entity, Long id);
+        default int updateById(MapperAuditedUser entity, Long id) {
+            entity.id = id;
+            return (int) ops().update(entity).affectedRows();
+        }
     }
 
     private JoyaClient joya;
@@ -411,41 +419,36 @@ class DialectBatchAndMappingTest {
                 List.of(customParam),
                 meta);
 
-        PageSlice<ChainUser> page = joya.template().queryPage(
-                stmt,
+        PageResult<ChainUser> page = joya.sql(stmt).page(
                 com.sondertara.joya.core.jdbc.resultset.mapper.BeanRowMapper.of(ChainUser.class),
-                0L,
-                1L);
+                PageRequest.of(0, 1));
         assertTrue(customBinderInvoked.get(), "Custom ParameterBinder must be preserved across queryPage/queryLimit");
-        assertEquals(2L, page.total());
-        assertEquals(1, page.rows().size());
-        assertEquals("Alice", page.rows().get(0).getUserName());
+        assertEquals(2L, page.getTotal());
+        assertEquals(1, page.getData().size());
+        assertEquals("Alice", page.getData().get(0).getUserName());
 
         SqlStatement baseStmt = SqlStatement.select("SELECT id FROM t_chain_user WHERE dept_id = ? ORDER BY id ASC", 10L);
 
-        SqlStatement sqlServer2012Page = Dialects.SQLSERVER.pageSql(baseStmt, 20, 10);
+        SqlStatement sqlServer2012Page = Dialect.SQLSERVER.pageSql(baseStmt, 20, 10);
         assertTrue(sqlServer2012Page.sql().endsWith("OFFSET ? ROWS FETCH NEXT ? ROWS ONLY"));
         assertEquals(List.of(10L, 20L, 10L), sqlServer2012Page.args());
 
-        SqlStatement sqlServer2005Page = Dialects.SQLSERVER_2005.pageSql(baseStmt, 20, 10);
-        long qmCount = sqlServer2005Page.sql().chars().filter(c -> c == '?').count();
-        assertEquals(sqlServer2005Page.parameters().size(), qmCount);
-        assertEquals(List.of(10L, 21L, 30L), sqlServer2005Page.args());
+        SqlStatement db2Page = Dialect.DB2.pageSql(baseStmt, 20, 10);
+        assertTrue(db2Page.sql().endsWith("OFFSET ? ROWS FETCH NEXT ? ROWS ONLY"));
+        assertEquals(List.of(10L, 20L, 10L), db2Page.args());
 
-        SqlStatement db2Page = Dialects.DB2.pageSql(baseStmt, 20, 10);
-        assertEquals(List.of(10L, 21L, 30L), db2Page.args(), "DB2 BETWEEN must use 1-based [offset+1, offset+limit]");
+        SqlStatement informixPage = Dialect.INFORMIX.pageSql(baseStmt, 5, 10);
+        assertTrue(informixPage.sql().endsWith("LIMIT ? OFFSET ?"));
+        assertEquals(List.of(10L, 10L, 5L), informixPage.args());
 
-        SqlStatement informixPage = Dialects.INFORMIX.pageSql(baseStmt, 5, 10);
-        assertEquals(List.of(5L, 10L, 10L), informixPage.args());
-
-        SqlStatement oracleCount = Dialects.ORACLE.countSql(baseStmt);
+        SqlStatement oracleCount = Dialect.ORACLE.countSql(baseStmt);
         assertEquals("SELECT COUNT(*) FROM (SELECT id FROM t_chain_user WHERE dept_id = ? ORDER BY id ASC) TEMP_T", oracleCount.sql());
 
-        assertEquals("`t_order`", Dialects.MYSQL.quoteIdentifier("t_order"));
-        assertEquals("\"sec\".\"t_order\"", Dialects.POSTGRESQL.quoteIdentifier("sec.t_order"));
-        assertEquals("[dbo].[t_order]", Dialects.SQLSERVER.quoteIdentifier("dbo.t_order"));
-        assertEquals(QuoteStyle.DOUBLE_QUOTE, Dialects.H2.quoteStyle());
-        assertEquals(PaginationStyle.LIMIT_OFFSET, Dialects.H2.paginationStyle());
+        assertEquals("`t_order`", Dialect.MYSQL.quoteIdentifier("t_order"));
+        assertEquals("\"sec\".\"t_order\"", Dialect.POSTGRESQL.quoteIdentifier("sec.t_order"));
+        assertEquals("[dbo].[t_order]", Dialect.SQLSERVER.quoteIdentifier("dbo.t_order"));
+        assertEquals(QuoteStyle.DOUBLE_QUOTE, Dialect.H2.quoteStyle());
+        assertEquals(PaginationStyle.LIMIT_OFFSET, Dialect.H2.paginationStyle());
 
         assertEquals(DbType.sqlserver, DbType.of("Microsoft SQL Server"));
         assertEquals(DbType.derby, DbType.of("Apache Derby"));
@@ -497,42 +500,38 @@ class DialectBatchAndMappingTest {
                   AND other = $tag$?4 `` $tag$
                 """;
         String expected = sql.replace("a = ?1", "a = ?").replace("b = ?2", "b = ?");
-        assertEquals(expected, com.sondertara.joya.utils.SqlFormatUtils.getJdbcStyleSql(sql));
-        assertEquals(2, com.sondertara.joya.utils.SqlFormatUtils.countPlaceholders(sql));
+        assertEquals(expected, com.sondertara.joya.core.kernel.statement.SqlFormatUtils.getJdbcStyleSql(sql));
+        assertEquals(2, com.sondertara.joya.core.kernel.statement.SqlFormatUtils.countPlaceholders(sql));
         assertEquals(
                 List.of(1, 2),
-                com.sondertara.joya.utils.SqlFormatUtils.scanPlaceholders(sql).stream()
-                        .map(com.sondertara.joya.utils.SqlFormatUtils.Placeholder::index)
+                com.sondertara.joya.core.kernel.statement.SqlFormatUtils.scanPlaceholders(sql).stream()
+                        .map(com.sondertara.joya.core.kernel.statement.SqlFormatUtils.Placeholder::index)
                         .toList());
 
         String escaped = "SELECT 'a\\'?1' AS s, \"a\\\"?2\" AS d, `a\\`?3` AS b WHERE id = ?1";
-        assertEquals(1, com.sondertara.joya.utils.SqlFormatUtils.countPlaceholders(escaped));
+        assertEquals(1, com.sondertara.joya.core.kernel.statement.SqlFormatUtils.countPlaceholders(escaped));
         assertEquals(
                 escaped.substring(0, escaped.length() - 1),
-                com.sondertara.joya.utils.SqlFormatUtils.getJdbcStyleSql(escaped));
+                com.sondertara.joya.core.kernel.statement.SqlFormatUtils.getJdbcStyleSql(escaped));
 
         String standardBackslash = "SELECT * FROM t WHERE name LIKE ? ESCAPE '\\' OR age BETWEEN ? AND ?";
-        assertEquals(3, com.sondertara.joya.utils.SqlFormatUtils.countPlaceholders(standardBackslash));
+        assertEquals(3, com.sondertara.joya.core.kernel.statement.SqlFormatUtils.countPlaceholders(standardBackslash));
         org.junit.jupiter.api.Assertions.assertThrows(
                 IllegalArgumentException.class,
-                () -> com.sondertara.joya.utils.SqlFormatUtils.scanPlaceholders("SELECT $$ ?1"));
+                () -> com.sondertara.joya.core.kernel.statement.SqlFormatUtils.scanPlaceholders("SELECT $$ ?1"));
     }
 
     @Test
-    void mapperShouldUseConsistentLexerForNativeParametersAndArrayExpansion() throws Exception {
+    void mapperShouldUseConsistentLexerForNativeParametersAndArrayExpansion() {
         ChainUserMapper mapper = joya.mapper(ChainUserMapper.class);
         List<ChainUser> rows = mapper.findByArrayIdsAndDeptWithLexicalNoise(new long[]{1L, 3L}, 10L);
         assertEquals(2, rows.size());
         assertEquals("Alice", rows.get(0).getUserName());
         assertEquals("Charlie", rows.get(1).getUserName());
 
-        java.lang.reflect.Method hashMethod = ChainUserMapper.class.getMethod(
-                "findWithHashComment", Long.class, Long.class);
-        com.sondertara.joya.core.jdbc.dao.support.EntityBasedBoundSql parsed =
-                new com.sondertara.joya.core.jdbc.dao.support.NativeQueryParser(ChainUser.class, hashMethod).parse();
-        assertEquals(2, parsed.parameterBinding().size());
-        String normalized = com.sondertara.joya.utils.SqlFormatUtils.getJdbcStyleSql(parsed.getSqlString());
-        assertEquals(2, com.sondertara.joya.utils.SqlFormatUtils.countPlaceholders(normalized));
+        String normalized = com.sondertara.joya.core.kernel.statement.SqlFormatUtils.getJdbcStyleSql(
+                "# hash ?96 '\nSELECT * FROM t_chain_user WHERE id = ?1 AND dept_id = ?2");
+        assertEquals(2, com.sondertara.joya.core.kernel.statement.SqlFormatUtils.countPlaceholders(normalized));
         assertTrue(normalized.contains("WHERE id = ? AND dept_id = ?"), normalized);
     }
 
@@ -718,8 +717,8 @@ class DialectBatchAndMappingTest {
                         }
                     }
                 };
-        com.sondertara.joya.core.kernel.executor.JdbcExecutor customExec =
-                new com.sondertara.joya.core.kernel.executor.JdbcExecutor(trackingProvider);
+        com.sondertara.joya.core.kernel.executor.Executor customExec =
+                com.sondertara.joya.core.kernel.executor.Executors.JDBC.create(trackingProvider, null);
         ParameterBinder failingBinder = (ps, index, param) -> {
             throw new IllegalStateException("Simulated runtime failure in binder");
         };
@@ -753,25 +752,25 @@ class DialectBatchAndMappingTest {
         assertEquals("AfterScript", joya.of(ChainUser.class).findById(3L).orElseThrow().internalNote);
 
         // 3. BeanRowMapper 单列查询支持 Timestamp / Time / java.util.Date（不抛 ClassCastException 且保留时分秒）
-        java.sql.Timestamp ts = joya.template().queryOne(
-                SqlStatement.select("SELECT TIMESTAMP '2026-05-01 14:25:36'"),
-                com.sondertara.joya.core.jdbc.resultset.mapper.BeanRowMapper.of(java.sql.Timestamp.class));
+        java.sql.Timestamp ts = joya.sql(SqlStatement.select("SELECT TIMESTAMP '2026-05-01 14:25:36'"))
+                .one(com.sondertara.joya.core.jdbc.resultset.mapper.BeanRowMapper.of(java.sql.Timestamp.class))
+                .orElseThrow();
         assertEquals(java.sql.Timestamp.valueOf("2026-05-01 14:25:36"), ts);
 
-        java.sql.Time sqlTime = joya.template().queryOne(
-                SqlStatement.select("SELECT TIME '14:25:36'"),
-                com.sondertara.joya.core.jdbc.resultset.mapper.BeanRowMapper.of(java.sql.Time.class));
+        java.sql.Time sqlTime = joya.sql(SqlStatement.select("SELECT TIME '14:25:36'"))
+                .one(com.sondertara.joya.core.jdbc.resultset.mapper.BeanRowMapper.of(java.sql.Time.class))
+                .orElseThrow();
         assertEquals(java.sql.Time.valueOf("14:25:36"), sqlTime);
 
-        java.util.Date utilDate = joya.template().queryOne(
-                SqlStatement.select("SELECT TIMESTAMP '2026-05-01 14:25:36'"),
-                com.sondertara.joya.core.jdbc.resultset.mapper.BeanRowMapper.of(java.util.Date.class));
+        java.util.Date utilDate = joya.sql(SqlStatement.select("SELECT TIMESTAMP '2026-05-01 14:25:36'"))
+                .one(com.sondertara.joya.core.jdbc.resultset.mapper.BeanRowMapper.of(java.util.Date.class))
+                .orElseThrow();
         assertNotNull(utilDate);
         assertEquals(java.sql.Timestamp.valueOf("2026-05-01 14:25:36").getTime(), utilDate.getTime());
 
         // 4. @Column(insertable=false, updatable=false) 与非自增手工主键在 InsertStatementFactory.create(ctx) 下正确包含主键并排除只读列
         com.sondertara.joya.core.metadata.EntityMetadataContext p0Meta =
-                com.sondertara.joya.core.cache.CacheHolder.tableMetaCache().getMetadataContext(P0MetaEntity.class);
+                com.sondertara.joya.core.metadata.LocalTableMetaCache.getMetadataContext(P0MetaEntity.class);
         assertEquals(List.of("id", "title"), p0Meta.insertableColumns());
         assertEquals(List.of("id", "title"), p0Meta.insertableColumnsWithPrimaryKey());
         assertEquals(List.of("title"), p0Meta.updatableColumns());
@@ -796,7 +795,7 @@ class DialectBatchAndMappingTest {
         // 5. 基本类型主键拒绝
         org.junit.jupiter.api.Assertions.assertThrows(
                 com.sondertara.joya.exceptions.DbException.class,
-                () -> com.sondertara.joya.core.cache.CacheHolder.tableMetaCache().getMetadataContext(BadPrimitivePkEntity.class));
+                () -> com.sondertara.joya.core.metadata.LocalTableMetaCache.getMetadataContext(BadPrimitivePkEntity.class));
     }
 
     enum SampleStatus {
@@ -832,7 +831,7 @@ class DialectBatchAndMappingTest {
 
     @Test
     void p1FixesShouldSupportDeadlockRetryEnumBindingSqlServerOrderByLikeEscapeSelfJoinAndQuoteStyle() throws Exception {
-        // 1. TxExecutor 死锁重试（SQLState 40001）+ 指数退避
+        // 1. TxStarter 死锁重试（SQLState 40001）+ 指数退避
         AtomicInteger attempts = new AtomicInteger(0);
         long startNs = System.nanoTime();
         String retryResult = joya.tx()
@@ -863,14 +862,14 @@ class DialectBatchAndMappingTest {
         ParameterBinder.DEFAULT.bindValue(enumPs, 1, SampleStatus.SUSPENDED);
         assertEquals("SUSPENDED", boundEnum.get());
 
-        // 3. PaginationStyle.SQLSERVER_ROW_NUMBER 剥离内层顶层 ORDER BY 且忽略子查询内 ORDER BY
+        // 3. SQL Server countSql 剥离外层顶层 ORDER BY 且保留子查询内 ORDER BY
         SqlStatement subOrderStmt = SqlStatement.select(
                 "SELECT id, (SELECT COUNT(*) FROM t_sub ORDER BY sub_id) AS cnt FROM t_chain_user WHERE dept_id = ? ORDER BY id DESC",
                 10L);
-        SqlStatement ss2005 = Dialects.SQLSERVER_2005.pageSql(subOrderStmt, 0, 5);
-        assertTrue(ss2005.sql().contains("ROW_NUMBER() OVER (ORDER BY id DESC)"));
-        assertTrue(ss2005.sql().contains("WHERE dept_id = ?) SELECT * FROM selectTemp"),
-                "Top-level ORDER BY must be stripped from inner CTE body: " + ss2005.sql());
+        SqlStatement ssCount = Dialect.SQLSERVER.countSql(subOrderStmt);
+        assertTrue(ssCount.sql().contains("ORDER BY sub_id"));
+        assertTrue(ssCount.sql().endsWith("WHERE dept_id = ?) AS TEMP_T"),
+                "Top-level ORDER BY must be stripped from SQL Server count subquery: " + ssCount.sql());
 
         // 4. WhereCriterion LIKE 通配符安全转义（% / _ / \）并附加 ESCAPE '\'
         SqlStatement likeStmt = com.sondertara.joya.core.query.dsl.Query.of(ChainUser.class)
@@ -891,12 +890,11 @@ class DialectBatchAndMappingTest {
                 .quoteStyle(QuoteStyle.BACKTICK)
                 .build();
         SqlStatement quotedSelect = com.sondertara.joya.core.statement.factory.SelectStatementFactory.create(
-                com.sondertara.joya.core.cache.CacheHolder.tableMetaCache().getMetadataContext(SchemaScopedAudit.class),
+                com.sondertara.joya.core.metadata.LocalTableMetaCache.getMetadataContext(SchemaScopedAudit.class),
                 com.sondertara.joya.core.query.criterion.WhereCriterion.create().eq(SchemaScopedAudit::getId, 1L),
                 null,
-                null,
                 quotedSettings.namingPolicy());
-        assertEquals("SELECT * FROM `sec_schema`.`t_audit` WHERE `id` = ?", quotedSelect.sql());
+        assertEquals("SELECT * FROM `sec_schema`.`t_audit` t0 WHERE t0.`id` = ?", quotedSelect.sql());
 
         // 7. UpsertPlanner.saveAll 批次内重复主键显式报错，拒绝静默覆盖
         ChainUser dup1 = new ChainUser();
@@ -911,21 +909,15 @@ class DialectBatchAndMappingTest {
         assertTrue(dupEx.getMessage().contains("Duplicate primary key [777]"));
 
         // 8. 方言感知流式 fetchSize（MySQL 系 Integer.MIN_VALUE vs 默认 2000）
-        assertEquals(Integer.MIN_VALUE, Dialects.MYSQL.streamFetchSize());
-        assertEquals(Integer.MIN_VALUE, Dialects.MARIADB.streamFetchSize());
-        assertEquals(2000, Dialects.POSTGRESQL.streamFetchSize());
-        assertEquals(2000, Dialects.H2.streamFetchSize());
+        assertEquals(Integer.MIN_VALUE, Dialect.MYSQL.streamFetchSize());
+        assertEquals(Integer.MIN_VALUE, Dialect.MARIADB.streamFetchSize());
+        assertEquals(2000, Dialect.POSTGRESQL.streamFetchSize());
+        assertEquals(2000, Dialect.H2.streamFetchSize());
 
-        // 9. RawColumnParser 含空格函数与多列引用解析（不破坏括号内逗号与空格）
-        com.sondertara.joya.core.query.ColumnPair fnPair =
-                com.sondertara.joya.core.query.RawColumnParser.parse("COALESCE(t0.userName, t0.internalNote) AS display_label");
-        assertEquals("COALESCE(t0.user_name, t0.internal_note)", fnPair.getKey());
-        assertEquals("display_label", fnPair.getValue());
-
-        // 10. SqlFormatUtils.getJdbcStyleSql 跳过单引号字符串字面量内的 ?1
+        // 9. SqlFormatUtils.getJdbcStyleSql 跳过单引号字符串字面量内的 ?1
         assertEquals(
                 "SELECT * FROM t_user WHERE note = '?1' AND id = ? AND status = ?",
-                com.sondertara.joya.utils.SqlFormatUtils.getJdbcStyleSql(
+                com.sondertara.joya.core.kernel.statement.SqlFormatUtils.getJdbcStyleSql(
                         "SELECT * FROM t_user WHERE note = '?1' AND id = ?1 AND status = ?2"));
 
         // 11. Query.limit(n).count() 与 limit(offset, count).count() 遵循 limit / offset 约束
@@ -988,7 +980,7 @@ class DialectBatchAndMappingTest {
         // 1. 复合主键实体快速失败
         org.junit.jupiter.api.Assertions.assertThrows(
                 com.sondertara.joya.exceptions.DbException.class,
-                () -> com.sondertara.joya.core.cache.CacheHolder.tableMetaCache().getMetadataContext(DualIdEntity.class));
+                () -> com.sondertara.joya.core.metadata.LocalTableMetaCache.getMetadataContext(DualIdEntity.class));
 
         // 2. @Column(insertable=false, updatable=false) 在流式 EntityInsert / EntityUpdate 中同样强制拦截
         P0MetaEntity ro = new P0MetaEntity();
@@ -1076,13 +1068,11 @@ class DialectBatchAndMappingTest {
         java.math.BigDecimal deptSumDec = joya.from(ChainUser.class).sumAsDecimal(ChainUser::getDeptId).orElseThrow();
         assertEquals(0, new java.math.BigDecimal("40").compareTo(deptSumDec));
 
-        // 11. SQLSERVER_ROW_NUMBER 将 __row_number__ 置于末尾（保留第 1..N 列顺序）并支持 DISTINCT
+        // 11. ANSI_OFFSET_FETCH 对 DISTINCT 查询直接追加标准分页子句
         SqlStatement distinctStmt = SqlStatement.select("SELECT DISTINCT user_name FROM t_chain_user ORDER BY user_name ASC");
-        SqlStatement ssDistinct = Dialects.SQLSERVER_2005.pageSql(distinctStmt, 0, 10);
-        assertTrue(ssDistinct.sql().contains("FROM (SELECT DISTINCT user_name FROM t_chain_user) innerTemp"),
-                "DISTINCT query must wrap innerTemp before ROW_NUMBER(): " + ssDistinct.sql());
-        assertTrue(ssDistinct.sql().contains("SELECT TOP 100 PERCENT innerTemp.*, ROW_NUMBER() OVER (ORDER BY user_name ASC) as __row_number__"),
-                "__row_number__ must be placed after user columns: " + ssDistinct.sql());
+        SqlStatement ssDistinct = Dialect.SQLSERVER.pageSql(distinctStmt, 0, 10);
+        assertTrue(ssDistinct.sql().endsWith("ORDER BY user_name ASC OFFSET ? ROWS FETCH NEXT ? ROWS ONLY"),
+                "ANSI_OFFSET_FETCH must append standard OFFSET/FETCH: " + ssDistinct.sql());
 
         // 12. NativeQueryParser 忽略注释与引号内的 ?1，且 IN 集合拒绝 null 元素
         List<ChainUser> commentSafeRows = joya.mapper(ChainUserMapper.class)
@@ -1097,65 +1087,61 @@ class DialectBatchAndMappingTest {
                 IllegalArgumentException.class,
                 () -> joya.from(ChainUser.class).where(w -> w.in(ChainUser::getId, listWithNull)).toSqlStatement());
 
-        // 13. PageQueryParam.clone() 深拷贝验证
-        com.sondertara.joya.core.query.pagination.PageQueryParam originalParam =
-                new com.sondertara.joya.core.query.pagination.PageQueryParam();
-        originalParam.addSearchParam("userName", "Alice", com.sondertara.joya.core.query.pagination.FieldParam.Operator.EQ);
-        com.sondertara.joya.core.query.pagination.PageQueryParam clonedParam = originalParam.clone();
-        clonedParam.addSearchParam("deptId", 10L, com.sondertara.joya.core.query.pagination.FieldParam.Operator.EQ);
-        assertEquals(1, originalParam.getParams().size(), "Modifying cloned PageQueryParam must not mutate original params");
+        // 13. PageQueryRequest.copy() / clone() 深拷贝验证
+        com.sondertara.joya.core.query.pagination.PageQueryRequest originalParam =
+                new com.sondertara.joya.core.query.pagination.PageQueryRequest();
+        originalParam.addFilter("userName", com.sondertara.joya.core.query.pagination.FilterOperator.EQ, "Alice");
+        com.sondertara.joya.core.query.pagination.PageQueryRequest clonedParam = originalParam.copy();
+        clonedParam.addFilter("deptId", com.sondertara.joya.core.query.pagination.FilterOperator.EQ, 10L);
+        assertEquals(1, originalParam.getFilters().size(), "Modifying cloned PageQueryRequest must not mutate original filters");
     }
 
     @Test
-    void sqlLexerDialectRules_coverMysqlSqlServerPostgresH2AndZeroIndexedPlaceholderRejection() throws Exception {
-        // 1. MySQL: # 行注释 + 'a\' b' 反斜杠转义后跟空格 + 前导 # 注释下 DML 识别
+    void sqlLexerDialectRules_coverMysqlSqlServerPostgresH2AndZeroIndexedPlaceholderRejection() {
+        // 1. MySQL: # 行注释 + 'a\' b' 反斜杠转义后跟空格
         String mysqlSql = "# comment ?99 '\nSELECT * FROM t_user WHERE note = 'a\\' b ?98' AND id = ?1 AND status = ?2";
         assertEquals(
                 "# comment ?99 '\nSELECT * FROM t_user WHERE note = 'a\\' b ?98' AND id = ? AND status = ?",
-                com.sondertara.joya.utils.SqlFormatUtils.getJdbcStyleSql(mysqlSql, DbType.mysql));
-        assertEquals(2, com.sondertara.joya.utils.SqlFormatUtils.countPlaceholders(mysqlSql, DbType.mysql));
-
-        var mysqlParsedUpdate = new com.sondertara.joya.core.jdbc.dao.support.NativeQueryParser(
-                ChainUser.class,
-                ChainUserMapper.class.getMethod("updateWithMysqlHashCommentAndBackslashQuote", Long.class, Long.class),
-                DbType.mysql).parse();
-        assertEquals(false, mysqlParsedUpdate.isQuery());
-        assertEquals(
-                List.of(
-                        new com.sondertara.joya.core.jdbc.dao.JoyaExecutorSupport.ParameterBinding(2),
-                        new com.sondertara.joya.core.jdbc.dao.JoyaExecutorSupport.ParameterBinding(1)),
-                mysqlParsedUpdate.parameterBinding());
+                com.sondertara.joya.core.kernel.statement.SqlFormatUtils.getJdbcStyleSql(mysqlSql, DbType.mysql));
+        assertEquals(2, com.sondertara.joya.core.kernel.statement.SqlFormatUtils.countPlaceholders(mysqlSql, DbType.mysql));
 
         // 2. SQL Server: #temp 临时表不视作注释、[col?1] 与 [a]]?2] 方括号标识符、ESCAPE '\' 标准单引号
         String sqlServerSql = "SELECT * FROM #temp WHERE [col?1] = 'x' AND [a]]?2] = 'y' AND path LIKE ?1 ESCAPE '\\' AND id = ?2";
         assertEquals(
                 "SELECT * FROM #temp WHERE [col?1] = 'x' AND [a]]?2] = 'y' AND path LIKE ? ESCAPE '\\' AND id = ?",
-                com.sondertara.joya.utils.SqlFormatUtils.getJdbcStyleSql(sqlServerSql, DbType.sqlserver));
-        assertEquals(2, com.sondertara.joya.utils.SqlFormatUtils.countPlaceholders(sqlServerSql, DbType.sqlserver));
+                com.sondertara.joya.core.kernel.statement.SqlFormatUtils.getJdbcStyleSql(sqlServerSql, DbType.sqlserver));
+        assertEquals(2, com.sondertara.joya.core.kernel.statement.SqlFormatUtils.countPlaceholders(sqlServerSql, DbType.sqlserver));
 
         // 3. PostgreSQL: $$...$$ 与 $tag$...$tag$ 美元引号、E'a\' b' 扩展转义字符串、标准单引号 ESCAPE '\'
         String pgSql = "SELECT $$?99 'unclosed$$, $tag$?98$tag$, E'a\\' b ?97' FROM t_user WHERE code LIKE ?1 ESCAPE '\\' AND id = ?2";
         assertEquals(
                 "SELECT $$?99 'unclosed$$, $tag$?98$tag$, E'a\\' b ?97' FROM t_user WHERE code LIKE ? ESCAPE '\\' AND id = ?",
-                com.sondertara.joya.utils.SqlFormatUtils.getJdbcStyleSql(pgSql, DbType.postgresql));
-        assertEquals(2, com.sondertara.joya.utils.SqlFormatUtils.countPlaceholders(pgSql, DbType.postgresql));
+                com.sondertara.joya.core.kernel.statement.SqlFormatUtils.getJdbcStyleSql(pgSql, DbType.postgresql));
+        assertEquals(2, com.sondertara.joya.core.kernel.statement.SqlFormatUtils.countPlaceholders(pgSql, DbType.postgresql));
 
         // 4. H2 / 标准 SQL: ESCAPE '\' 后接 OR ... ? 不吞掉后续占位符
         String h2EscapeSql = "SELECT * FROM t_chain_user WHERE user_name LIKE ?1 ESCAPE '\\' OR dept_id BETWEEN ?2 AND ?3";
         assertEquals(
                 "SELECT * FROM t_chain_user WHERE user_name LIKE ? ESCAPE '\\' OR dept_id BETWEEN ? AND ?",
-                com.sondertara.joya.utils.SqlFormatUtils.getJdbcStyleSql(h2EscapeSql, DbType.h2));
-        assertEquals(3, com.sondertara.joya.utils.SqlFormatUtils.countPlaceholders(h2EscapeSql, DbType.h2));
+                com.sondertara.joya.core.kernel.statement.SqlFormatUtils.getJdbcStyleSql(h2EscapeSql, DbType.h2));
+        assertEquals(3, com.sondertara.joya.core.kernel.statement.SqlFormatUtils.countPlaceholders(h2EscapeSql, DbType.h2));
 
         // 5. ?0 零号占位符快速失败
         org.junit.jupiter.api.Assertions.assertThrows(
                 IllegalArgumentException.class,
-                () -> com.sondertara.joya.utils.SqlFormatUtils.getJdbcStyleSql("SELECT * FROM t_user WHERE id = ?0", DbType.h2));
-        org.junit.jupiter.api.Assertions.assertThrows(
-                IllegalArgumentException.class,
-                () -> new com.sondertara.joya.core.jdbc.dao.support.NativeQueryParser(
-                        ChainUser.class,
-                        ChainUserMapper.class.getMethod("findWithZeroIndexedPlaceholder", Long.class),
-                        DbType.h2).parse());
+                () -> com.sondertara.joya.core.kernel.statement.SqlFormatUtils.getJdbcStyleSql("SELECT * FROM t_user WHERE id = ?0", DbType.h2));
+
+        // 6. SQL Server #temp 临时表与 PostgreSQL # 运算符不误判为行注释
+        String ssTempPage = "SELECT * FROM #temp ORDER BY id OFFSET 0 ROWS FETCH NEXT 10 ROWS ONLY";
+        assertTrue(com.sondertara.joya.core.kernel.statement.SqlFormatUtils.hasTopLevelPagination(ssTempPage, DbType.sqlserver));
+        assertTrue(com.sondertara.joya.core.kernel.statement.SqlFormatUtils.hasTopLevelPagination(ssTempPage));
+        assertEquals(
+                List.of(20),
+                com.sondertara.joya.core.kernel.statement.SqlFormatUtils.topLevelTokens(
+                        "SELECT a # b FROM t ORDER BY id", "ORDER", true, DbType.postgresql));
+        assertEquals(
+                List.of(20),
+                com.sondertara.joya.core.kernel.statement.SqlFormatUtils.topLevelTokens(
+                        "SELECT a # b FROM t ORDER BY id", "ORDER", true));
     }
 }

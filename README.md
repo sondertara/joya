@@ -8,8 +8,8 @@
 
 - **单一查询入口，9 种形态全覆盖**：从 `joya.from(Entity.class)` 出发，一脉相承覆盖完整实体、部分列装回实体、单列直取、跨表构造映射（`Record::new`）、分组聚合、宽 DTO 自动推列与分页
 - **零字符串别名，编译期列数/类型匹配 + 渲染期表归属校验**：多表联查与聚合通过定长泛型 `Select1..8` + `Record::new` 按位置构造映射，内置 `RecordOrderVerifier` 防止同类型字段顺序颠倒；列所属表是否已在 `FROM / JOIN` 中注册，由渲染期统一校验并给出可用表清单
-- **旁路集成，零侵入共存**：在 Spring Boot 3 中直接复用原生 `spring.datasource` 与 `@Transactional` 事务连接（支持与 JPA / MyBatis 共享同一事务连接），扩展数据源通过 `joya.datasources` 数组独立配置，不污染全局 `DataSource` Bean
-- **免扫描跨库 `JoyaMapper`**：通过 `joya.mapper(UserMapper.class)` 即拿即用 JPA 方法名派生查询与 `@Query` 原生 SQL，同一个实体与 Mapper 接口可在任意多个数据源上无缝复用
+- **旁路集成，零侵入共存**：在 Spring Boot 3 中直接复用原生 `spring.datasource` 与 `@Transactional` 事务连接（基于 `DataSourceTransactionManager` 体系，支持与 MyBatis / JdbcTemplate 共享同一事务连接），扩展数据源通过 `joya.datasources` 数组独立配置，不污染全局 `DataSource` Bean
+- **免扫描跨库 `JoyaMapper`**：通过 `joya.mapper(UserMapper.class)` 获取接口代理，接口用 `default` 方法组合 `query()` / `ops()` / `sql(...)`；也可直接继承 `JoyaRepository<T>`，同一个实体与 Mapper 接口可在任意多个数据源上无缝复用
 - **显式值事务（`Tx`）**：事务是可传递的一等公民值（`1 Tx = 1 Connection`），支持嵌套于 Spring `@Transactional` 内执行 `savepoint` 局部回滚与 `afterCommit` 钩子
 - **动态条件零样板与默认安全**：`WhereCriterion` 比较条件默认严格非空（传 `null` 立即抛异常），需要"为空则跳过"时使用 `eqIfPresent` / `containsIfNotBlank` / `inIfNotEmpty`；`Update/Delete` 强制非空 `WHERE`；外部动态筛选参数通过 `PageQueryParams` 强制实体元数据白名单防注入
 - **渲染期动态表名**：通过 `NamingPolicy.tableNameResolver` 在生成 SQL 时直接决定物理表名，覆盖按月分表、租户分表与 schema 切换；不做执行期字符串改写，因此不会误伤同名列或字符串常量
@@ -50,7 +50,7 @@
 - **多数据源扩展**：主库通过 `joya.primary` 配置（默认 `use-spring: true` 复用 `spring.datasource`），扩展库通过 `joya.datasources` 数组配置（IDE 支持直接联想补全所有属性）：
 
 ```yaml
-# 1. Spring Boot 原生主数据源（JPA / MyBatis / JdbcTemplate 与 Joya 主库共用）
+# 1. Spring Boot 原生主数据源（MyBatis / JdbcTemplate 与 Joya 主库共用）
 spring:
   datasource:
     url: jdbc:mysql://localhost:3306/main_db
@@ -170,7 +170,7 @@ PageResult<OrderUserVO> page = joya.from(Order.class)
     .where(w -> w.gte(Order::getAmount, minAmount))
     .orderByDesc(Order::getId)
     .select(Order::getId, Order::getAmount, User::getName)
-    .page(PageRequest.of(0, 10), OrderUserVO::new);
+    .page(OrderUserVO::new, PageRequest.ofOneBased(1, 10));
 
 // 7. 分组聚合统计（Exprs.max / min / sum / avg / count / countDistinct 可同时用于 select / having / orderBy）
 public record DeptStat(String deptName, Integer maxAge, Long total) {}
@@ -192,33 +192,56 @@ List<UserBrief> briefs = joya.from(User.class)
 long count = joya.from(User.class).where(w -> w.eq(User::getStatus, 1)).count();
 boolean exists = joya.from(User.class).where(w -> w.eq(User::getEmail, email)).exists();
 Optional<Integer> maxAge = joya.from(User.class).max(User::getAge);
+
+// 10. 同表多次关联 / 自连接 + 列间比较 + 类型安全列别名（as(VO::getXxx)）
+List<OrderVO> orderVOs = joya.from(Order.class)
+    .leftJoin(Order::getBuyerId, User::getId, "buyer")
+    .leftJoin(Order::getSellerId, User::getId, "seller")
+    .where(w -> w.gt(col("buyer", User::getLevel), col("seller", User::getLevel)))
+    .select(
+        Order::getId,
+        col("buyer", User::getName).as(OrderVO::getBuyerName),
+        col("seller", User::getName).as(OrderVO::getSellerName)
+    )
+    .list(OrderVO.class);
 ```
 
-### 3. `JoyaMapper` 接口（免包扫描，支持跨数据源复用）
+### 3. `JoyaMapper` 接口 / `JoyaRepository` 基类（免包扫描，支持跨数据源复用）
 
-定义继承 `JoyaMapper<T>` 的接口，即可使用 JPA 风格方法名派生查询与 `@Query` 原生 SQL，无需任何包扫描注解：
+`JoyaMapper<T>` 只定义 `db()` 与 `entityClass()`，自定义查询通过 `default` 方法组合 `query()` / `ops()` / `sql(...)` 完成，无需包扫描或注解：
 
 ```java
 public interface UserAccountMapper extends JoyaMapper<UserAccount> {
 
-    Optional<UserAccount> findByUserName(String userName);
+    default Optional<UserAccount> findByUserName(String userName) {
+        return query().where(w -> w.eq(UserAccount::getUserName, userName)).one();
+    }
 
-    List<UserAccount> findByAgeGreaterThanEqual(Integer minAge);
-
-    long countByAgeGreaterThan(Integer age);
-
-    @Query("SELECT id, user_name, age FROM t_user_account WHERE user_name = ?")
-    Optional<UserAccount> selectByRawName(String userName);
+    default List<UserAccount> findAdults() {
+        return query().where(w -> w.gte(UserAccount::getAge, 18)).list();
+    }
 }
 ```
 
-直接通过任意 `JoyaClient` 或事务句柄 `Tx` 获取代理实例（每个客户端内部自动缓存代理对象，同一个 Mapper 接口可在不同数据源上隔离执行）：
+也可以直接继承 `JoyaRepository<T>`：
 
 ```java
-// 主库执行
+public class UserAccountRepository extends JoyaRepository<UserAccount> {
+    public UserAccountRepository(DataOps db) {
+        super(db);
+    }
+
+    public List<UserAccount> findActive() {
+        return query().where(w -> w.eq(UserAccount::getActive, true)).list();
+    }
+}
+```
+
+通过任意 `JoyaClient` 或事务句柄 `Tx` 获取接口代理实例（每个客户端内部自动缓存代理对象，同一个 Mapper 接口可在不同数据源上隔离执行）：
+
+```java
 Optional<UserAccount> mainUser = joya.mapper(UserAccountMapper.class).findByUserName("Alice");
 
-// 同一个 Mapper 接口在 archive 归档库上执行
 Optional<UserAccount> archivedUser = joyaRegistry.get("archive")
     .mapper(UserAccountMapper.class)
     .findByUserName("Alice");
@@ -226,13 +249,13 @@ Optional<UserAccount> archivedUser = joyaRegistry.get("archive")
 
 ### 4. 动态筛选协议适配（`PageQueryParams`）
 
-控制器接收的动态筛选参数 `PageQueryParam` 通过 `QueryCustomizer` 插件接入查询流，所有外部字段名与排序字段自动执行实体元数据白名单校验：
+控制器接收的动态筛选参数 `PageQueryRequest` 通过 `QueryCustomizer` 插件接入查询流，所有外部字段名与排序字段自动执行实体元数据白名单校验：
 
 ```java
 PageResult<User> page = joya.from(User.class)
     .where(w -> w.eq(User::getTenantId, currentTenantId))
-    .apply(PageQueryParams.of(param))
-    .page(param.toPageRequest());
+    .apply(PageQueryParams.of(request))
+    .page(request.toPageRequest());
 ```
 
 ### 5. 实体写操作与事务协作（`EntityOps` & `Tx` & `@Transactional`）

@@ -1,6 +1,5 @@
 package com.sondertara.joya.core.kernel.executor;
 
-import com.sondertara.joya.core.kernel.executor.RowMapper;
 
 import com.sondertara.joya.exceptions.DbException;
 
@@ -24,6 +23,10 @@ public  class ResultSetSpliterator<T> implements Spliterator<T> {
 			void registerStream(Runnable closeAction);
 
 			default void onStreamClosed() {
+			}
+
+			default void onStreamClosed(Runnable closeAction) {
+				onStreamClosed();
 			}
 		}
 

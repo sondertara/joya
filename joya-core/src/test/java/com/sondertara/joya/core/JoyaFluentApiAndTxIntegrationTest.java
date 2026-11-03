@@ -1,7 +1,7 @@
 package com.sondertara.joya.core;
 
-import com.sondertara.joya.core.jdbc.dao.JoyaMapper;
-import com.sondertara.joya.core.jdbc.dao.JoyaMapperImpl;
+import com.sondertara.joya.core.mapper.JoyaMapper;
+import com.sondertara.joya.core.mapper.JoyaRepository;
 import com.sondertara.joya.core.kernel.interceptor.Chain;
 import com.sondertara.joya.core.kernel.interceptor.RewriteContext;
 import com.sondertara.joya.core.kernel.interceptor.SqlInterceptor;
@@ -10,11 +10,13 @@ import com.sondertara.joya.core.kernel.statement.TableRef;
 import com.sondertara.joya.core.query.PageResult;
 import com.sondertara.joya.core.query.criterion.WhereCriterion;
 import com.sondertara.joya.core.query.dsl.Query;
-import com.sondertara.joya.core.query.pagination.FieldParam;
-import com.sondertara.joya.core.query.pagination.OrderParam;
-import com.sondertara.joya.core.query.pagination.PageQueryParam;
-import com.sondertara.joya.core.query.pagination.PageQueryParams;
+import com.sondertara.joya.core.query.dynamic.PageQueryParams;
+import com.sondertara.joya.core.query.pagination.FilterCondition;
+import com.sondertara.joya.core.query.pagination.FilterOperator;
+import com.sondertara.joya.core.query.pagination.PageQueryRequest;
 import com.sondertara.joya.core.query.pagination.PageRequest;
+import com.sondertara.joya.core.query.pagination.SortCondition;
+import com.sondertara.joya.core.query.pagination.SortDirection;
 import com.sondertara.joya.core.result.MutationResult;
 import com.sondertara.joya.core.tx.TxOutcome;
 import com.sondertara.joya.core.tx.TxTimeoutException;
@@ -42,6 +44,7 @@ import static com.sondertara.joya.core.query.dsl.Exprs.count;
 import static com.sondertara.joya.core.query.dsl.Exprs.countDistinct;
 import static com.sondertara.joya.core.query.dsl.Exprs.max;
 import static com.sondertara.joya.core.query.dsl.Exprs.min;
+import static com.sondertara.joya.core.query.dsl.Exprs.raw;
 import static com.sondertara.joya.core.query.dsl.Exprs.sum;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -300,24 +303,24 @@ class JoyaFluentApiAndTxIntegrationTest {
         joya.of(Account.class).insert(new Account(1L, "Alice", 100, "alice@test.com"));
 
         assertThrows(IllegalArgumentException.class, () ->
-                joya.of(Account.class).findAll(new OrderParam("id; DROP TABLE t_account--", OrderParam.OrderBy.ASC)));
+                joya.of(Account.class).findAll(SortCondition.asc("id; DROP TABLE t_account--")));
 
-        PageQueryParam badOrderParam = new PageQueryParam();
-        badOrderParam.setOrderList(List.of(new OrderParam("1 OR 1=1", OrderParam.OrderBy.DESC)));
+        PageQueryRequest badOrderParam = new PageQueryRequest()
+                .sorts(List.of(SortCondition.desc("1 OR 1=1")));
         assertThrows(IllegalArgumentException.class, () ->
                 joya.from(Account.class)
                         .apply(PageQueryParams.of(badOrderParam))
                         .page(badOrderParam.toPageRequest()));
 
-        PageQueryParam badFilterParam = new PageQueryParam();
-        badFilterParam.addSearchParam("name; DROP TABLE t_account--", "Alice", FieldParam.Operator.EQ);
+        PageQueryRequest badFilterParam = new PageQueryRequest()
+                .addFilter("name; DROP TABLE t_account--", FilterOperator.EQ, "Alice");
         assertThrows(IllegalArgumentException.class, () ->
                 joya.from(Account.class)
                         .apply(PageQueryParams.of(badFilterParam))
                         .page(badFilterParam.toPageRequest()));
 
-        PageQueryParam unknownFieldParam = new PageQueryParam();
-        unknownFieldParam.addSearchParam("nonExistentColumn", "Alice", FieldParam.Operator.EQ);
+        PageQueryRequest unknownFieldParam = new PageQueryRequest()
+                .addFilter("nonExistentColumn", FilterOperator.EQ, "Alice");
         assertThrows(IllegalArgumentException.class, () ->
                 joya.from(Account.class)
                         .apply(PageQueryParams.of(unknownFieldParam))
@@ -501,11 +504,9 @@ class JoyaFluentApiAndTxIntegrationTest {
         assertEquals(2, page0.getData().size());
 
         // 8. 动态 PageQueryParams 适配器分页
-        PageQueryParam param = new PageQueryParam();
-        param.page(0);
-        param.pageSize(10);
-        param.addSearchParam("balance", 250, FieldParam.Operator.GTE);
-        param.setOrderList(List.of(new OrderParam("balance", OrderParam.OrderBy.DESC)));
+        PageQueryRequest param = new PageQueryRequest(1, 10)
+                .addFilter("balance", FilterOperator.GE, 250)
+                .addSortDesc("balance");
         PageResult<Account> dynamicPage = joya.from(Account.class)
                 .apply(PageQueryParams.of(param))
                 .page(param.toPageRequest());
@@ -589,7 +590,7 @@ class JoyaFluentApiAndTxIntegrationTest {
                 )
                 .orderByDesc(OrderRecord::getAmount)
                 .select(OrderRecord::getId, OrderRecord::getAmount, Account::getName)
-                .page(PageRequest.of(0, 10), AccountOrderView::new);
+                .page(AccountOrderView::new, PageRequest.of(0, 10));
         assertEquals(2L, viewPage.getTotal());
         assertEquals(new AccountOrderView(102L, 280, "Alice"), viewPage.getData().get(0));
         assertEquals(new AccountOrderView(101L, 120, "Alice"), viewPage.getData().get(1));
@@ -601,7 +602,7 @@ class JoyaFluentApiAndTxIntegrationTest {
                 .having(h -> h.gte(count(), 1L))
                 .orderByDesc(max(OrderRecord::getAmount))
                 .select(Account::getName, max(OrderRecord::getAmount), count())
-                .page(PageRequest.of(0, 10), AccountOrderStat::new);
+                .page(AccountOrderStat::new, PageRequest.of(0, 10));
         assertEquals(2L, groupPage.getTotal(), "GROUP BY 分页的 total 应为分组数（2 组）而非明细行数（3 行）");
         assertEquals(new AccountOrderStat("Alice", 280, 2L), groupPage.getData().get(0));
         assertEquals(new AccountOrderStat("Bob", 60, 1L), groupPage.getData().get(1));
@@ -677,7 +678,7 @@ class JoyaFluentApiAndTxIntegrationTest {
                 .select(Account::getId, Account::getName)
                 .toSqlStatement(Account.class);
 
-        assertEquals("SELECT t0.id AS id, t0.name AS name FROM t_account t0 WHERE t0.name != t0.email", stmt.sql());
+        assertEquals("SELECT t0.id AS id, t0.name AS name FROM t_account t0 WHERE t0.name <> t0.email", stmt.sql());
         assertTrue(stmt.parameters().isEmpty());
 
         // 标准比较方法遇到 null 或空集合必须 fail-fast 抛 IllegalArgumentException，防止 UPDATE/DELETE 误吞条件导致全表事故
@@ -737,25 +738,140 @@ class JoyaFluentApiAndTxIntegrationTest {
         assertEquals("NativeUser", found.getName());
     }
 
+    public static class AccountRepository extends JoyaRepository<Account> {
+        public AccountRepository(DataOps db) {
+            super(db);
+        }
+    }
+
     @Test
     void joyaMapperDelegatesToEntityOpsAndQueryDsl() {
-        JoyaMapper<Account> mapper = new JoyaMapperImpl<>(joya, Account.class);
+        JoyaMapper<Account> mapper = new AccountRepository(joya);
         Account acc = new Account(null, "MapperUser", 50, "m@test.com");
-        Long id = (Long) mapper.save(acc);
+        assertEquals(1, mapper.save(acc));
+        Long id = acc.getId();
         assertNotNull(id);
 
         assertTrue(mapper.existsById(id));
+        assertTrue(mapper.existsByCondition(w -> w.eq(Account::getName, "MapperUser")));
         assertEquals(1L, mapper.count());
-        Account loaded = mapper.findByField(Account::getName, "MapperUser");
-        assertNotNull(loaded);
-        assertNull(mapper.findByField(Account::getName, "NotExist"));
+        assertEquals(1L, mapper.countByCondition(w -> w.eq(Account::getName, "MapperUser")));
+        assertTrue(mapper.findByField(Account::getName, "MapperUser").isPresent());
+        assertTrue(mapper.findByField(Account::getName, "NotExist").isEmpty());
 
-        PageQueryParam pageParam = new PageQueryParam();
-        pageParam.addSearchParam("name", "MapperUser", FieldParam.Operator.EQ);
+        PageQueryRequest pageParam = new PageQueryRequest()
+                .addFilter("name", FilterOperator.EQ, "MapperUser");
         PageResult<Account> page = mapper.queryPage(pageParam);
         assertEquals(1L, page.getTotal());
 
-        mapper.deleteById(id);
+        assertEquals(1, mapper.deleteById(id));
         assertEquals(0L, mapper.count());
+    }
+
+    @Test
+    void batch1AndBatch2ApiErgonomicsAndExpressiveness() {
+        // 1. PageRequest 0-based / 1-based 语义工厂
+        assertEquals(0, PageRequest.ofZeroBased(0, 10).getPage());
+        assertEquals(0, PageRequest.ofOneBased(1, 10).getPage());
+        assertEquals(10, PageRequest.ofOneBased(2, 10).getOffset());
+        assertThrows(IllegalArgumentException.class, () -> PageRequest.ofOneBased(0, 10));
+
+        // 2. JoyaMapper 统一业务语义返回契约（写返回 int 影响行数 + 主键自动回写，单条读返回 Optional<T>）
+        JoyaMapper<Account> mapper = new AccountRepository(joya);
+        Account a1 = new Account(null, "Alice", 100, "alice@test.com");
+        Account a2 = new Account(null, "Bob", 200, null);
+        assertEquals(1, mapper.insert(a1));
+        assertEquals(1, mapper.insertIgnoreNull(a2));
+        assertNotNull(a1.getId());
+        assertNotNull(a2.getId());
+
+        a1.setBalance(150);
+        assertEquals(1, mapper.updateById(a1));
+        Account patchAcc = new Account(a2.getId(), null, 250, "bob@test.com");
+        assertEquals(1, mapper.patchById(patchAcc));
+        assertEquals("Bob", mapper.findByField(Account::getName, "Bob").orElseThrow().getName());
+        assertTrue(mapper.findByField(Account::getName, "Nobody").isEmpty());
+        assertEquals(250, mapper.findByCondition(w -> w.eq(Account::getId, a2.getId())).orElseThrow().getBalance());
+        assertEquals(2, mapper.findByIds(List.of(a1.getId(), a2.getId())).size());
+        assertEquals(2L, mapper.findPage(PageRequest.ofOneBased(1, 10)).getTotal());
+        assertEquals(1L, mapper.findPageByCondition(w -> w.eq(Account::getName, "Alice"), PageRequest.ofOneBased(1, 10)).getTotal());
+
+        // 3. WhereCriterion.anyOf（含单条件动态降级） + 可变参数 in / notIn + inChunked
+        List<Account> anyOfSingle = joya.from(Account.class)
+                .where(w -> w.gt(Account::getBalance, 0)
+                        .anyOf(g -> g.eqIfPresent(Account::getName, "Alice")
+                                .eqIfPresent(Account::getEmail, null)))
+                .list();
+        assertEquals(1, anyOfSingle.size());
+        assertEquals("Alice", anyOfSingle.get(0).getName());
+
+        List<Account> varargsIn = joya.from(Account.class)
+                .where(w -> w.in(Account::getName, "Alice", "Bob").notIn(Account::getName, "Charlie"))
+                .list();
+        assertEquals(2, varargsIn.size());
+
+        List<Long> hugeIds = new java.util.ArrayList<>(1005);
+        for (long i = 1; i <= 1005; i++) {
+            hugeIds.add(i);
+        }
+        hugeIds.add(a1.getId());
+        List<Account> chunkedMatches = joya.from(Account.class)
+                .where(w -> w.inChunked(Account::getId, hugeIds))
+                .list();
+        assertFalse(chunkedMatches.isEmpty());
+
+        // 4. EntityUpdate.incr 与 setExpr（原子自增 + 参数化表达式更新）
+        joya.of(Account.class).update()
+                .incr(Account::getBalance, 50)
+                .setExpr(Account::getEmail, "COALESCE(email, ?)", "fallback@test.com")
+                .where(w -> w.eq(Account::getId, a1.getId()))
+                .execute();
+        Account afterIncr = joya.of(Account.class).findById(a1.getId()).orElseThrow();
+        assertEquals(200, afterIncr.getBalance());
+
+        joya.of(Account.class).update()
+                .incr(Account::getBalance, -30)
+                .where(w -> w.eq(Account::getId, a1.getId()))
+                .execute();
+        assertEquals(170, joya.of(Account.class).findById(a1.getId()).orElseThrow().getBalance());
+
+        // 5. Exprs.raw 绑定参数（投影参数排在 WHERE 参数之前，防注入）
+        List<Integer> boostedBalances = joya.from(Account.class)
+                .where(w -> w.eq(Account::getId, a1.getId()))
+                .select(raw("t0.balance + ?", Integer.class, 30))
+                .list();
+        assertEquals(List.of(200), boostedBalances);
+        assertThrows(IllegalArgumentException.class,
+                () -> raw("t0.balance + ?", Integer.class));
+
+        // 6. Query.forUpdate / forUpdateNoWait / forUpdateSkipLocked（含分页 COUNT 剥离锁、LIMIT 在 FOR UPDATE 之前）
+        SqlStatement lockStmt = joya.from(Account.class)
+                .where(w -> w.eq(Account::getId, a1.getId()))
+                .forUpdate()
+                .toSqlStatement();
+        assertTrue(lockStmt.sql().endsWith(" FOR UPDATE"), lockStmt.sql());
+        assertTrue(joya.from(Account.class)
+                .where(w -> w.eq(Account::getId, a1.getId()))
+                .forUpdateNoWait()
+                .toSqlStatement().sql().endsWith(" FOR UPDATE NOWAIT"));
+        assertTrue(joya.from(Account.class)
+                .where(w -> w.eq(Account::getId, a1.getId()))
+                .forUpdateSkipLocked()
+                .toSqlStatement().sql().endsWith(" FOR UPDATE SKIP LOCKED"));
+
+        Account lockedFirst = joya.txCall(tx -> tx.from(Account.class)
+                .where(w -> w.eq(Account::getId, a1.getId()))
+                .orderByAsc(Account::getId)
+                .forUpdate()
+                .first()
+                .orElseThrow());
+        assertEquals(a1.getId(), lockedFirst.getId());
+
+        // 7. SqlOps.batchResult 与 deleteByIds
+        var batchMutation = joya.sql("UPDATE t_account SET balance = balance + ? WHERE id = ?")
+                .batchResult(List.of(a1.getId(), a2.getId()), id -> new Object[]{10, id});
+        assertEquals(2L, batchMutation.affectedRows());
+
+        assertEquals(2, mapper.deleteByIds(List.of(a1.getId(), a2.getId())));
     }
 }

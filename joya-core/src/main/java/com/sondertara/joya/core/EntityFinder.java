@@ -1,12 +1,9 @@
 package com.sondertara.joya.core;
 
-import com.sondertara.joya.core.jdbc.resultset.mapper.BeanRowMapper;
-import com.sondertara.joya.core.kernel.JoyaTemplate;
-import com.sondertara.joya.core.kernel.statement.SqlStatement;
+import com.sondertara.joya.core.kernel.ExecutionKernel;
 import com.sondertara.joya.core.metadata.EntityMetadataContext;
 import com.sondertara.joya.core.query.dsl.Query;
-import com.sondertara.joya.core.query.pagination.OrderParam;
-import com.sondertara.joya.core.statement.factory.SelectStatementFactory;
+import com.sondertara.joya.core.query.pagination.SortCondition;
 
 import java.io.Serializable;
 import java.util.ArrayList;
@@ -18,16 +15,16 @@ import java.util.Optional;
 /**
  * 实体读取器 —— 只负责"按主键/集合/条件读"，不参与任何写入。
  *
- * <p>从 {@code BatchPlanner} 中拆出：批量写规划器不应出现 {@code find} 语义。
+ * <p>独立读取器：批量写规划器不应出现 {@code find} 语义。
  */
 final class EntityFinder<T> {
 
-    private final JoyaTemplate template;
+    private final ExecutionKernel template;
     private final Class<T> entityType;
     private final EntityMetadataContext meta;
     private final String primaryKey;
 
-    EntityFinder(JoyaTemplate template, Class<T> entityType, EntityMetadataContext meta, String primaryKey) {
+    EntityFinder(ExecutionKernel template, Class<T> entityType, EntityMetadataContext meta, String primaryKey) {
         this.template = Objects.requireNonNull(template, "template must not be null");
         this.entityType = Objects.requireNonNull(entityType, "entityType must not be null");
         this.meta = Objects.requireNonNull(meta, "meta must not be null");
@@ -37,8 +34,9 @@ final class EntityFinder<T> {
     Optional<T> findById(Serializable id) {
         Objects.requireNonNull(id, "id must not be null");
         requirePrimaryKey();
-        SqlStatement stmt = SelectStatementFactory.byPrimaryKey(meta, id, template.namingPolicy());
-        return Optional.ofNullable(template.query(stmt, BeanRowMapper.of(entityType)));
+        return new Query<>(template, entityType)
+                .where(w -> w.eq(primaryKey, id))
+                .one();
     }
 
     List<T> findByIds(Collection<? extends Serializable> ids) {
@@ -60,8 +58,8 @@ final class EntityFinder<T> {
         return new Query<>(template, entityType).list();
     }
 
-    List<T> findAll(OrderParam... orderParams) {
-        return new Query<>(template, entityType).orderBy(orderParams).list();
+    List<T> findAll(SortCondition... sorts) {
+        return new Query<>(template, entityType).orderBy(sorts).list();
     }
 
     boolean existsById(Serializable id) {

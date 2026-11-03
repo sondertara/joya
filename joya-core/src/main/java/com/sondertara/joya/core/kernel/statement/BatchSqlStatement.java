@@ -1,6 +1,6 @@
 package com.sondertara.joya.core.kernel.statement;
 
-import com.sondertara.joya.core.kernel.ExecutionOptions;
+import org.jspecify.annotations.Nullable;
 
 import java.util.List;
 import java.util.Objects;
@@ -23,6 +23,9 @@ import java.util.Objects;
  * @param metadata            语句元数据
  * @param batchSize           单次 executeBatch 分片行数阈值（<= 0 时取默认 1000）
  * @param returnGeneratedKeys 是否收集数据库生成的主键
+ * @param ast                 框架生成语句的内部结构树；原生 SQL 为 {@code null}
+ * @param extraColumns        改写器追加的列（整批同值）
+ * @param extraValues         与 extraColumns 一一对应的值
  */
 public record BatchSqlStatement(
         String sql,
@@ -30,49 +33,64 @@ public record BatchSqlStatement(
         List<Object[]> rows,
         StatementMetadata metadata,
         int batchSize,
-        boolean returnGeneratedKeys
+        boolean returnGeneratedKeys,
+        @Nullable SqlNode ast,
+        List<ColumnBinding> extraColumns,
+        List<Object> extraValues
 ) {
+
+    /** 默认分片 Flush 行数（{@code ExecutionOptions.DEFAULT_BATCH_SIZE} 的单一来源）。 */
+    public static final int DEFAULT_BATCH_SIZE = 1000;
 
     public BatchSqlStatement {
         Objects.requireNonNull(sql, "batch sql must not be null");
         columns = columns == null ? List.of() : List.copyOf(columns);
         rows = rows == null ? List.of() : List.copyOf(rows);
         metadata = metadata == null ? StatementMetadata.empty() : metadata;
+        extraColumns = extraColumns == null ? List.of() : List.copyOf(extraColumns);
+        extraValues = extraValues == null ? List.of() : List.copyOf(extraValues);
+        if (extraColumns.size() != extraValues.size()) {
+            throw new IllegalArgumentException("extraColumns and extraValues must have the same size");
+        }
         if (batchSize <= 0) {
-            batchSize = ExecutionOptions.DEFAULT_BATCH_SIZE;
+            batchSize = DEFAULT_BATCH_SIZE;
         }
     }
 
-    public BatchSqlStatement(
-            String sql,
-            List<ColumnBinding> columns,
-            List<Object[]> rows,
-            StatementMetadata metadata
-    ) {
-        this(sql, columns, rows, metadata, ExecutionOptions.DEFAULT_BATCH_SIZE, false);
-    }
-
-    /** 便捷构造：仅 SQL + 列描述 + 行值。 */
-    public static BatchSqlStatement of(String sql, List<ColumnBinding> columns, List<Object[]> rows) {
-        return new BatchSqlStatement(sql, columns, rows, StatementMetadata.of(Operation.BATCH));
-    }
-
-    /** 派生替换 SQL 文本的新批处理语句。 */
+    /** 派生替换 SQL 文本的新批处理语句；文本改写使 AST 失效。 */
     public BatchSqlStatement withSql(String newSql) {
         if (sql.equals(newSql)) {
             return this;
         }
-        return new BatchSqlStatement(newSql, columns, rows, metadata, batchSize, returnGeneratedKeys);
+        return new BatchSqlStatement(newSql, columns, rows, metadata, batchSize, returnGeneratedKeys,
+                null, extraColumns, extraValues);
     }
 
-    /** 派生指定分片 Flush 大小的新批处理语句。 */
-    public BatchSqlStatement withBatchSize(int newBatchSize) {
-        return new BatchSqlStatement(sql, columns, rows, metadata, newBatchSize, returnGeneratedKeys);
+    /** 带 AST 的副本（AST 与 SQL 必须来自同一次渲染）。 */
+    public BatchSqlStatement withAst(@Nullable SqlNode newAst) {
+        return new BatchSqlStatement(sql, columns, rows, metadata, batchSize, returnGeneratedKeys,
+                newAst, extraColumns, extraValues);
     }
 
-    /** 派生是否收集生成主键的新批处理语句。 */
-    public BatchSqlStatement withReturnGeneratedKeys(boolean returnKeys) {
-        return new BatchSqlStatement(sql, columns, rows, metadata, batchSize, returnKeys);
+    /** 派生替换元数据（如注入 {@code dbType}）的新批处理语句。 */
+    public BatchSqlStatement withMetadata(StatementMetadata newMetadata) {
+        return new BatchSqlStatement(sql, columns, rows, newMetadata, batchSize, returnGeneratedKeys,
+                ast, extraColumns, extraValues);
+    }
+
+    /** 从无参数的原生 SQL 模板构造批处理语句。 */
+    public static BatchSqlStatement fromTemplate(SqlStatement template, List<Object[]> rows, int batchSize) {
+        Objects.requireNonNull(template, "template must not be null");
+        if (!template.parameters().isEmpty()) {
+            throw new IllegalArgumentException("batch template must not carry parameters; pass them as rows");
+        }
+        int parameterCount = SqlFormatUtils.countPlaceholders(template.sql(), template.metadata().dbType());
+        List<ColumnBinding> cols = new java.util.ArrayList<>(parameterCount);
+        for (int i = 0; i < parameterCount; i++) {
+            cols.add(ColumnBinding.of("p" + (i + 1)));
+        }
+        return new BatchSqlStatement(template.sql(), cols, rows == null ? List.of() : rows,
+                template.metadata(), batchSize, false, null, List.of(), List.of());
     }
 
     /** 行数。 */

@@ -5,6 +5,7 @@
 - 🏗️架构设计
   - [⚙️SQL 引擎重构](architecture/sql-engine-refactoring)
   - [🔎SQL 引擎重构·评审](architecture/sql-engine-review)
+  - [🔌扩展点模型](architecture/extension-points)
   - [💳事务模块重构](architecture/transaction/README)
     - [🔍现状评估](architecture/transaction/01-assessment)
     - [📐目标架构](architecture/transaction/02-design)

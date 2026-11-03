@@ -1,14 +1,18 @@
 package com.sondertara.joya.core.query;
 
-import com.sondertara.joya.core.cache.CacheHolder;
+import com.sondertara.joya.core.metadata.LocalTableMetaCache;
 import com.sondertara.joya.core.naming.NamingPolicy;
 import com.sondertara.joya.core.kernel.statement.ParameterSource;
+import com.sondertara.joya.core.kernel.statement.SqlNode;
+import com.sondertara.joya.core.kernel.statement.SqlNodes;
+import com.sondertara.joya.core.kernel.statement.SqlParameter;
 import com.sondertara.joya.core.kernel.statement.SqlParameterList;
+import com.sondertara.joya.core.kernel.statement.SqlRenderer;
+import com.sondertara.joya.core.kernel.statement.SqlStatement;
+import com.sondertara.joya.core.kernel.statement.StatementMetadata;
 import com.sondertara.joya.core.kernel.statement.TableRef;
 import com.sondertara.joya.core.metadata.EntityMetadataContext;
 import com.sondertara.joya.core.model.ColumnAlias;
-import com.sondertara.joya.core.query.JoinPart;
-import com.sondertara.joya.core.query.criterion.WhereCriterion;
 import com.sondertara.joya.exceptions.DbException;
 import com.sondertara.joya.utils.Strings;
 import org.jspecify.annotations.Nullable;
@@ -49,10 +53,18 @@ public final class RenderContext {
     private final NamingPolicy namingPolicy;
     private final Map<Class<?>, TableBinding> tableBindings = new LinkedHashMap<>();
     private final List<TableBinding> allBindings = new ArrayList<>();
-    private final Map<JoinPart, TableBinding> selfJoinBindings = new java.util.IdentityHashMap<>();
+    private final Map<JoinPart, SelfJoinTarget> selfJoinBindings = new java.util.IdentityHashMap<>();
     private @Nullable TableBinding activeJoinTargetBinding;
 
-    private record TableBinding(Class<?> entityClass, EntityMetadataContext meta, @Nullable String alias) {
+    private record TableBinding(
+            Class<?> entityClass,
+            EntityMetadataContext meta,
+            @Nullable String alias,
+            String physicalName
+    ) {
+    }
+
+    private record SelfJoinTarget(TableBinding binding, boolean onLeft) {
     }
 
     private RenderContext(Class<?> rootType, boolean aliased, List<JoinPart> joins, NamingPolicy namingPolicy) {
@@ -74,13 +86,16 @@ public final class RenderContext {
      */
     public static RenderContext forQuery(Class<?> rootType, List<JoinPart> joins, NamingPolicy namingPolicy) {
         RenderContext ctx = new RenderContext(rootType, true, joins, namingPolicy);
-        ctx.registerQueryTable(rootType);
+        ctx.registerQueryTable(rootType, null);
         if (joins != null) {
             for (JoinPart join : joins) {
                 Class<?> leftType = join.getLeftColumn().entityClass();
                 Class<?> rightType = join.getRightColumn().entityClass();
-                boolean leftRegistered = leftType != null && ctx.tableBindings.containsKey(leftType);
-                boolean rightRegistered = rightType != null && ctx.tableBindings.containsKey(rightType);
+                String explicitAlias = join.getAlias();
+                boolean leftRegistered = leftType != null
+                        && ctx.isTableRegistered(leftType, join.getLeftColumn().tableAlias());
+                boolean rightRegistered = rightType != null
+                        && ctx.isTableRegistered(rightType, join.getRightColumn().tableAlias());
                 if (leftType != null && rightType != null && !leftRegistered && !rightRegistered) {
                     throw new IllegalStateException("Disconnected JOIN between ["
                             + leftType.getSimpleName() + "] and [" + rightType.getSimpleName()
@@ -88,13 +103,24 @@ public final class RenderContext {
                             + ctx.tableBindings.keySet().stream().map(Class::getSimpleName).toList());
                 }
                 if (leftType != null && !leftRegistered) {
-                    ctx.registerQueryTable(leftType);
+                    ctx.registerQueryTable(leftType, explicitAlias);
                 }
                 if (rightType != null) {
                     if (Objects.equals(leftType, rightType) || (leftRegistered && rightRegistered)) {
-                        ctx.registerSelfJoinTable(join, rightType);
+                        String leftExplicitAlias = join.getLeftColumn().tableAlias();
+                        String rightExplicitAlias = join.getRightColumn().tableAlias();
+                        boolean onLeft;
+                        if (leftExplicitAlias == null && rightExplicitAlias != null) {
+                            onLeft = true;
+                        } else if (leftExplicitAlias != null && rightExplicitAlias == null) {
+                            onLeft = false;
+                        } else {
+                            onLeft = !Objects.equals(leftType, rightType) && Objects.equals(rightType, rootType);
+                        }
+                        Class<?> targetType = onLeft ? leftType : rightType;
+                        ctx.registerSelfJoinTable(join, targetType, explicitAlias, onLeft);
                     } else if (!rightRegistered) {
-                        ctx.registerQueryTable(rightType);
+                        ctx.registerQueryTable(rightType, explicitAlias);
                     }
                 }
             }
@@ -120,7 +146,20 @@ public final class RenderContext {
         Objects.requireNonNull(meta, "meta must not be null");
         Class<?> entityType = meta.entityType() != null ? meta.entityType() : Object.class;
         RenderContext ctx = new RenderContext(entityType, false, List.of(), namingPolicy);
-        TableBinding single = new TableBinding(entityType, meta, null);
+        TableBinding single = new TableBinding(entityType, meta, null, meta.qualifiedTableName(ctx.namingPolicy));
+        ctx.tableBindings.put(entityType, single);
+        ctx.allBindings.add(single);
+        return ctx;
+    }
+
+    /**
+     * 构造带主表别名 {@code t0} 的单表查询渲染上下文（支持传入自定义 {@link EntityMetadataContext}）。
+     */
+    public static RenderContext forAliasedSingleTable(EntityMetadataContext meta, NamingPolicy namingPolicy) {
+        Objects.requireNonNull(meta, "meta must not be null");
+        Class<?> entityType = meta.entityType() != null ? meta.entityType() : Object.class;
+        RenderContext ctx = new RenderContext(entityType, true, List.of(), namingPolicy);
+        TableBinding single = new TableBinding(entityType, meta, "t0", meta.qualifiedTableName(ctx.namingPolicy));
         ctx.tableBindings.put(entityType, single);
         ctx.allBindings.add(single);
         return ctx;
@@ -131,7 +170,7 @@ public final class RenderContext {
      */
     public static RenderContext forSingleTable(Class<?> entityClass) {
         Objects.requireNonNull(entityClass, "entityClass must not be null");
-        EntityMetadataContext meta = CacheHolder.tableMetaCache().getMetadataContext(entityClass);
+        EntityMetadataContext meta = LocalTableMetaCache.getMetadataContext(entityClass);
         return forSingleTable(meta, NamingPolicy.DEFAULT);
     }
 
@@ -139,22 +178,61 @@ public final class RenderContext {
         return namingPolicy;
     }
 
-    private void registerQueryTable(Class<?> entityClass) {
+    private boolean isTableRegistered(Class<?> entityClass, @Nullable String tableAlias) {
+        if (tableAlias != null) {
+            for (TableBinding b : allBindings) {
+                if (b.alias() != null && b.alias().equalsIgnoreCase(tableAlias) && b.entityClass().equals(entityClass)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        return tableBindings.containsKey(entityClass);
+    }
+
+    private String allocateAlias(@Nullable String explicitAlias) {
+        if (explicitAlias != null) {
+            for (TableBinding b : allBindings) {
+                if (b.alias() != null && b.alias().equalsIgnoreCase(explicitAlias)) {
+                    throw new IllegalArgumentException("Duplicate table alias [" + explicitAlias
+                            + "] in query rooted at [" + rootType.getSimpleName() + "]");
+                }
+            }
+            return explicitAlias;
+        }
+        int idx = allBindings.size();
+        while (true) {
+            String candidate = ALIAS_PREFIX + idx;
+            boolean taken = false;
+            for (TableBinding b : allBindings) {
+                if (b.alias() != null && b.alias().equalsIgnoreCase(candidate)) {
+                    taken = true;
+                    break;
+                }
+            }
+            if (!taken) {
+                return candidate;
+            }
+            idx++;
+        }
+    }
+
+    private void registerQueryTable(Class<?> entityClass, @Nullable String explicitAlias) {
         if (tableBindings.containsKey(entityClass)) {
             return;
         }
-        EntityMetadataContext meta = CacheHolder.tableMetaCache().getMetadataContext(entityClass);
-        String alias = ALIAS_PREFIX + allBindings.size();
-        TableBinding binding = new TableBinding(entityClass, meta, alias);
+        EntityMetadataContext meta = LocalTableMetaCache.getMetadataContext(entityClass);
+        String alias = allocateAlias(explicitAlias);
+        TableBinding binding = new TableBinding(entityClass, meta, alias, meta.qualifiedTableName(namingPolicy));
         tableBindings.put(entityClass, binding);
         allBindings.add(binding);
     }
 
-    private void registerSelfJoinTable(JoinPart join, Class<?> entityClass) {
-        EntityMetadataContext meta = CacheHolder.tableMetaCache().getMetadataContext(entityClass);
-        String alias = ALIAS_PREFIX + allBindings.size();
-        TableBinding binding = new TableBinding(entityClass, meta, alias);
-        selfJoinBindings.put(join, binding);
+    private void registerSelfJoinTable(JoinPart join, Class<?> entityClass, @Nullable String explicitAlias, boolean onLeft) {
+        EntityMetadataContext meta = LocalTableMetaCache.getMetadataContext(entityClass);
+        String alias = allocateAlias(explicitAlias);
+        TableBinding binding = new TableBinding(entityClass, meta, alias, meta.qualifiedTableName(namingPolicy));
+        selfJoinBindings.put(join, new SelfJoinTarget(binding, onLeft));
         allBindings.add(binding);
     }
 
@@ -170,6 +248,13 @@ public final class RenderContext {
      */
     public Class<?> rootType() {
         return rootType;
+    }
+
+    /**
+     * 当前查询是否包含联表（{@code JOIN}）。
+     */
+    public boolean hasJoins() {
+        return !joins.isEmpty();
     }
 
     /**
@@ -212,8 +297,12 @@ public final class RenderContext {
             }
         }
         if (matched == null) {
+            List<String> availableAliases = allBindings.stream()
+                    .map(TableBinding::alias)
+                    .filter(Objects::nonNull)
+                    .toList();
             throw new IllegalStateException("Table alias [" + tableAlias + "] is not registered in query rooted at ["
-                    + rootType.getSimpleName() + "]");
+                    + rootType.getSimpleName() + "]. Available aliases: " + availableAliases);
         }
         if (!matched.entityClass().equals(entityClass)) {
             throw new IllegalStateException("Table alias [" + tableAlias + "] is bound to entity ["
@@ -230,7 +319,7 @@ public final class RenderContext {
     private IllegalStateException unjoinedEntityError(Class<?> entityClass, @Nullable String propertyName) {
         String unjoinedTable = entityClass.getSimpleName();
         try {
-            EntityMetadataContext unjoinedMeta = CacheHolder.tableMetaCache().getMetadataContext(entityClass);
+            EntityMetadataContext unjoinedMeta = LocalTableMetaCache.getMetadataContext(entityClass);
             if (unjoinedMeta != null && unjoinedMeta.qualifiedTableName() != null) {
                 unjoinedTable = unjoinedMeta.qualifiedTableName(namingPolicy);
             }
@@ -238,7 +327,7 @@ public final class RenderContext {
         }
         List<String> availableTables = new ArrayList<>(tableBindings.size());
         for (TableBinding b : tableBindings.values()) {
-            availableTables.add(b.entityClass().getSimpleName() + "(" + b.meta().qualifiedTableName(namingPolicy) + ")");
+            availableTables.add(b.entityClass().getSimpleName() + "(" + b.physicalName() + ")");
         }
         String refDesc = propertyName != null
                 ? entityClass.getSimpleName() + "::" + propertyName
@@ -316,6 +405,11 @@ public final class RenderContext {
         if (binding == null) {
             throw unjoinedEntityError(entityClass, propertyName);
         }
+        return findColumnInBinding(binding, propertyName, declaredColumnName);
+    }
+
+    private @Nullable ColumnAlias findColumnInBinding(TableBinding binding, String propertyName,
+                                                      @Nullable String declaredColumnName) {
         String propertyColumn = binding.meta().columnByField(propertyName);
         if (propertyColumn != null) {
             return buildColumnAlias(binding, propertyColumn, propertyName);
@@ -339,87 +433,101 @@ public final class RenderContext {
 
     /**
      * 渲染 FROM 与 JOIN 子句（不含前导 {@code FROM } 关键字），并将 {@code JOIN ... ON} 附加条件中的参数写入 {@code params}。
+     * <p>与 {@link #toFromNode()} 共用同一 AST 构造，避免两套 FROM 拼装逻辑漂移。
      */
     public String renderFromClause(SqlParameterList params) {
-        TableBinding root = tableBindings.get(rootType);
-        String rootTableName = root.meta().qualifiedTableName(namingPolicy);
-        if (joins.isEmpty()) {
-            return root.alias() == null
-                    ? rootTableName
-                    : rootTableName + " " + root.alias();
+        SqlStatement statement = SqlRenderer.render(toFromNode(), StatementMetadata.empty());
+        for (SqlParameter parameter : statement.parameters()) {
+            params.add(parameter);
         }
-        StringJoiner sj = new StringJoiner(" ");
+        return statement.sql();
+    }
+
+    private ColumnAlias rebindJoinColumn(ColumnMetaProvider columnProvider, TableBinding selfBinding) {
+        ColumnAlias base = columnProvider.resolveAlias(this);
+        return new ColumnAlias(
+                selfBinding.physicalName(),
+                base.getColumnName(),
+                selfBinding.alias(),
+                base.getColumnAlias());
+    }
+
+    /**
+     * 构造 FROM/JOIN 的结构化 AST 节点（连接键与 ON 附加条件均产出结构化 {@link SqlNode}，
+     * 参数由 {@link SqlRenderer} 按遍历顺序统一重排）。
+     */
+    public SqlNode.From toFromNode() {
+        TableBinding root = tableBindings.get(rootType);
+        if (root == null) {
+            throw new IllegalStateException("Root table is not registered: " + rootType.getName());
+        }
+        SqlNode.Table rootTable = tableNode(root.meta().tableName(),
+                root.physicalName(), root.alias());
+        if (joins.isEmpty()) {
+            return new SqlNode.From(rootTable, List.of());
+        }
+        List<SqlNode.Join> joinNodes = new ArrayList<>(joins.size());
         Set<String> joinedAliases = new HashSet<>();
-        sj.add(rootTableName + " " + root.alias());
         if (root.alias() != null) {
             joinedAliases.add(root.alias().toLowerCase(Locale.ROOT));
         }
-
-        StringBuilder sb = new StringBuilder();
         for (JoinPart segment : joins) {
-            ColumnAlias first = segment.getLeftColumn().resolveAlias(this);
-            ColumnAlias last = resolveRightJoinColumn(segment);
-            String code = segment.getJoinType().getCode();
+            SelfJoinTarget selfTarget = selfJoinBindings.get(segment);
+            ColumnAlias first = (selfTarget != null && selfTarget.onLeft())
+                    ? rebindJoinColumn(segment.getLeftColumn(), selfTarget.binding())
+                    : segment.getLeftColumn().resolveAlias(this);
+            ColumnAlias last = (selfTarget != null && !selfTarget.onLeft())
+                    ? rebindJoinColumn(segment.getRightColumn(), selfTarget.binding())
+                    : segment.getRightColumn().resolveAlias(this);
             String firstAliasKey = first.getTableAlias() != null
                     ? first.getTableAlias().toLowerCase(Locale.ROOT)
                     : first.getTableName().toLowerCase(Locale.ROOT);
             String lastAliasKey = last.getTableAlias() != null
                     ? last.getTableAlias().toLowerCase(Locale.ROOT)
                     : last.getTableName().toLowerCase(Locale.ROOT);
-
+            ColumnAlias target;
             if (joinedAliases.contains(firstAliasKey)) {
-                sb.append(code).append(' ')
-                        .append(last.getTableName()).append(' ').append(last.getTableAlias())
-                        .append(" ON ").append(first.identity()).append(" = ").append(last.identity());
+                target = last;
             } else if (joinedAliases.contains(lastAliasKey)) {
-                sb.append(code).append(' ')
-                        .append(first.getTableName()).append(' ').append(first.getTableAlias())
-                        .append(" ON ").append(first.identity()).append(" = ").append(last.identity());
+                target = first;
             } else {
                 throw new IllegalStateException("Disconnected JOIN segment between '"
                         + first.getTableName() + "' and '" + last.getTableName() + "'");
             }
-            WhereCriterion onCriterion = segment.getOnCriterion();
+            SqlNode onNode = SqlNodes.eq(
+                    SqlNodes.column(first.getTableAlias(), first.getColumnName()),
+                    SqlNodes.column(last.getTableAlias(), last.getColumnName()));
+            OnPredicate onCriterion = segment.getOnCriterion();
             if (onCriterion != null && !onCriterion.isEmpty()) {
-                StringBuilder onSql = new StringBuilder();
+                SqlNode extraNode;
                 TableBinding prevTarget = this.activeJoinTargetBinding;
-                this.activeJoinTargetBinding = selfJoinBindings.get(segment);
+                this.activeJoinTargetBinding = selfTarget != null ? selfTarget.binding() : null;
                 try {
-                    onCriterion.render(this, onSql, params, ParameterSource.WHERE);
+                    extraNode = onCriterion.toNode(this, ParameterSource.JOIN);
                 } finally {
                     this.activeJoinTargetBinding = prevTarget;
                 }
-                if (!onSql.isEmpty()) {
-                    boolean wrapParens = onCriterion.getCurrentOpt() == LinkType.OR
-                            && onCriterion.getPredicates().size() > 1;
-                    sb.append(" AND ");
-                    if (wrapParens) {
-                        sb.append('(').append(onSql).append(')');
-                    } else {
-                        sb.append(onSql);
-                    }
+                if (extraNode != null) {
+                    onNode = SqlNodes.and(onNode, extraNode);
                 }
             }
+            TableBinding targetBinding = target.getTableAlias() != null
+                    ? findBindingByPrefix(target.getTableAlias())
+                    : null;
+            String logicalTargetName = targetBinding != null
+                    ? targetBinding.meta().tableName()
+                    : target.getTableName();
+            joinNodes.add(new SqlNode.Join(segment.getJoinType().getCode(),
+                    tableNode(logicalTargetName, target.getTableName(), target.getTableAlias()),
+                    onNode));
             joinedAliases.add(firstAliasKey);
             joinedAliases.add(lastAliasKey);
-            sj.add(sb.toString());
-            sb.setLength(0);
         }
-        return sj.toString();
+        return new SqlNode.From(rootTable, joinNodes);
     }
 
-    private ColumnAlias resolveRightJoinColumn(JoinPart segment) {
-        TableBinding selfBinding = selfJoinBindings.get(segment);
-        if (selfBinding == null) {
-            return segment.getRightColumn().resolveAlias(this);
-        }
-        ColumnAlias base = segment.getRightColumn().resolveAlias(this);
-        ColumnAlias rebound = new ColumnAlias();
-        rebound.setTableName(selfBinding.meta().qualifiedTableName(namingPolicy));
-        rebound.setTableAlias(selfBinding.alias());
-        rebound.setColumnName(base.getColumnName());
-        rebound.setColumnAlias(base.getColumnAlias());
-        return rebound;
+    private static SqlNode.Table tableNode(String logicalName, String physicalName, @Nullable String alias) {
+        return new SqlNode.Table(logicalName, physicalName, alias == null ? "" : alias);
     }
 
     /**
@@ -428,7 +536,7 @@ public final class RenderContext {
     public Set<TableRef> extractTables() {
         Set<TableRef> result = new LinkedHashSet<>();
         for (TableBinding binding : allBindings) {
-            result.add(TableRef.ofQualified(binding.meta().qualifiedTableName(namingPolicy), binding.alias()));
+            result.add(TableRef.ofQualified(binding.physicalName(), binding.alias()));
         }
         return result;
     }
@@ -471,11 +579,10 @@ public final class RenderContext {
 
     private ColumnAlias buildColumnAlias(TableBinding binding, String columnName, @Nullable String fieldName) {
         String formattedCol = binding.meta().formatColumn(columnName, namingPolicy);
-        ColumnAlias alias = new ColumnAlias();
-        alias.setTableName(binding.meta().qualifiedTableName(namingPolicy));
-        alias.setTableAlias(binding.alias());
-        alias.setColumnName(formattedCol);
-        alias.setColumnAlias(fieldName);
-        return alias;
+        return new ColumnAlias(
+                binding.physicalName(),
+                formattedCol,
+                binding.alias(),
+                fieldName);
     }
 }

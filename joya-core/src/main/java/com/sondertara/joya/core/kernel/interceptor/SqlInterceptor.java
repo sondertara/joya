@@ -1,16 +1,26 @@
 package com.sondertara.joya.core.kernel.interceptor;
 
+import com.sondertara.joya.core.kernel.support.Ordered;
 import com.sondertara.joya.core.kernel.statement.SqlStatement;
 
 /**
- * SQL 改写拦截器 —— 全框架统一的 SQL 拦截扩展点。
- * <p>
- * 设计原则（对标 MyBatis Interceptor / EF Core DbCommandInterceptor，但更轻）：
+ * SQL 文本改写拦截器（兼容层）。
+ *
+ * <p>它拿到的是已经渲染完成的 {@link SqlStatement}，只适合 hint、注释、字面量等最后一段文本微调。
+ * <b>结构变更请使用 {@link SqlRewriter}</b>：租户条件、软删、审计列都需要在 AST 层完成
+ * （分表与 schema 切换由 {@code NamingPolicy.tableNameResolver} 在渲染期完成）；
+ * 文本层无法安全地追加参数，批量模式下尤其如此。
+ *
  * <ul>
  *   <li>纯函数：只改 {@link SqlStatement} 并返回新实例，不碰渲染逻辑、不持有连接。</li>
  *   <li>无反射魔法：无 {@code @Intercepts}、无 {@code Invocation}，直接实现接口。</li>
- *   <li>正交分层：分库分表/租户/软删/审计均为独立拦截器，按 {@link #order()} 排序执行。</li>
+ *   <li>按 {@link #order()} 排序执行；同值按类名字典序保证确定性。</li>
  * </ul>
+ *
+ * <p><b>批量边界</b>：{@code BatchSqlStatement} 同样经过本链，拦截器收到的是整批共用的 SQL 模板探针
+ * （参数为空，整批只触发一次，{@link RewriteContext#isBatch()} 为 {@code true}）。
+ * 批量模式下只允许改写文本；追加参数或改变占位符个数会抛 {@link UnsupportedOperationException}，
+ * 结构变更请使用 {@link SqlRewriter}。
  */
 public interface SqlInterceptor extends Ordered {
 

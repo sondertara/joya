@@ -28,10 +28,17 @@ public record SqlParameter(
 ) {
 
     public SqlParameter {
-        Objects.checkIndex(index, Integer.MAX_VALUE);
+        if (index < 1) {
+            throw new IndexOutOfBoundsException("parameter index must be >= 1: " + index);
+        }
         Objects.requireNonNull(source, "parameter source must not be null");
         Objects.requireNonNull(binder, "parameter binder must not be null");
         name = name == null ? "" : name;
+    }
+
+    /** 便捷构造：使用自定义绑定策略。 */
+    public static SqlParameter of(int index, String name, Object value, ParameterSource source, ParameterBinder binder) {
+        return new SqlParameter(index, name, value, source, binder);
     }
 
     /** 便捷构造：使用默认绑定策略。 */

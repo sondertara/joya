@@ -1,6 +1,8 @@
 # SQL 语句内核重构方案
 
 > **历史方案说明（2026-10）**：文中的 `SqlCreator` / `TableMetaContext` 等结构已在重构中移除，执行期 `withTable` 改写亦不再支持；动态表名改由 `NamingPolicy.tableNameResolver` 在渲染期完成。
+>
+> **命名更新**：执行入口 `JoyaTemplate` 已重命名为 `ExecutionKernel`；下文旧名仅用于历史对照。
 
 
 ## 1. 背景与目标
@@ -497,21 +499,20 @@ public record MutationContext(
 - `UPDATE` 和 `DELETE` 没有条件时必须显式允许全表操作；
 - `declaredColumns` 只影响本次操作。
 
-### 6.6 与现有 `EntityTableMetaDefinition` 的关系
+### 6.6 元数据缓存
 
-不建议立即删除 `EntityTableMetaDefinition`。它仍然是当前缓存和反射扫描的事实来源。
-
-迁移策略：
+当前实现已收敛为：
 
 ```text
-CacheHolder.tableMetaCache()
+LocalTableMetaCache（静态 ClassValue 缓存）
         ↓
-EntityMetadataResolver
+EntityMetadataContext（不可变）
         ↓
-EntityMetadataContext
-        ↓
-StatementFactory
+StatementFactory / EntityOps / RenderContext
 ```
+
+`LocalTableMetaCache` 使用 JDK `ClassValue` 按实体 Class 缓存，随 ClassLoader 卸载自动回收；
+不持有 DataSource、命名策略或租户状态。
 
 第一阶段可以让 `EntityMetadataContext` 包装现有 `EntityTableMetaDefinition`；第二阶段再逐步把：
 

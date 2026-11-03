@@ -1,11 +1,19 @@
 package com.sondertara.joya.core;
 
-import com.sondertara.joya.core.kernel.JoyaTemplate;
+import com.sondertara.joya.core.kernel.executor.ExecutionOptions;
+import com.sondertara.joya.core.kernel.ExecutionKernel;
+import com.sondertara.joya.core.listener.EntityLifecycle;
+import com.sondertara.joya.core.kernel.statement.UpsertStyle;
+import com.sondertara.joya.core.kernel.executor.BatchSlice;
+import com.sondertara.joya.core.kernel.statement.BatchSqlStatement;
 import com.sondertara.joya.core.kernel.statement.SqlStatement;
 import com.sondertara.joya.core.metadata.EntityMetadataContext;
+import com.sondertara.joya.core.metadata.EntitySnapshot;
 import com.sondertara.joya.core.query.criterion.WhereCriterion;
 import com.sondertara.joya.core.result.MutationResult;
+import com.sondertara.joya.core.statement.MutationContext;
 import com.sondertara.joya.core.statement.factory.SelectStatementFactory;
+import com.sondertara.joya.core.statement.factory.UpsertStatementFactory;
 import com.sondertara.joya.exceptions.DbException;
 import com.sondertara.joya.utils.ConvertUtils;
 
@@ -23,39 +31,164 @@ import java.util.Set;
 
 /**
  * Upsert 规划器：负责单条与批量 {@code save} / {@code saveAll} 的主键存在性分片探测与插入/更新路由。
+ *
+ * <p><b>实现策略</b>：单条 {@code save} 与满足条件的 {@code saveAll} / {@code saveAllIgnoreNull}
+ * （原生方言、无监听器、主键全非空）按列签名分组走原生 upsert；其余情况回退 select-then-write，
+ * 该回退路径在并发插入同一主键时存在竞态，需要强一致性的场景请使用显式事务 + 唯一约束。
  */
-final class UpsertPlanner {
+final class UpsertPlanner<T> {
 
-    private UpsertPlanner() {
+    private final ExecutionKernel template;
+    private final EntityMetadataContext meta;
+    private final EntityLifecycle lifecycle;
+    private final EntityWriter<T> writer;
+    private final EntityFinder<T> finder;
+
+    UpsertPlanner(ExecutionKernel template,
+                  EntityMetadataContext meta,
+                  EntityLifecycle lifecycle,
+                  EntityWriter<T> writer,
+                  EntityFinder<T> finder) {
+        this.template = Objects.requireNonNull(template, "template must not be null");
+        this.meta = Objects.requireNonNull(meta, "meta must not be null");
+        this.lifecycle = lifecycle == null ? EntityLifecycle.EMPTY : lifecycle;
+        this.writer = Objects.requireNonNull(writer, "writer must not be null");
+        this.finder = Objects.requireNonNull(finder, "finder must not be null");
     }
 
-    static <T> MutationResult executeUpsert(
-            EntityOps<T> ops,
-            EntityMetadataContext meta,
-            T entity,
-            boolean ignoreNull) {
+    MutationResult save(T entity, boolean ignoreNull) {
         Objects.requireNonNull(entity, "entity must not be null");
         String pk = meta.primaryKey();
         Object pkVal = pk == null ? null : meta.readFieldValue(entity, pk);
-        boolean exists = (pkVal instanceof Serializable s) && ops.existsById(s);
-        if (!exists) {
-            return ignoreNull ? ops.insertIgnoreNull(entity) : ops.insert(entity);
+        boolean hasListeners = lifecycle.hasListenersFor(entity);
+        if (pkVal instanceof Serializable && canUseNativeUpsert(template.dialect().upsertStyle())) {
+            MutationResult nativeResult = nativeUpsert(entity, ignoreNull, pkVal, hasListeners);
+            if (nativeResult != null) {
+                return nativeResult;
+            }
         }
-        MutationResult updated = ignoreNull ? ops.patch(entity) : ops.update(entity);
+        boolean exists = (pkVal instanceof Serializable s) && finder.existsById(s);
+        if (!exists) {
+            return writer.insert(entity, ignoreNull);
+        }
+        MutationResult updated = writer.updateByPrimaryKey(entity, ignoreNull);
         return MutationResult.ofInsert(updated.affectedRows(), pkVal);
     }
 
-    static <T> MutationResult executeSaveAll(
-            EntityOps<T> ops,
-            JoyaTemplate template,
-            EntityMetadataContext meta,
-            Collection<T> entities,
-            boolean ignoreNull) {
+    /**
+     * 单条原生 upsert。返回 {@code null} 表示方言/数据不满足条件，调用方回退 select-then-write。
+     */
+    private MutationResult nativeUpsert(T entity, boolean ignoreNull, Object pkVal, boolean hasListeners) {
+        String pk = meta.primaryKey();
+        if (pk == null) {
+            return null;
+        }
+        boolean exists = false;
+        if (hasListeners) {
+            exists = finder.existsById((Serializable) pkVal);
+            if (exists) {
+                lifecycle.preUpdate(entity);
+            } else {
+                lifecycle.prePersist(entity);
+            }
+        }
+        Map<String, Object> values = EntitySnapshot.snapshot(meta, entity).values();
+        List<String> columns = new ArrayList<>();
+        for (String column : meta.insertableColumnsWithPrimaryKey()) {
+            if (ignoreNull && values.get(column) == null && !column.equals(pk)) {
+                continue;
+            }
+            columns.add(column);
+        }
+        if (columns.isEmpty()) {
+            return null;
+        }
+        Set<String> declared = new java.util.LinkedHashSet<>(columns);
+        MutationContext ctx = new MutationContext(meta, values, null, declared, ignoreNull, false,
+                template.namingPolicy());
+        SqlStatement upsert = UpsertStatementFactory.create(ctx, columns, pk, template.dialect().upsertStyle());
+        int affected = template.update(upsert);
+        if (hasListeners) {
+            if (exists) {
+                lifecycle.postUpdate(entity);
+            } else {
+                lifecycle.postPersist(entity);
+            }
+        }
+        return MutationResult.ofInsert(affected, pkVal);
+    }
+
+    private MutationResult nativeBatchGroups(List<T> rows,
+                                             String pk,
+                                             boolean ignoreNull,
+                                             int batchSize,
+                                             EntityLifecycle lifecycle,
+                                             Set<Object> existing) {
+        if (lifecycle != null) {
+            for (T row : rows) {
+                boolean exists = existing.contains(normalizePrimaryKey(meta.readFieldValue(row, pk)));
+                if (exists) {
+                    lifecycle.preUpdate(row);
+                } else {
+                    lifecycle.prePersist(row);
+                }
+            }
+        }
+        Map<List<String>, List<T>> groups = new LinkedHashMap<>();
+        for (T row : rows) {
+            Map<String, Object> values = EntitySnapshot.snapshot(meta, row).values();
+            List<String> columns = new ArrayList<>();
+            for (String column : meta.insertableColumnsWithPrimaryKey()) {
+                if (ignoreNull && values.get(column) == null && !column.equals(pk)) {
+                    continue;
+                }
+                columns.add(column);
+            }
+            groups.computeIfAbsent(List.copyOf(columns), key -> new ArrayList<>()).add(row);
+        }
+        MutationResult total = MutationResult.EMPTY;
+        for (Map.Entry<List<String>, List<T>> entry : groups.entrySet()) {
+            MutationResult part = nativeBatch(entry.getValue(), pk, entry.getKey(), batchSize);
+            if (part == null) {
+                return null;
+            }
+            if (lifecycle != null) {
+                for (T row : entry.getValue()) {
+                    boolean exists = existing.contains(normalizePrimaryKey(meta.readFieldValue(row, pk)));
+                    if (exists) {
+                        lifecycle.postUpdate(row);
+                    } else {
+                        lifecycle.postPersist(row);
+                    }
+                }
+            }
+            total = total.merge(part);
+        }
+        return total;
+    }
+
+    private MutationResult nativeBatch(List<T> rows, String pk, List<String> columns, int batchSize) {
+        List<Object[]> batchRows = new ArrayList<>(rows.size());
+        for (T row : rows) {
+            Map<String, Object> values = EntitySnapshot.snapshot(meta, row).values();
+            Object[] args = new Object[columns.size()];
+            for (int i = 0; i < columns.size(); i++) {
+                args[i] = values.get(columns.get(i));
+            }
+            batchRows.add(args);
+        }
+        BatchSqlStatement upsertBatch = UpsertStatementFactory.createBatch(
+                meta, columns, batchRows, template.namingPolicy(), batchSize, pk, template.dialect().upsertStyle());
+        BatchSlice slice = template.batchExecute(upsertBatch);
+        return MutationResult.ofBatch(slice.batchCounts(), slice.generatedKeys());
+    }
+
+    MutationResult saveAll(Collection<T> entities, boolean ignoreNull) {
         if (entities == null || entities.isEmpty()) {
             return MutationResult.EMPTY;
         }
-        List<T> rows = BatchPlanner.toList(entities);
-        String pk = ops.requirePrimaryKey();
+        List<T> rows = entities instanceof List<T> l ? l : new ArrayList<>(entities);
+        String pk = writer.requirePrimaryKey();
         List<Object> primaryKeys = new ArrayList<>(rows.size());
         Set<Object> seenPrimaryKeys = new HashSet<>();
         for (T row : rows) {
@@ -70,7 +203,23 @@ final class UpsertPlanner {
             }
         }
 
-        int batchPartitionSize = BatchPlanner.effectiveBatchSize(template);
+        int configuredBatchSize = template.executionOptions().batchSize();
+        int batchPartitionSize = configuredBatchSize > 0 ? configuredBatchSize : ExecutionOptions.DEFAULT_BATCH_SIZE;
+
+        boolean hasListeners = rows.stream().anyMatch(lifecycle::hasListenersFor);
+        if (canUseNativeUpsert(template.dialect().upsertStyle())
+                && !template.hasRewriters()
+                && primaryKeys.stream().allMatch(Objects::nonNull)) {
+            Set<Object> existing = hasListeners
+                    ? findExistingIds(template, meta, pk, primaryKeys)
+                    : Set.of();
+            MutationResult nativeBatch = nativeBatchGroups(rows, pk, ignoreNull,
+                    batchPartitionSize, hasListeners ? lifecycle : null, existing);
+            if (nativeBatch != null) {
+                return nativeBatch;
+            }
+        }
+
         MutationResult total = MutationResult.EMPTY;
         for (int start = 0; start < rows.size(); start += batchPartitionSize) {
             int end = Math.min(start + batchPartitionSize, rows.size());
@@ -98,17 +247,17 @@ final class UpsertPlanner {
                 });
             }
             if (!toUpdate.isEmpty()) {
-                total = total.merge(ignoreNull ? ops.patchAll(toUpdate) : ops.updateAll(toUpdate));
+                total = total.merge(ignoreNull ? writer.patchAll(toUpdate) : writer.updateAll(toUpdate));
             }
             if (!toInsert.isEmpty()) {
-                total = total.merge(ignoreNull ? ops.insertAllIgnoreNull(toInsert) : ops.insertAll(toInsert));
+                total = total.merge(writer.insertAll(toInsert, ignoreNull));
             }
         }
         return total;
     }
 
-    static Set<Object> findExistingIds(
-            JoyaTemplate template,
+    private static Set<Object> findExistingIds(
+            ExecutionKernel template,
             EntityMetadataContext meta,
             String pk,
             Collection<?> keys) {
@@ -122,7 +271,7 @@ final class UpsertPlanner {
         for (List<Object> chunk : Partitions.of(keyList, Partitions.MAX_IN_CLAUSE_SIZE)) {
             WhereCriterion where = WhereCriterion.create();
             where.in(pk, chunk);
-            SqlStatement stmt = SelectStatementFactory.create(meta, where, Set.of(pk), null, template.namingPolicy());
+            SqlStatement stmt = SelectStatementFactory.create(meta, where, Set.of(pk), template.namingPolicy());
             List<Object> rows = template.queryList(stmt, rs -> {
                 try {
                     Object raw = rs.getObject(1);
@@ -137,6 +286,21 @@ final class UpsertPlanner {
             existing.addAll(rows);
         }
         return existing;
+    }
+
+    private boolean canUseNativeUpsert(UpsertStyle style) {
+        if (style == UpsertStyle.NONE) {
+            return false;
+        }
+        if (style == UpsertStyle.MERGE) {
+            String pk = meta.primaryKey();
+            for (String col : meta.insertableColumns()) {
+                if (!col.equalsIgnoreCase(pk) && meta.nonUpdatableColumns().contains(col)) {
+                    return false;
+                }
+            }
+        }
+        return true;
     }
 
     private static Object normalizePrimaryKey(Object key) {

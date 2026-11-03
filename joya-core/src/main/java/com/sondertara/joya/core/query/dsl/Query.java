@@ -1,25 +1,18 @@
 package com.sondertara.joya.core.query.dsl;
 
 import com.sondertara.joya.core.function.IGetter;
-import com.sondertara.joya.core.kernel.executor.SingleColumnRowMapper;
-import com.sondertara.joya.core.kernel.JoyaTemplate;
-import com.sondertara.joya.core.naming.NamingPolicy;
-import com.sondertara.joya.core.kernel.PageSlice;
-import com.sondertara.joya.core.kernel.statement.Operation;
-import com.sondertara.joya.core.kernel.statement.ParameterSource;
-import com.sondertara.joya.core.kernel.statement.SqlParameterList;
-import com.sondertara.joya.core.kernel.statement.SqlRenderer;
+import com.sondertara.joya.core.kernel.ExecutionKernel;
+import com.sondertara.joya.core.kernel.statement.LockMode;
+import com.sondertara.joya.core.kernel.statement.SqlNode;
+import com.sondertara.joya.core.kernel.statement.SqlNodes;
 import com.sondertara.joya.core.kernel.statement.SqlStatement;
-import com.sondertara.joya.core.kernel.statement.StatementMetadata;
 import com.sondertara.joya.core.query.ColumnMetaProvider;
-import com.sondertara.joya.core.query.LinkType;
 import com.sondertara.joya.core.query.PageResult;
 import com.sondertara.joya.core.query.RenderContext;
-import com.sondertara.joya.core.query.criterion.JoinCriterion;
 import com.sondertara.joya.core.query.criterion.WhereCriterion;
-import com.sondertara.joya.core.query.pagination.OrderParam;
 import com.sondertara.joya.core.query.pagination.PageRequest;
-import org.jspecify.annotations.Nullable;
+import com.sondertara.joya.core.query.pagination.SortCondition;
+import com.sondertara.joya.core.query.pagination.SortDirection;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -42,23 +35,25 @@ import java.util.stream.Stream;
  */
 public final class Query<T> implements QueryScope {
 
-    private record OrderSpec(ColumnMetaProvider column, OrderParam.OrderBy direction) {
+    private final QuerySpec<T> spec;
+    private final QueryRenderer<T> renderer;
+    private final QueryExecutor<T> executor;
+
+    public Query(ExecutionKernel template, Class<T> rootType) {
+        Objects.requireNonNull(rootType, "rootType must not be null");
+        this.spec = new QuerySpec<>(rootType);
+        this.renderer = new QueryRenderer<>(template);
+        this.executor = new QueryExecutor<>(template, renderer);
     }
 
-    private final JoyaTemplate template;
-    private final Class<T> rootType;
-    private final JoinCriterion joinCriterion = new JoinCriterion();
-    private final WhereCriterion whereCriterion = new WhereCriterion(LinkType.AND);
-    private final List<ColumnMetaProvider> groupByColumns = new ArrayList<>();
-    private final WhereCriterion havingCriterion = new WhereCriterion(LinkType.AND);
-    private final List<OrderSpec> orderSpecs = new ArrayList<>();
-    private boolean distinct;
-    private Integer offset;
-    private Integer limit;
+    private Query(QuerySpec<T> spec, QueryRenderer<T> renderer, QueryExecutor<T> executor) {
+        this.spec = spec;
+        this.renderer = renderer;
+        this.executor = executor;
+    }
 
-    public Query(JoyaTemplate template, Class<T> rootType) {
-        this.template = template;
-        this.rootType = Objects.requireNonNull(rootType, "rootType must not be null");
+    private Query<T> fork() {
+        return new Query<>(spec.copy(), renderer, executor);
     }
 
     /**
@@ -70,66 +65,95 @@ public final class Query<T> implements QueryScope {
 
     @Override
     public Class<T> rootType() {
-        return rootType;
+        return spec.rootType();
     }
 
     RenderContext renderContext() {
-        return RenderContext.forQuery(
-                rootType,
-                joinCriterion.getJoinSegments(),
-                template != null ? template.namingPolicy() : NamingPolicy.DEFAULT
-        );
+        return renderer.renderContext(spec);
     }
 
     // ===== 1. 行级子句（全部返回 Query<T>，可任意顺序组合） =====
 
     public <L, R> Query<T> join(IGetter<L, ?> left, IGetter<R, ?> right) {
-        joinCriterion.join(left, right);
+        spec.joinCriterion().join(left, right);
+        return this;
+    }
+
+    public <L, R> Query<T> join(IGetter<L, ?> left, IGetter<R, ?> right, String alias) {
+        spec.joinCriterion().join(left, right, alias);
         return this;
     }
 
     public <L, R> Query<T> join(IGetter<L, ?> left, IGetter<R, ?> right, UnaryOperator<WhereCriterion> onCondition) {
-        joinCriterion.join(left, right, onCondition);
+        spec.joinCriterion().join(left, right, onCondition);
+        return this;
+    }
+
+    public <L, R> Query<T> join(
+            IGetter<L, ?> left, IGetter<R, ?> right, String alias, UnaryOperator<WhereCriterion> onCondition) {
+        spec.joinCriterion().join(left, right, alias, onCondition);
         return this;
     }
 
     public <L, R> Query<T> leftJoin(IGetter<L, ?> left, IGetter<R, ?> right) {
-        joinCriterion.leftJoin(left, right);
+        spec.joinCriterion().leftJoin(left, right);
+        return this;
+    }
+
+    public <L, R> Query<T> leftJoin(IGetter<L, ?> left, IGetter<R, ?> right, String alias) {
+        spec.joinCriterion().leftJoin(left, right, alias);
         return this;
     }
 
     public <L, R> Query<T> leftJoin(IGetter<L, ?> left, IGetter<R, ?> right, UnaryOperator<WhereCriterion> onCondition) {
-        joinCriterion.leftJoin(left, right, onCondition);
+        spec.joinCriterion().leftJoin(left, right, onCondition);
+        return this;
+    }
+
+    public <L, R> Query<T> leftJoin(
+            IGetter<L, ?> left, IGetter<R, ?> right, String alias, UnaryOperator<WhereCriterion> onCondition) {
+        spec.joinCriterion().leftJoin(left, right, alias, onCondition);
         return this;
     }
 
     public <L, R> Query<T> rightJoin(IGetter<L, ?> left, IGetter<R, ?> right) {
-        joinCriterion.rightJoin(left, right);
+        spec.joinCriterion().rightJoin(left, right);
+        return this;
+    }
+
+    public <L, R> Query<T> rightJoin(IGetter<L, ?> left, IGetter<R, ?> right, String alias) {
+        spec.joinCriterion().rightJoin(left, right, alias);
         return this;
     }
 
     public <L, R> Query<T> rightJoin(IGetter<L, ?> left, IGetter<R, ?> right, UnaryOperator<WhereCriterion> onCondition) {
-        joinCriterion.rightJoin(left, right, onCondition);
+        spec.joinCriterion().rightJoin(left, right, onCondition);
+        return this;
+    }
+
+    public <L, R> Query<T> rightJoin(
+            IGetter<L, ?> left, IGetter<R, ?> right, String alias, UnaryOperator<WhereCriterion> onCondition) {
+        spec.joinCriterion().rightJoin(left, right, alias, onCondition);
         return this;
     }
 
     @Override
     public Query<T> where(UnaryOperator<WhereCriterion> condition) {
         Objects.requireNonNull(condition, "where condition must not be null");
-        whereCriterion.and(condition);
+        spec.whereCriterion().and(condition);
         return this;
     }
 
     public Query<T> where(WhereCriterion criterion) {
         Objects.requireNonNull(criterion, "criterion must not be null");
         if (!criterion.isEmpty()) {
-            whereCriterion.and(w -> criterion);
+            spec.whereCriterion().and(w -> criterion.copy());
         }
         return this;
     }
 
     public <E1> Query<T> groupBy(IGetter<E1, ?> c1) {
-        groupByColumns.add(ColumnMetaProvider.fromGetter(Objects.requireNonNull(c1)));
+        spec.groupByColumns().add(ColumnMetaProvider.fromGetter(Objects.requireNonNull(c1)));
         return this;
     }
 
@@ -146,12 +170,35 @@ public final class Query<T> implements QueryScope {
         return groupBy(c1).groupBy(c2).groupBy(c3).groupBy(c4);
     }
 
+    public <E1, E2, E3, E4, E5> Query<T> groupBy(
+            IGetter<E1, ?> c1, IGetter<E2, ?> c2, IGetter<E3, ?> c3, IGetter<E4, ?> c4, IGetter<E5, ?> c5) {
+        return groupBy(c1, c2, c3, c4).groupBy(c5);
+    }
+
+    public <E1, E2, E3, E4, E5, E6> Query<T> groupBy(
+            IGetter<E1, ?> c1, IGetter<E2, ?> c2, IGetter<E3, ?> c3,
+            IGetter<E4, ?> c4, IGetter<E5, ?> c5, IGetter<E6, ?> c6) {
+        return groupBy(c1, c2, c3, c4).groupBy(c5, c6);
+    }
+
+    public <E1, E2, E3, E4, E5, E6, E7> Query<T> groupBy(
+            IGetter<E1, ?> c1, IGetter<E2, ?> c2, IGetter<E3, ?> c3, IGetter<E4, ?> c4,
+            IGetter<E5, ?> c5, IGetter<E6, ?> c6, IGetter<E7, ?> c7) {
+        return groupBy(c1, c2, c3, c4).groupBy(c5, c6, c7);
+    }
+
+    public <E1, E2, E3, E4, E5, E6, E7, E8> Query<T> groupBy(
+            IGetter<E1, ?> c1, IGetter<E2, ?> c2, IGetter<E3, ?> c3, IGetter<E4, ?> c4,
+            IGetter<E5, ?> c5, IGetter<E6, ?> c6, IGetter<E7, ?> c7, IGetter<E8, ?> c8) {
+        return groupBy(c1, c2, c3, c4).groupBy(c5, c6, c7, c8);
+    }
+
     @SafeVarargs
     public final <E> Query<T> groupBy(IGetter<E, ?>... columns) {
         if (columns != null) {
             for (IGetter<E, ?> column : columns) {
                 if (column != null) {
-                    groupByColumns.add(ColumnMetaProvider.fromGetter(column));
+                    spec.groupByColumns().add(ColumnMetaProvider.fromGetter(column));
                 }
             }
         }
@@ -160,35 +207,35 @@ public final class Query<T> implements QueryScope {
 
     public Query<T> having(UnaryOperator<WhereCriterion> condition) {
         Objects.requireNonNull(condition, "having condition must not be null");
-        havingCriterion.and(condition);
+        spec.havingCriterion().and(condition);
         return this;
     }
 
     public <E> Query<T> orderByAsc(IGetter<E, ?> column) {
-        return orderBy(column, OrderParam.OrderBy.ASC);
+        return orderBy(column, SortDirection.ASC);
     }
 
     public <E> Query<T> orderByDesc(IGetter<E, ?> column) {
-        return orderBy(column, OrderParam.OrderBy.DESC);
+        return orderBy(column, SortDirection.DESC);
     }
 
-    public <E> Query<T> orderBy(IGetter<E, ?> column, OrderParam.OrderBy direction) {
+    public <E> Query<T> orderBy(IGetter<E, ?> column, SortDirection direction) {
         Objects.requireNonNull(column, "orderBy column must not be null");
         Objects.requireNonNull(direction, "orderBy direction must not be null");
-        orderSpecs.add(new OrderSpec(ColumnMetaProvider.fromGetter(column), direction));
+        spec.orderSpecs().add(new QuerySpec.OrderSpec(ColumnMetaProvider.fromGetter(column), direction));
         return this;
     }
 
     @Override
-    public Query<T> orderBy(OrderParam... orderParams) {
-        if (orderParams != null) {
-            for (OrderParam param : orderParams) {
-                if (param == null) {
+    public Query<T> orderBy(SortCondition... sorts) {
+        if (sorts != null) {
+            for (SortCondition sort : sorts) {
+                if (sort == null) {
                     continue;
                 }
-                ColumnMetaProvider provider = ColumnMetaProvider.fromName(param.getFieldName());
-                OrderParam.OrderBy dir = param.getOrderType() == null ? OrderParam.OrderBy.ASC : param.getOrderType();
-                orderSpecs.add(new OrderSpec(provider, dir));
+                ColumnMetaProvider provider = ColumnMetaProvider.fromName(sort.getField());
+                SortDirection dir = sort.getDirection() == null ? SortDirection.ASC : sort.getDirection();
+                spec.orderSpecs().add(new QuerySpec.OrderSpec(provider, dir));
             }
         }
         return this;
@@ -205,13 +252,36 @@ public final class Query<T> implements QueryScope {
         if (n <= 0) {
             throw new IllegalArgumentException("limit count must be > 0: " + n);
         }
-        this.offset = offset;
-        this.limit = n;
+        spec.limit(offset, n);
         return this;
     }
 
     public Query<T> distinct() {
-        this.distinct = true;
+        spec.distinct(true);
+        return this;
+    }
+
+    /**
+     * 追加悲观排他行锁（{@code FOR UPDATE}）。
+     */
+    public Query<T> forUpdate() {
+        spec.lockMode(LockMode.FOR_UPDATE);
+        return this;
+    }
+
+    /**
+     * 追加不等待悲观排他行锁（{@code FOR UPDATE NOWAIT}）。
+     */
+    public Query<T> forUpdateNoWait() {
+        spec.lockMode(LockMode.FOR_UPDATE_NOWAIT);
+        return this;
+    }
+
+    /**
+     * 追加跳过已锁定行的悲观排他行锁（{@code FOR UPDATE SKIP LOCKED}）。
+     */
+    public Query<T> forUpdateSkipLocked() {
+        spec.lockMode(LockMode.FOR_UPDATE_SKIP_LOCKED);
         return this;
     }
 
@@ -232,44 +302,70 @@ public final class Query<T> implements QueryScope {
     // ===== 2. 投影切换（进入只含终结方法的 Select1..8 / SelectN） =====
 
     public <E1, A> Select1<A> select(IGetter<E1, A> c1) {
-        return new Select1<>(this, c1);
+        return new Select1<>(fork(), c1);
     }
 
     public <E1, A, E2, B> Select2<A, B> select(IGetter<E1, A> c1, IGetter<E2, B> c2) {
-        return new Select2<>(this, c1, c2);
+        return new Select2<>(fork(), c1, c2);
     }
 
     public <E1, A, E2, B, E3, C> Select3<A, B, C> select(
             IGetter<E1, A> c1, IGetter<E2, B> c2, IGetter<E3, C> c3) {
-        return new Select3<>(this, c1, c2, c3);
+        return new Select3<>(fork(), c1, c2, c3);
     }
 
     public <E1, A, E2, B, E3, C, E4, D> Select4<A, B, C, D> select(
             IGetter<E1, A> c1, IGetter<E2, B> c2, IGetter<E3, C> c3, IGetter<E4, D> c4) {
-        return new Select4<>(this, c1, c2, c3, c4);
+        return new Select4<>(fork(), c1, c2, c3, c4);
     }
 
     public <E1, A, E2, B, E3, C, E4, D, E5, E> Select5<A, B, C, D, E> select(
             IGetter<E1, A> c1, IGetter<E2, B> c2, IGetter<E3, C> c3, IGetter<E4, D> c4, IGetter<E5, E> c5) {
-        return new Select5<>(this, c1, c2, c3, c4, c5);
+        return new Select5<>(fork(), c1, c2, c3, c4, c5);
     }
 
     public <E1, A, E2, B, E3, C, E4, D, E5, E, E6, F> Select6<A, B, C, D, E, F> select(
             IGetter<E1, A> c1, IGetter<E2, B> c2, IGetter<E3, C> c3,
             IGetter<E4, D> c4, IGetter<E5, E> c5, IGetter<E6, F> c6) {
-        return new Select6<>(this, c1, c2, c3, c4, c5, c6);
+        return new Select6<>(fork(), c1, c2, c3, c4, c5, c6);
     }
 
     public <E1, A, E2, B, E3, C, E4, D, E5, E, E6, F, E7, G> Select7<A, B, C, D, E, F, G> select(
             IGetter<E1, A> c1, IGetter<E2, B> c2, IGetter<E3, C> c3,
             IGetter<E4, D> c4, IGetter<E5, E> c5, IGetter<E6, F> c6, IGetter<E7, G> c7) {
-        return new Select7<>(this, c1, c2, c3, c4, c5, c6, c7);
+        return new Select7<>(fork(), c1, c2, c3, c4, c5, c6, c7);
     }
 
     public <E1, A, E2, B, E3, C, E4, D, E5, E, E6, F, E7, G, E8, H> Select8<A, B, C, D, E, F, G, H> select(
             IGetter<E1, A> c1, IGetter<E2, B> c2, IGetter<E3, C> c3, IGetter<E4, D> c4,
             IGetter<E5, E> c5, IGetter<E6, F> c6, IGetter<E7, G> c7, IGetter<E8, H> c8) {
-        return new Select8<>(this, c1, c2, c3, c4, c5, c6, c7, c8);
+        return new Select8<>(fork(), c1, c2, c3, c4, c5, c6, c7, c8);
+    }
+
+    public <E1, E2, E3, E4, E5, E6, E7, E8, E9> SelectN select(
+            IGetter<E1, ?> c1, IGetter<E2, ?> c2, IGetter<E3, ?> c3, IGetter<E4, ?> c4, IGetter<E5, ?> c5,
+            IGetter<E6, ?> c6, IGetter<E7, ?> c7, IGetter<E8, ?> c8, IGetter<E9, ?> c9) {
+        return new SelectN(fork(), List.of(c1, c2, c3, c4, c5, c6, c7, c8, c9));
+    }
+
+    public <E1, E2, E3, E4, E5, E6, E7, E8, E9, E10> SelectN select(
+            IGetter<E1, ?> c1, IGetter<E2, ?> c2, IGetter<E3, ?> c3, IGetter<E4, ?> c4, IGetter<E5, ?> c5,
+            IGetter<E6, ?> c6, IGetter<E7, ?> c7, IGetter<E8, ?> c8, IGetter<E9, ?> c9, IGetter<E10, ?> c10) {
+        return new SelectN(fork(), List.of(c1, c2, c3, c4, c5, c6, c7, c8, c9, c10));
+    }
+
+    public <E1, E2, E3, E4, E5, E6, E7, E8, E9, E10, E11> SelectN select(
+            IGetter<E1, ?> c1, IGetter<E2, ?> c2, IGetter<E3, ?> c3, IGetter<E4, ?> c4, IGetter<E5, ?> c5,
+            IGetter<E6, ?> c6, IGetter<E7, ?> c7, IGetter<E8, ?> c8, IGetter<E9, ?> c9, IGetter<E10, ?> c10,
+            IGetter<E11, ?> c11) {
+        return new SelectN(fork(), List.of(c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11));
+    }
+
+    public <E1, E2, E3, E4, E5, E6, E7, E8, E9, E10, E11, E12> SelectN select(
+            IGetter<E1, ?> c1, IGetter<E2, ?> c2, IGetter<E3, ?> c3, IGetter<E4, ?> c4, IGetter<E5, ?> c5,
+            IGetter<E6, ?> c6, IGetter<E7, ?> c7, IGetter<E8, ?> c8, IGetter<E9, ?> c9, IGetter<E10, ?> c10,
+            IGetter<E11, ?> c11, IGetter<E12, ?> c12) {
+        return new SelectN(fork(), List.of(c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12));
     }
 
     @SafeVarargs
@@ -281,100 +377,69 @@ public final class Query<T> implements QueryScope {
         for (IGetter<E, ?> col : columns) {
             list.add(Objects.requireNonNull(col, "select column must not be null"));
         }
-        return new SelectN(this, list);
+        return new SelectN(fork(), list);
     }
 
     // ===== 3. 终结方法（未写 select 时直接可用） =====
 
     /** 查询主表实体列表（联表时只查主表列）。 */
     public List<T> list() {
-        RenderContext ctx = renderContext();
-        return executeList(Projections.entity(rootType, ctx), ctx);
+        return executor.executeList(spec, Projections.entity(rootType(), renderContext()));
     }
 
     /** 查询并按目标类型字段名自动推列映射。 */
     public <V> List<V> list(Class<V> type) {
-        RenderContext ctx = renderContext();
-        return executeList(Projections.auto(type, ctx), ctx);
+        return executor.executeList(spec, Projections.auto(type, renderContext()));
     }
 
     /** 严格单行查询：0 行返回 empty，多于 1 行抛 {@link IllegalStateException}。 */
     public Optional<T> one() {
-        RenderContext ctx = renderContext();
-        return executeOne(Projections.entity(rootType, ctx), ctx);
+        return executor.executeOne(spec, Projections.entity(rootType(), renderContext()));
     }
 
     public <V> Optional<V> one(Class<V> type) {
-        RenderContext ctx = renderContext();
-        return executeOne(Projections.auto(type, ctx), ctx);
+        return executor.executeOne(spec, Projections.auto(type, renderContext()));
     }
 
     /** 取首行（自动应用 LIMIT 1）。 */
     public Optional<T> first() {
-        RenderContext ctx = renderContext();
-        return executeFirst(Projections.entity(rootType, ctx), ctx);
+        return executor.executeFirst(spec, Projections.entity(rootType(), renderContext()));
     }
 
     public <V> Optional<V> first(Class<V> type) {
-        RenderContext ctx = renderContext();
-        return executeFirst(Projections.auto(type, ctx), ctx);
+        return executor.executeFirst(spec, Projections.auto(type, renderContext()));
     }
 
     /** 流式读取（调用方必须使用 try-with-resources 关闭返回的 Stream）。 */
     public Stream<T> stream() {
-        RenderContext ctx = renderContext();
-        return executeStream(Projections.entity(rootType, ctx), ctx);
+        return executor.executeStream(spec, Projections.entity(rootType(), renderContext()));
     }
 
     public <V> Stream<V> stream(Class<V> type) {
-        RenderContext ctx = renderContext();
-        return executeStream(Projections.auto(type, ctx), ctx);
+        return executor.executeStream(spec, Projections.auto(type, renderContext()));
     }
 
     /** 分页查询（自动执行 COUNT + 方言分页）。 */
     public PageResult<T> page(PageRequest page) {
-        RenderContext ctx = renderContext();
-        return executePage(page, Projections.entity(rootType, ctx), ctx);
+        return executor.executePage(spec, page, Projections.entity(rootType(), renderContext()));
     }
 
-    public <V> PageResult<V> page(PageRequest page, Class<V> type) {
-        RenderContext ctx = renderContext();
-        return executePage(page, Projections.auto(type, ctx), ctx);
+    public <V> PageResult<V> page(Class<V> type, PageRequest page) {
+        return executor.executePage(spec, page, Projections.auto(type, renderContext()));
     }
 
     // ===== 4. 聚合终结方法 =====
 
     public long count() {
         RenderContext ctx = renderContext();
-        List<String> cols = distinct ? Projections.entity(rootType, ctx).columns() : List.of("1");
-        return count(cols, ctx);
-    }
-
-    private long count(List<String> projectionColumns, RenderContext ctx) {
-        if (limit != null && limit <= 0L) {
-            return 0L;
-        }
-        SqlStatement countStmt = renderCountStatement(projectionColumns, ctx);
-        Long total = requireTemplate().query(countStmt, new SingleColumnRowMapper<>(Long.class));
-        long rawTotal = total == null ? 0L : total;
-        if (offset != null && offset > 0L) {
-            rawTotal = Math.max(0L, rawTotal - offset);
-        }
-        if (limit != null) {
-            rawTotal = Math.min(rawTotal, limit);
-        }
-        return rawTotal;
+        List<SqlNode> nodes = spec.distinct()
+                ? Projections.entity(rootType(), ctx).nodes()
+                : List.of(SqlNodes.raw("1"));
+        return executor.count(spec, nodes, false, ctx);
     }
 
     public boolean exists() {
-        if (limit != null && limit <= 0L) {
-            return false;
-        }
-        RenderContext ctx = renderContext();
-        SqlStatement stmt = renderStatement(List.of("1"), false, ctx);
-        long start = offset == null ? 0L : offset;
-        List<Integer> rows = requireTemplate().queryLimit(stmt, new SingleColumnRowMapper<>(Integer.class), start, 1L);
-        return !rows.isEmpty();
+        return executor.exists(spec);
     }
 
     public <E, R> Optional<R> max(IGetter<E, R> column) {
@@ -405,285 +470,39 @@ public final class Query<T> implements QueryScope {
         return select(Exprs.avg(column)).one();
     }
 
-    /**
-     * 渲染为不可变 {@link SqlStatement}（默认查询主表全部列）。
-     */
+    /** 渲染为不可变 {@link SqlStatement}（默认查询主表全部列）。 */
     public SqlStatement toSqlStatement() {
-        RenderContext ctx = renderContext();
-        return renderStatement(Projections.entity(rootType, ctx).columns(), true, ctx);
+        return renderStatement(Projections.entity(rootType(), renderContext()));
     }
 
     public SqlStatement toSqlStatement(Class<?> type) {
-        RenderContext ctx = renderContext();
-        return renderStatement(Projections.auto(type, ctx).columns(), true, ctx);
+        return renderStatement(Projections.auto(type, renderContext()));
     }
 
-    // ===== 内部执行与渲染 =====
+    // ===== 内部桥接：Select1..SelectN 使用 =====
+
+    SqlStatement renderStatement(Projection<?> projection) {
+        RenderContext ctx = projection.context() != null ? projection.context() : renderContext();
+        return renderer.renderStatementNodes(spec, projection.nodes(), true, ctx);
+    }
 
     <V> List<V> executeList(Projection<V> projection) {
-        return executeList(projection, renderContext());
-    }
-
-    private <V> List<V> executeList(Projection<V> projection, RenderContext ctx) {
-        SqlStatement stmt = renderStatement(projection.columns(), true, ctx);
-        if (limit != null) {
-            long start = offset == null ? 0L : offset;
-            return requireTemplate().queryLimit(stmt, projection.mapper(), start, limit);
-        }
-        return requireTemplate().queryList(stmt, projection.mapper());
+        return executor.executeList(spec, projection);
     }
 
     <V> Optional<V> executeOne(Projection<V> projection) {
-        return executeOne(projection, renderContext());
-    }
-
-    private <V> Optional<V> executeOne(Projection<V> projection, RenderContext ctx) {
-        SqlStatement stmt = renderStatement(projection.columns(), true, ctx);
-        if (limit != null) {
-            long start = offset == null ? 0L : offset;
-            List<V> rows = requireTemplate().queryLimit(stmt, projection.mapper(), start, Math.min(limit, 2));
-            if (rows.isEmpty()) {
-                return Optional.empty();
-            }
-            if (limit > 1 && rows.size() > 1) {
-                throw new IllegalStateException("Expected at most 1 row, but query returned multiple rows: " + stmt.sql());
-            }
-            return Optional.ofNullable(rows.get(0));
-        }
-        return Optional.ofNullable(requireTemplate().queryOne(stmt, projection.mapper()));
+        return executor.executeOne(spec, projection);
     }
 
     <V> Optional<V> executeFirst(Projection<V> projection) {
-        return executeFirst(projection, renderContext());
-    }
-
-    private <V> Optional<V> executeFirst(Projection<V> projection, RenderContext ctx) {
-        SqlStatement stmt = renderStatement(projection.columns(), true, ctx);
-        long start = offset == null ? 0L : offset;
-        List<V> rows = requireTemplate().queryLimit(stmt, projection.mapper(), start, 1L);
-        return rows.isEmpty() ? Optional.empty() : Optional.ofNullable(rows.get(0));
+        return executor.executeFirst(spec, projection);
     }
 
     <V> Stream<V> executeStream(Projection<V> projection) {
-        return executeStream(projection, renderContext());
-    }
-
-    private <V> Stream<V> executeStream(Projection<V> projection, RenderContext ctx) {
-        SqlStatement stmt = renderStatement(projection.columns(), true, ctx);
-        if (limit != null) {
-            long start = offset == null ? 0L : offset;
-            return requireTemplate().queryStream(stmt, projection.mapper(), start, limit);
-        }
-        return requireTemplate().queryStream(stmt, projection.mapper());
+        return executor.executeStream(spec, projection);
     }
 
     <V> PageResult<V> executePage(PageRequest page, Projection<V> projection) {
-        return executePage(page, projection, renderContext());
-    }
-
-    private <V> PageResult<V> executePage(PageRequest page, Projection<V> projection, RenderContext ctx) {
-        Objects.requireNonNull(page, "page must not be null");
-        SqlStatement dataStmt = renderStatement(projection.columns(), true, ctx);
-        if (this.limit != null || this.offset != null) {
-            long total = count(projection.columns(), ctx);
-            long pageRelOffset = page.getOffsetAsLong();
-            if (total <= 0L || pageRelOffset >= total) {
-                return PageResult.<V>of(List.of())
-                        .pagination(page.getPage(), page.getSize())
-                        .total(total)
-                        .build();
-            }
-            long baseOffset = this.offset == null ? 0L : this.offset;
-            long effectiveOffset = Math.addExact(baseOffset, pageRelOffset);
-            long effectiveLimit = this.limit == null
-                    ? page.getSize()
-                    : Math.min((long) page.getSize(), Math.max(0L, this.limit - pageRelOffset));
-            List<V> rows = effectiveLimit <= 0L
-                    ? List.of()
-                    : requireTemplate().queryLimit(dataStmt, projection.mapper(), effectiveOffset, effectiveLimit);
-            return PageResult.of(rows)
-                    .pagination(page.getPage(), page.getSize())
-                    .total(total)
-                    .build();
-        }
-        SqlStatement countStmt = renderCountStatement(projection.columns(), ctx);
-        PageSlice<V> slice = requireTemplate().queryPage(
-                dataStmt, countStmt, projection.mapper(), page.getOffsetAsLong(), page.getSize());
-        return PageResult.of(slice.rows())
-                .pagination(page.getPage(), page.getSize())
-                .total(slice.total())
-                .build();
-    }
-
-    SqlStatement renderStatement(List<String> selectColumns) {
-        return renderStatement(selectColumns, true, renderContext());
-    }
-
-    private SqlStatement renderStatement(List<String> selectColumns, boolean includeOrderBy, RenderContext ctx) {
-        SqlParameterList params = new SqlParameterList();
-        String fromClause = ctx.renderFromClause(params);
-
-        // 参数收集仍在本层完成；SqlRenderer 只接收已渲染片段，不感知参数
-        String whereSql = renderCriterion(whereCriterion, ctx, params);
-        String groupBySql = groupByColumns.isEmpty() ? null : joinGroupBy(ctx);
-        String havingSql = renderCriterion(havingCriterion, ctx, params);
-        String orderBySql = (!includeOrderBy || orderSpecs.isEmpty()) ? null : joinOrderBy(ctx);
-
-        String sql = SqlRenderer.renderSelect(distinct, String.join(", ", selectColumns), fromClause,
-                whereSql, groupBySql, havingSql, orderBySql);
-
-        StatementMetadata meta = StatementMetadata.builder(Operation.SELECT)
-                .tables(ctx.extractTables())
-                .entityType(rootType)
-                .build();
-        return SqlStatement.of(sql, params.toList(), meta);
-    }
-
-    private static @Nullable String renderCriterion(WhereCriterion criterion, RenderContext ctx,
-                                                    SqlParameterList params) {
-        if (criterion.isEmpty()) {
-            return null;
-        }
-        StringBuilder fragment = new StringBuilder();
-        criterion.render(ctx, fragment, params, ParameterSource.WHERE);
-        return fragment.isEmpty() ? null : fragment.toString();
-    }
-
-    private String joinGroupBy(RenderContext ctx) {
-        List<String> groups = new ArrayList<>(groupByColumns.size());
-        for (ColumnMetaProvider col : groupByColumns) {
-            groups.add(col.resolveSql(ctx));
-        }
-        return String.join(", ", groups);
-    }
-
-    private String joinOrderBy(RenderContext ctx) {
-        List<String> orders = new ArrayList<>(orderSpecs.size());
-        for (OrderSpec spec : orderSpecs) {
-            orders.add(spec.column().resolveSql(ctx) + " " + spec.direction().name());
-        }
-        return String.join(", ", orders);
-    }
-
-    private SqlStatement renderCountStatement(List<String> selectColumns, RenderContext ctx) {
-        boolean hasAggregate = containsAggregateExpression(selectColumns);
-        if (!distinct && !hasAggregate && groupByColumns.isEmpty() && havingCriterion.isEmpty()) {
-            return renderStatement(List.of("COUNT(*)"), false, ctx);
-        }
-        SqlStatement inner = renderStatement((distinct || hasAggregate) ? selectColumns : List.of("1"), false, ctx);
-        return inner.withSql(SqlRenderer.renderCountSubquery(inner.sql()));
-    }
-
-    private static boolean containsAggregateExpression(List<String> selectColumns) {
-        if (selectColumns == null || selectColumns.isEmpty()) {
-            return false;
-        }
-        for (String col : selectColumns) {
-            if (col != null && hasAggregateCall(col)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private static boolean hasAggregateCall(String sql) {
-        boolean single = false;
-        boolean doubleQuote = false;
-        boolean bracket = false;
-        boolean backtick = false;
-        int len = sql.length();
-        for (int i = 0; i < len; i++) {
-            char c = sql.charAt(i);
-            char next = i + 1 < len ? sql.charAt(i + 1) : '\0';
-            if (single || doubleQuote || bracket || backtick) {
-                if ((single && c == '\'') || (doubleQuote && c == '"') || (backtick && c == '`')) {
-                    if (next == c) {
-                        i++;
-                    } else {
-                        single = false;
-                        doubleQuote = false;
-                        backtick = false;
-                    }
-                } else if (bracket && c == ']') {
-                    if (next == ']') {
-                        i++;
-                    } else {
-                        bracket = false;
-                    }
-                }
-                continue;
-            }
-            if (c == '-' && next == '-') {
-                i += 2;
-                while (i < len && sql.charAt(i) != '\n' && sql.charAt(i) != '\r') {
-                    i++;
-                }
-                continue;
-            }
-            if (c == '/' && next == '*') {
-                i += 2;
-                while (i + 1 < len && !(sql.charAt(i) == '*' && sql.charAt(i + 1) == '/')) {
-                    i++;
-                }
-                i++;
-                continue;
-            }
-            if (c == '\'') {
-                single = true;
-                continue;
-            }
-            if (c == '"') {
-                doubleQuote = true;
-                continue;
-            }
-            if (c == '[') {
-                bracket = true;
-                continue;
-            }
-            if (c == '`') {
-                backtick = true;
-                continue;
-            }
-            if (Character.isLetter(c) || c == '_') {
-                int start = i;
-                while (i + 1 < len && (Character.isLetterOrDigit(sql.charAt(i + 1)) || sql.charAt(i + 1) == '_')) {
-                    i++;
-                }
-                if (start > 0 && sql.charAt(start - 1) == '.') {
-                    continue;
-                }
-                String ident = sql.substring(start, i + 1);
-                if (isAggregateFunctionName(ident)) {
-                    int k = i + 1;
-                    while (k < len && Character.isWhitespace(sql.charAt(k))) {
-                        k++;
-                    }
-                    if (k < len && sql.charAt(k) == '(') {
-                        return true;
-                    }
-                }
-            }
-        }
-        return false;
-    }
-
-    private static boolean isAggregateFunctionName(String ident) {
-        return switch (ident.toUpperCase(java.util.Locale.ROOT)) {
-            case "COUNT", "SUM", "AVG", "MIN", "MAX",
-                 "STDDEV", "STDDEV_POP", "STDDEV_SAMP",
-                 "VARIANCE", "VAR_POP", "VAR_SAMP",
-                 "GROUP_CONCAT", "STRING_AGG", "LISTAGG", "ARRAY_AGG",
-                 "BOOL_AND", "BOOL_OR", "EVERY",
-                 "BIT_AND", "BIT_OR", "BIT_XOR" -> true;
-            default -> false;
-        };
-    }
-
-    private JoyaTemplate requireTemplate() {
-        if (template == null) {
-            throw new IllegalStateException(
-                    "Query was created offline via Query.of(...) and is not bound to a JoyaClient or Tx");
-        }
-        return template;
+        return executor.executePage(spec, page, projection);
     }
 }

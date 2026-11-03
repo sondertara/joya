@@ -2,7 +2,6 @@ package com.sondertara.joya.core.metadata;
 
 import java.util.Collections;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
 
 /**
@@ -33,14 +32,7 @@ public final class EntitySnapshot {
     }
 
     private static Map<String, Object> readValues(EntityMetadataContext metadata, Object entity) {
-        List<String> columns = metadata.columnNames();
-        Map<String, Object> values = new LinkedHashMap<>(columns.size());
-        for (String column : columns) {
-            if (metadata.fieldByColumn(column) != null) {
-                values.put(column, metadata.readFieldValue(entity, column));
-            }
-        }
-        return values;
+        return metadata.readFieldValues(entity);
     }
 
     /** 获取快照值（不可变视图）。 */

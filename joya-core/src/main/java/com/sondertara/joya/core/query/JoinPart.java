@@ -1,20 +1,17 @@
 package com.sondertara.joya.core.query;
 
-import com.sondertara.joya.core.query.ColumnMetaProvider;
-import com.sondertara.joya.core.query.criterion.JoinCriterion;
-import com.sondertara.joya.core.query.criterion.WhereCriterion;
-import com.sondertara.joya.utils.Assert;
 import lombok.Getter;
 import org.jspecify.annotations.Nullable;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 
 /**
  * 关联查询（JOIN）关系描述单元。
  *
- * <p>持有左右关联列的 {@link ColumnMetaProvider}（惰性列元数据）以及可选的 {@code ON} 附加条件，
+ * <p>持有左右关联列的 {@link ColumnMetaProvider}（惰性列元数据）、可选的显式表别名 {@code alias} 以及可选的 {@code ON} 附加条件，
  * 在构造期不触发 {@code t0 / t1} 表别名分配，直到查询渲染期由 {@link com.sondertara.joya.core.query.RenderContext} 统一解析。
  *
  * @author huangxiaohu
@@ -24,25 +21,37 @@ public class JoinPart {
 
     private final ColumnMetaProvider leftColumn;
     private final ColumnMetaProvider rightColumn;
-    private final JoinCriterion.JoinType joinType;
+    private final JoinType joinType;
     @Nullable
-    private final WhereCriterion onCriterion;
+    private final String alias;
+    @Nullable
+    private final OnPredicate onCriterion;
 
-    public JoinPart(ColumnMetaProvider leftColumn, ColumnMetaProvider rightColumn, JoinCriterion.JoinType joinType) {
-        this(leftColumn, rightColumn, joinType, null);
+    public JoinPart(ColumnMetaProvider leftColumn, ColumnMetaProvider rightColumn, JoinType joinType) {
+        this(leftColumn, rightColumn, joinType, null, null);
     }
 
     public JoinPart(
             ColumnMetaProvider leftColumn,
             ColumnMetaProvider rightColumn,
-            JoinCriterion.JoinType joinType,
-            @Nullable WhereCriterion onCriterion) {
-        Assert.notNull(leftColumn);
-        Assert.notNull(rightColumn);
-        Assert.notNull(joinType);
+            JoinType joinType,
+            @Nullable OnPredicate onCriterion) {
+        this(leftColumn, rightColumn, joinType, null, onCriterion);
+    }
+
+    public JoinPart(
+            ColumnMetaProvider leftColumn,
+            ColumnMetaProvider rightColumn,
+            JoinType joinType,
+            @Nullable String alias,
+            @Nullable OnPredicate onCriterion) {
+        Objects.requireNonNull(leftColumn, "leftColumn must not be null");
+        Objects.requireNonNull(rightColumn, "rightColumn must not be null");
+        Objects.requireNonNull(joinType, "joinType must not be null");
         this.leftColumn = leftColumn;
         this.rightColumn = rightColumn;
         this.joinType = joinType;
+        this.alias = alias == null ? null : alias.trim();
         this.onCriterion = onCriterion;
     }
 
@@ -58,24 +67,21 @@ public class JoinPart {
         if (!part.getJoinType().equals(this.joinType)) {
             return false;
         }
-        List<String> current = new ArrayList<>(2);
-        current.add(leftColumn.canonicalKey());
-        current.add(rightColumn.canonicalKey());
-        current.sort(String::compareTo);
-
-        List<String> other = new ArrayList<>(2);
-        other.add(part.getLeftColumn().canonicalKey());
-        other.add(part.getRightColumn().canonicalKey());
-        other.sort(String::compareTo);
-        return Objects.equals(current.get(0), other.get(0)) && Objects.equals(current.get(1), other.get(1));
+        String thisAlias = this.alias == null ? null : this.alias.toLowerCase(Locale.ROOT);
+        String otherAlias = part.alias == null ? null : part.alias.toLowerCase(Locale.ROOT);
+        if (!Objects.equals(thisAlias, otherAlias)) {
+            return false;
+        }
+        if (!Objects.equals(this.onCriterion, part.onCriterion)) {
+            return false;
+        }
+        return Objects.equals(leftColumn.canonicalKey(), part.leftColumn.canonicalKey())
+                && Objects.equals(rightColumn.canonicalKey(), part.rightColumn.canonicalKey());
     }
 
     @Override
     public int hashCode() {
-        List<String> list = new ArrayList<>(2);
-        list.add(leftColumn.canonicalKey());
-        list.add(rightColumn.canonicalKey());
-        list.sort(String::compareTo);
-        return Objects.hash(list.get(0), list.get(1), joinType);
+        String normalizedAlias = this.alias == null ? null : this.alias.toLowerCase(Locale.ROOT);
+        return Objects.hash(leftColumn.canonicalKey(), rightColumn.canonicalKey(), joinType, normalizedAlias, onCriterion);
     }
 }

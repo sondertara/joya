@@ -1,49 +1,63 @@
 package com.sondertara.joya.core.tx;
 
+import com.sondertara.joya.core.DataOpsSupport;
 import com.sondertara.joya.core.EntityOps;
 import com.sondertara.joya.core.JoyaSettings;
 import com.sondertara.joya.core.SqlOps;
-import com.sondertara.joya.core.kernel.JoyaTemplate;
+import com.sondertara.joya.core.kernel.ExecutionKernel;
+import com.sondertara.joya.core.kernel.connection.ConnectionCallback;
 import com.sondertara.joya.core.kernel.connection.ConnectionProvider;
 import com.sondertara.joya.core.kernel.executor.ResultSetSpliterator;
+import com.sondertara.joya.core.kernel.statement.DbType;
 import com.sondertara.joya.core.kernel.statement.SqlStatement;
-import com.sondertara.joya.core.proxy.JdkMapperProxy;
+import com.sondertara.joya.core.listener.EntityLifecycle;
 import com.sondertara.joya.core.query.dsl.Query;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.Reader;
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.List;
 import java.util.Objects;
 import java.util.OptionalInt;
+import java.util.Set;
 import java.util.function.Consumer;
 
 /**
  * {@link Tx} 的统一实现：绑定一个底层 {@link TxSession}（纯 JDBC {@link TxConnection} 或 Spring 事务会话）
- * 与一份事务态 {@link JoyaTemplate}。
+ * 与一份事务态 {@link ExecutionKernel}。
  */
 public final class TxImpl implements Tx {
 
     private static final Logger log = LoggerFactory.getLogger(TxImpl.class);
 
     private final TxSession session;
-    private final JoyaTemplate template;
+    private final ExecutionKernel template;
     private final Thread ownerThread;
+    private final DataOpsSupport dataOps;
     private final List<Runnable> afterCommit = new ArrayList<>();
     private final List<Consumer<TxOutcome>> afterCompletion = new ArrayList<>();
     private final List<Runnable> streamCloseActions = new ArrayList<>();
-    private final java.util.Deque<List<Runnable>> savepointAfterCommitStack = new java.util.ArrayDeque<>();
-    private java.util.Map<Class<?>, Object> mapperCache;
+    private final Deque<List<Runnable>> savepointAfterCommitStack = new ArrayDeque<>();
     private TxOutcome outcome;
     private int openTransactionalStreams;
+    private boolean deferCompletionCallbacks;
+    private boolean completionCallbacksFired;
 
-    public TxImpl(JoyaTemplate rootTemplate, TxSession session) {
+    public TxImpl(ExecutionKernel rootTemplate, TxSession session) {
+        this(rootTemplate, session, EntityLifecycle.EMPTY);
+    }
+
+    public TxImpl(ExecutionKernel rootTemplate, TxSession session, EntityLifecycle entityLifecycle) {
         this.session = Objects.requireNonNull(session, "session must not be null");
         this.ownerThread = Thread.currentThread();
         this.template = Objects.requireNonNull(rootTemplate, "rootTemplate must not be null")
                 .bind(new TransactionalConnectionProvider(session));
+        this.dataOps = DataOpsSupport.singleThread(this, template, entityLifecycle, this::checkActive);
     }
 
     public boolean isCompleted() {
@@ -66,45 +80,47 @@ public final class TxImpl implements Tx {
 
     @Override
     public <T> Query<T> from(Class<T> entityType) {
-        return new Query<>(template, entityType);
+        return dataOps.from(entityType);
     }
 
     @Override
     public <T> EntityOps<T> of(Class<T> entityType) {
-        return new EntityOps<>(template, entityType);
+        return dataOps.of(entityType);
     }
 
     @Override
     public SqlOps sql(String sql, Object... args) {
-        return new SqlOps(template, sql, args);
+        return dataOps.sql(sql, args);
     }
 
     @Override
     public SqlOps sql(SqlStatement statement) {
-        return new SqlOps(template, statement);
+        return dataOps.sql(statement);
     }
 
     @Override
-    @SuppressWarnings({"unchecked", "rawtypes"})
     public <M> M mapper(Class<M> mapperType) {
-        Objects.requireNonNull(mapperType, "mapperType must not be null");
-        if (!mapperType.isInterface()) {
-            throw new UnsupportedOperationException("mapperType " + mapperType.getName() + " is not interface.");
-        }
-        if (mapperCache == null) {
-            mapperCache = new java.util.HashMap<>(4);
-        }
-        return (M) mapperCache.computeIfAbsent(mapperType, cls -> new JdkMapperProxy(this).create((Class) cls));
+        return dataOps.mapper(mapperType);
+    }
+
+    @Override
+    public <T> T withConnection(ConnectionCallback<T> action) {
+        return dataOps.withConnection(action);
+    }
+
+    @Override
+    public void script(Reader reader) {
+        dataOps.script(reader);
     }
 
     @Override
     public JoyaSettings settings() {
-        return JoyaSettings.of(template.executionOptions(), template.namingPolicy());
+        return dataOps.settings();
     }
 
     @Override
-    public com.sondertara.joya.core.kernel.dialect.DbType dbType() {
-        return template.dialect().dbType();
+    public DbType dbType() {
+        return dataOps.dbType();
     }
 
     // ===== 保存点（Savepoint） =====
@@ -165,7 +181,7 @@ public final class TxImpl implements Tx {
 
     @Override
     public void afterCommit(Runnable callback) {
-        checkOwner();
+        checkActive();
         Objects.requireNonNull(callback, "callback must not be null");
         session.validateAfterCommitRegistration();
         if (!savepointAfterCommitStack.isEmpty()) {
@@ -179,7 +195,7 @@ public final class TxImpl implements Tx {
 
     @Override
     public void afterCompletion(Consumer<TxOutcome> callback) {
-        checkOwner();
+        checkActive();
         Objects.requireNonNull(callback, "callback must not be null");
         if (!session.registerExternalAfterCompletion(outcome -> runQuietly(() -> callback.accept(outcome), "afterCompletion"))) {
             afterCompletion.add(callback);
@@ -192,17 +208,16 @@ public final class TxImpl implements Tx {
     public void commit() {
         checkOwner();
         if (!savepointAfterCommitStack.isEmpty()) {
-            throw new IllegalTxStateException(TxState.ACTIVE, TxState.COMMITTED, java.util.Set.of(TxState.ACTIVE),
+            throw new IllegalTxStateException(TxState.ACTIVE, TxState.COMMITTED, Set.of(TxState.ACTIVE),
                     new IllegalStateException("Cannot call commit() directly inside a savepoint scope"));
         }
         if (isCompleted()) {
-            throw new IllegalTxStateException(TxState.COMMITTED, TxState.COMMITTED, TxState.COMMITTED.allowedTransitions(),
-                    new IllegalStateException("transaction already completed"));
+            throw completedFailure(TxState.COMMITTED);
         }
         closeStreams();
         try {
             session.exitCommit();
-        } catch (UnexpectedRollbackException e) {
+        } catch (UnexpectedRollbackException | TxTimeoutException e) {
             complete(TxOutcome.ROLLED_BACK);
             throw e;
         } catch (SQLException e) {
@@ -214,6 +229,7 @@ public final class TxImpl implements Tx {
             complete(TxOutcome.UNKNOWN);
             throw e;
         }
+        closeSessionQuietly();
         complete(TxOutcome.COMMITTED);
     }
 
@@ -221,11 +237,11 @@ public final class TxImpl implements Tx {
     public void rollback() {
         checkOwner();
         if (!savepointAfterCommitStack.isEmpty()) {
-            throw new IllegalTxStateException(TxState.ACTIVE, TxState.ROLLED_BACK, java.util.Set.of(TxState.ACTIVE),
+            throw new IllegalTxStateException(TxState.ACTIVE, TxState.ROLLED_BACK, Set.of(TxState.ACTIVE),
                     new IllegalStateException("Cannot call rollback() directly inside a savepoint scope"));
         }
         if (isCompleted()) {
-            return;
+            throw completedFailure(TxState.ROLLED_BACK);
         }
         closeStreams();
         try {
@@ -246,12 +262,13 @@ public final class TxImpl implements Tx {
 
     @Override
     public void setRollbackOnly() {
-        checkOwner();
+        checkActive();
         session.markRollbackOnly();
     }
 
     @Override
     public boolean isRollbackOnly() {
+        checkActive();
         return session.isRollbackOnly();
     }
 
@@ -279,18 +296,47 @@ public final class TxImpl implements Tx {
 
     // ===== 内部 =====
 
+    void deferCompletionCallbacks(boolean defer) {
+        this.deferCompletionCallbacks = defer;
+    }
+
+    void fireCompletionCallbacks() {
+        if (completionCallbacksFired || this.outcome == null) {
+            return;
+        }
+        completionCallbacksFired = true;
+        TxOutcome finalOutcome = this.outcome;
+        if (finalOutcome == TxOutcome.COMMITTED) {
+            for (Runnable callback : List.copyOf(afterCommit)) {
+                runQuietly(callback, "afterCommit");
+            }
+        }
+        for (Consumer<TxOutcome> callback : List.copyOf(afterCompletion)) {
+            runQuietly(() -> callback.accept(finalOutcome), "afterCompletion");
+        }
+    }
+
+    private void closeSessionQuietly() {
+        try {
+            session.close();
+        } catch (Throwable t) {
+            log.warn("Failed to close transaction session after commit", t);
+        }
+    }
+
+    private IllegalTxStateException completedFailure(TxState target) {
+        TxState current = outcome == TxOutcome.COMMITTED ? TxState.COMMITTED : TxState.ROLLED_BACK;
+        return new IllegalTxStateException(current, target, current.allowedTransitions(),
+                new IllegalStateException("transaction already completed"));
+    }
+
     private void complete(TxOutcome outcome) {
         if (this.outcome != null) {
             return;
         }
         this.outcome = outcome;
-        if (outcome == TxOutcome.COMMITTED) {
-            for (Runnable callback : afterCommit) {
-                runQuietly(callback, "afterCommit");
-            }
-        }
-        for (Consumer<TxOutcome> callback : afterCompletion) {
-            runQuietly(() -> callback.accept(outcome), "afterCompletion");
+        if (!deferCompletionCallbacks) {
+            fireCompletionCallbacks();
         }
     }
 
@@ -300,7 +346,9 @@ public final class TxImpl implements Tx {
     }
 
     private void closeStreams() {
-        for (Runnable closeAction : streamCloseActions) {
+        List<Runnable> snapshot = List.copyOf(streamCloseActions);
+        streamCloseActions.clear();
+        for (Runnable closeAction : snapshot) {
             try {
                 closeAction.run();
             } catch (Throwable t) {
@@ -310,10 +358,13 @@ public final class TxImpl implements Tx {
     }
 
     private void checkOwner() {
-        if (Thread.currentThread() != ownerThread) {
-            throw new TxException("Transaction is owned by thread [" + ownerThread.getName()
-                    + "] but was used by [" + Thread.currentThread().getName()
-                    + "]. A transaction must not cross threads (invariant I9).");
+        TxSessionSupport.checkOwner(ownerThread);
+    }
+
+    private void checkActive() {
+        checkOwner();
+        if (isCompleted() || completionCallbacksFired || session.isClosed() || !session.isActive()) {
+            throw completedFailure(TxState.ACTIVE);
         }
     }
 
@@ -359,6 +410,12 @@ public final class TxImpl implements Tx {
             if (openTransactionalStreams > 0) {
                 openTransactionalStreams--;
             }
+        }
+
+        @Override
+        public void onStreamClosed(Runnable closeAction) {
+            onStreamClosed();
+            streamCloseActions.remove(closeAction);
         }
     }
 

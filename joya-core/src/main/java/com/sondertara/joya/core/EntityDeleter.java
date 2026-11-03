@@ -1,13 +1,12 @@
 package com.sondertara.joya.core;
 
-import com.sondertara.joya.core.jdbc.support.listener.EntityListener;
-import com.sondertara.joya.core.kernel.JoyaTemplate;
-import com.sondertara.joya.core.kernel.statement.Operation;
+import com.sondertara.joya.core.listener.EntityLifecycle;
+import com.sondertara.joya.core.listener.EntityListener;
+import com.sondertara.joya.core.kernel.ExecutionKernel;
 import com.sondertara.joya.core.kernel.statement.SqlStatement;
-import com.sondertara.joya.core.kernel.statement.StatementMetadata;
-import com.sondertara.joya.core.kernel.statement.TableRef;
 import com.sondertara.joya.core.metadata.EntityMetadataContext;
 import com.sondertara.joya.core.result.MutationResult;
+import com.sondertara.joya.core.statement.factory.DeleteStatementFactory;
 
 import java.io.Serializable;
 import java.util.ArrayList;
@@ -18,21 +17,28 @@ import java.util.Objects;
 /**
  * 实体删除器 —— 只负责删除与清空，不参与查询与批量写规划。
  *
- * <p>从 {@code BatchPlanner} 与 {@code EntityOps} 中拆出：删除是独立的写语义，
+ * <p>从 {@code EntityOps} 中拆出：删除是独立的写语义，
  * 与"批量插入/更新"的分片、归组策略无关。
  */
 final class EntityDeleter<T> {
 
-    private final JoyaTemplate template;
+    private final ExecutionKernel template;
     private final Class<T> entityType;
     private final EntityMetadataContext meta;
     private final String primaryKey;
+    private final EntityLifecycle lifecycle;
 
-    EntityDeleter(JoyaTemplate template, Class<T> entityType, EntityMetadataContext meta, String primaryKey) {
+    EntityDeleter(ExecutionKernel template, Class<T> entityType, EntityMetadataContext meta, String primaryKey) {
+        this(template, entityType, meta, primaryKey, EntityLifecycle.EMPTY);
+    }
+
+    EntityDeleter(ExecutionKernel template, Class<T> entityType, EntityMetadataContext meta, String primaryKey,
+                  EntityLifecycle lifecycle) {
         this.template = Objects.requireNonNull(template, "template must not be null");
         this.entityType = Objects.requireNonNull(entityType, "entityType must not be null");
         this.meta = Objects.requireNonNull(meta, "meta must not be null");
         this.primaryKey = primaryKey;
+        this.lifecycle = lifecycle == null ? EntityLifecycle.EMPTY : lifecycle;
     }
 
     MutationResult deleteById(Serializable id) {
@@ -68,13 +74,9 @@ final class EntityDeleter<T> {
             throw new IllegalArgumentException(
                     "Entity primary key must not be null for delete: " + entityType.getName());
         }
-        if (entity instanceof EntityListener listener) {
-            listener.preRemove(entity);
-        }
+        lifecycle.preRemove(entity);
         MutationResult result = new EntityDelete<T>(template, meta).where(w -> w.eq(primaryKey, pkValue)).execute();
-        if (entity instanceof EntityListener listener) {
-            listener.postRemove(entity);
-        }
+        lifecycle.postRemove(entity);
         return result;
     }
 
@@ -96,15 +98,11 @@ final class EntityDeleter<T> {
             validEntities.add(entity);
         }
         for (T entity : validEntities) {
-            if (entity instanceof EntityListener listener) {
-                listener.preRemove(entity);
-            }
+            lifecycle.preRemove(entity);
         }
         MutationResult result = deleteByIds(ids);
         for (T entity : validEntities) {
-            if (entity instanceof EntityListener listener) {
-                listener.postRemove(entity);
-            }
+            lifecycle.postRemove(entity);
         }
         return result;
     }
@@ -116,14 +114,6 @@ final class EntityDeleter<T> {
     }
 
     void truncate() {
-        String tableName = meta.qualifiedTableName(template.namingPolicy());
-        StatementMetadata metadata = StatementMetadata.builder(Operation.DELETE)
-                .table(TableRef.ofQualified(tableName, ""))
-                .entityType(entityType)
-                .build();
-        template.update(SqlStatement.of(
-                com.sondertara.joya.core.kernel.statement.SqlRenderer.renderTruncate(tableName),
-                List.of(),
-                metadata));
+        template.update(DeleteStatementFactory.createTruncate(meta, template.namingPolicy()));
     }
 }

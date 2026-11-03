@@ -1,6 +1,6 @@
 package com.sondertara.joya.core.kernel.statement;
 
-import com.sondertara.joya.core.kernel.dialect.DbType;
+import org.jspecify.annotations.Nullable;
 
 import java.util.List;
 import java.util.Objects;
@@ -19,11 +19,13 @@ import java.util.Objects;
  * @param sql            JDBC 风格 SQL（{@code ?} 占位符）
  * @param parameters     有序参数列表，与 SQL 中 ? 一一对应
  * @param metadata       语句级元数据（操作类型、表引用、实体类型等）
+ * @param ast            框架生成语句的内部结构树；原生 SQL / 已文本改写语句为 {@code null}
  */
 public record SqlStatement(
         String sql,
         List<SqlParameter> parameters,
-        StatementMetadata metadata
+        StatementMetadata metadata,
+        @Nullable SqlNode ast
 ) {
 
     public SqlStatement {
@@ -32,9 +34,20 @@ public record SqlStatement(
         metadata = metadata == null ? StatementMetadata.empty() : metadata;
     }
 
+    /** 兼容既有调用方：无 AST 的语句。 */
+    public SqlStatement(String sql, List<SqlParameter> parameters, StatementMetadata metadata) {
+        this(sql, parameters, metadata, null);
+    }
+
     /** 从有序参数列表构建（推荐）。 */
     public static SqlStatement of(String sql, List<SqlParameter> parameters, StatementMetadata metadata) {
-        return new SqlStatement(sql, parameters, metadata);
+        return new SqlStatement(sql, parameters, metadata, null);
+    }
+
+    /** 从 AST 渲染结果构建。 */
+    public static SqlStatement of(String sql, List<SqlParameter> parameters,
+                                  StatementMetadata metadata, @Nullable SqlNode ast) {
+        return new SqlStatement(sql, parameters, metadata, ast);
     }
 
     /** 导出参数值列表。 */
@@ -44,24 +57,29 @@ public record SqlStatement(
 
     // ===== 改写方法（返回新实例） =====
 
-    /** 改写 SQL 文本，返回新实例。 */
+    /** 改写 SQL 文本，返回新实例。文本改写会使 AST 失效，因此显式丢弃。 */
     public SqlStatement withSql(String newSql) {
-        return new SqlStatement(newSql, parameters, metadata);
+        return new SqlStatement(newSql, parameters, metadata, null);
     }
 
     /** 改写参数列表，返回新实例。 */
     public SqlStatement withParameters(List<SqlParameter> newParameters) {
-        return new SqlStatement(sql, newParameters, metadata);
+        return new SqlStatement(sql, newParameters, metadata, ast);
     }
 
     /** 改写元数据，返回新实例。 */
     public SqlStatement withMetadata(StatementMetadata newMetadata) {
-        return new SqlStatement(sql, parameters, newMetadata);
+        return new SqlStatement(sql, parameters, newMetadata, ast);
     }
 
     /** 改写数据库类型，返回新实例。 */
     public SqlStatement withDbType(DbType newDbType) {
-        return new SqlStatement(sql, parameters, metadata.withDbType(newDbType));
+        return new SqlStatement(sql, parameters, metadata.withDbType(newDbType), ast);
+    }
+
+    /** 带 AST 的副本（AST 与 SQL 必须来自同一次渲染）。 */
+    public SqlStatement withAst(@Nullable SqlNode newAst) {
+        return new SqlStatement(sql, parameters, metadata, newAst);
     }
 
     /** 追加参数（如租户拦截器追加 {@code tenant_id = ?}），自动重排 index，返回新实例。 */
@@ -69,18 +87,20 @@ public record SqlStatement(
         List<SqlParameter> newParams = new java.util.ArrayList<>(parameters);
         int index = newParams.size() + 1;
         newParams.add(SqlParameter.of(index, name, value, source));
-        return new SqlStatement(sql, newParams, metadata);
+        return new SqlStatement(sql, newParams, metadata, ast);
     }
 
     /** 替换指定 index 处的参数，返回新实例。 */
     public SqlStatement replaceParameter(int index, SqlParameter parameter) {
+        Objects.requireNonNull(parameter, "parameter must not be null");
         List<SqlParameter> newParams = new java.util.ArrayList<>(parameters);
         int target = index - 1;
         if (target < 0 || target >= newParams.size()) {
             throw new IndexOutOfBoundsException("parameter index out of range: " + index);
         }
-        newParams.set(target, SqlParameter.of(index, parameter.name(), parameter.value(), parameter.source()));
-        return new SqlStatement(sql, newParams, metadata);
+        newParams.set(target, new SqlParameter(
+                index, parameter.name(), parameter.value(), parameter.source(), parameter.binder()));
+        return new SqlStatement(sql, newParams, metadata, ast);
     }
 
     // ===== 静态工厂：提升调用可读性，并强制表达操作类型 =====

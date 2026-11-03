@@ -15,6 +15,13 @@ import java.util.Map;
  * @param attrs    请求级属性，如 {@code tenantId}、{@code shardKey}
  */
 public final class RewriteContext {
+
+    /** 属性键：值为 {@link Boolean#TRUE} 时表示当前语句是批量模板探针（参数为空，整批只触发一次）。 */
+    public static final String ATTR_BATCH = "joya.batch";
+
+    /** 属性键：批量模式下的总行数（{@link Integer}）。 */
+    public static final String ATTR_BATCH_ROWS = "joya.batch.rows";
+
     private final SqlStatement original;
     private final Map<String, Object> attrs;
     private SqlStatement current;
@@ -45,5 +52,13 @@ public final class RewriteContext {
 
     public Map<String, Object> attrs() {
         return attrs;
+    }
+
+    /**
+     * 当前是否处于批量模式：语句是整批共用的 SQL 模板探针，参数为空，
+     * 拦截器只允许改写文本（hint / 注释），不得追加参数或改变占位符个数。
+     */
+    public boolean isBatch() {
+        return Boolean.TRUE.equals(attrs.get(ATTR_BATCH));
     }
 }

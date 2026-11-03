@@ -1,5 +1,7 @@
 package com.sondertara.joya.core.statement.factory;
 
+import com.sondertara.joya.core.kernel.statement.SqlNode;
+import com.sondertara.joya.core.kernel.statement.SqlNodes;
 import com.sondertara.joya.core.kernel.statement.SqlRenderer;
 
 import com.sondertara.joya.core.naming.NamingPolicy;
@@ -33,13 +35,16 @@ public final class InsertStatementFactory {
 
         // 1. 确定最终列（若未显式声明列但主键值非空，则自动包含显式主键列并遵守 insertable = false）
         String pk = meta.primaryKey();
-        boolean hasExplicitPk = pk != null && ctx.resolveValue(pk) != null;
+        Object pkValue = pk != null ? ctx.resolveValue(pk) : null;
+        boolean hasExplicitPk = pkValue != null;
         List<String> columns = ctx.declaredColumns().isEmpty()
                 ? (hasExplicitPk ? meta.insertableColumnsWithPrimaryKey() : meta.insertableColumns())
                 : new ArrayList<>(ctx.declaredColumns());
 
+        requireNonNullPrimaryKey(meta, pk, pkValue);
+
         // 2. 过滤 ignoreNull 与 insertable = false
-        SqlParameterList params = new SqlParameterList();
+        List<SqlNode> rowValues = new ArrayList<>();
         List<String> finalColumns = new ArrayList<>();
         Set<String> nonInsertable = meta.nonInsertableColumns();
         for (String col : columns) {
@@ -57,27 +62,42 @@ public final class InsertStatementFactory {
             if (ctx.ignoreNull() && value == null) {
                 continue;
             }
-            String formattedCol = meta.formatColumn(col, namingPolicy);
-            finalColumns.add(formattedCol);
-            params.add(col, value, ParameterSource.INSERT);
+            finalColumns.add(meta.formatColumn(col, namingPolicy));
+            rowValues.add(SqlNodes.param(col, value, ParameterSource.INSERT));
         }
         if (finalColumns.isEmpty()) {
             throw new IllegalStateException("INSERT statement has no insertable columns");
         }
 
-        // 3. 统一由 SqlRenderer 生成 SQL
+        // 3. 元数据：表引用 + 实体类型 + 主键列名
         String tableName = meta.qualifiedTableName(namingPolicy);
-        String sql = SqlRenderer.renderInsert(tableName, finalColumns);
-
-        // 4. 元数据：表引用 + 实体类型
+        String formattedPk = pk != null ? meta.formatColumn(pk, namingPolicy) : null;
         Set<TableRef> tables = new LinkedHashSet<>();
         tables.add(TableRef.ofQualified(tableName, ""));
         StatementMetadata metadata = StatementMetadata.builder(Operation.INSERT)
                 .tables(tables)
                 .entityType(meta.entityType())
+                .primaryKey(formattedPk)
                 .build();
 
-        return SqlStatement.of(sql, params.toList(), metadata);
+        // 4. AST-lite：由 SqlRenderer 统一渲染，保证文本与参数顺序稳定
+        SqlNode.Insert insert = new SqlNode.Insert(
+                SqlNodes.table(meta.tableName(), tableName),
+                finalColumns,
+                List.of(rowValues));
+        return SqlRenderer.render(insert, metadata);
+    }
+
+    /**
+     * 非自增主键必须由调用方赋值：否则会渲染成 {@code INSERT ... (id, ...) VALUES (NULL, ...)}，
+     * 最终只在 JDBC 层得到 {@code NULL not allowed for column "id"}，难以定位是漏了 {@code @GeneratedValue}。
+     */
+    private static void requireNonNullPrimaryKey(EntityMetadataContext meta, String pk, Object pkValue) {
+        if (pk == null || pkValue != null || meta.generatedColumns().contains(pk)) {
+            return;
+        }
+        throw new IllegalArgumentException("Primary key '" + pk + "' of " + meta.entityType().getName()
+                + " is null and is not annotated with @GeneratedValue; assign it before insert");
     }
 
     /**
@@ -112,22 +132,36 @@ public final class InsertStatementFactory {
         List<String> formattedColumns = columns.stream()
                 .map(c -> meta.formatColumn(c, namingPolicy))
                 .toList();
+        String formattedPk = pk != null ? meta.formatColumn(pk, namingPolicy) : null;
         String tableName = meta.qualifiedTableName(namingPolicy);
         StatementMetadata metadata = StatementMetadata.builder(Operation.INSERT)
                 .table(TableRef.ofQualified(tableName, ""))
                 .entityType(meta.entityType())
+                .primaryKey(formattedPk)
                 .build();
         List<ColumnBinding> bindings = new ArrayList<>(columns.size());
         for (String col : columns) {
             bindings.add(ColumnBinding.of(col));
         }
+        List<SqlNode> templateRow = new ArrayList<>(columns.size());
+        for (String col : columns) {
+            templateRow.add(SqlNodes.param(col, null, ParameterSource.INSERT));
+        }
+        SqlNode.Insert ast = new SqlNode.Insert(
+                SqlNodes.table(meta.tableName(), tableName),
+                formattedColumns,
+                List.of(templateRow));
+        SqlStatement rendered = SqlRenderer.render(ast, metadata);
         return new BatchSqlStatement(
-                SqlRenderer.renderInsert(tableName, formattedColumns),
+                rendered.sql(),
                 bindings,
                 rows,
                 metadata,
                 batchSize,
-                returnGeneratedKeys
+                returnGeneratedKeys,
+                ast,
+                List.of(),
+                List.of()
         );
     }
 }

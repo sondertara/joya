@@ -20,8 +20,23 @@ public record TableRef(String name, @Nullable String schema, String alias) {
 
     public TableRef {
         Objects.requireNonNull(name, "table name must not be null");
+        name = unquoteIdentifier(name);
         alias = alias == null ? "" : alias;
-        schema = (schema == null || schema.isBlank()) ? null : schema;
+        schema = (schema == null || schema.isBlank()) ? null : unquoteIdentifier(schema);
+    }
+
+    private static String unquoteIdentifier(String raw) {
+        String s = raw.trim();
+        if (s.length() >= 2) {
+            char first = s.charAt(0);
+            char last = s.charAt(s.length() - 1);
+            if ((first == '`' && last == '`')
+                    || (first == '"' && last == '"')
+                    || (first == '[' && last == ']')) {
+                return s.substring(1, s.length() - 1);
+            }
+        }
+        return s;
     }
 
     public static TableRef of(String name) {

@@ -319,7 +319,7 @@ class JoyaSpringSidecarIntegrationTest {
                     JoyaClientRegistry registry = context.getBean(JoyaClientRegistry.class);
                     assertSame(registry.primary(), context.getBean(JoyaClient.class));
                     assertEquals(Set.of(JoyaClientRegistry.PRIMARY), registry.names());
-                    assertEquals(1000, registry.primary().settings().batchSize());
+                    assertEquals(1000, registry.primary().settings().executionOptions().batchSize());
                 });
     }
 
@@ -421,9 +421,9 @@ class JoyaSpringSidecarIntegrationTest {
         assertTrue(ex.getMessage().contains("order"));
 
         // 4. 验证顶层配置与 joya.datasources.order.* 参数覆写生效
-        assertEquals(2048, joyaClient.settings().batchSize());
-        assertEquals(512, orderClient.settings().batchSize());
-        assertEquals(15, orderClient.settings().queryTimeoutSeconds());
+        assertEquals(2048, joyaClient.settings().executionOptions().batchSize());
+        assertEquals(512, orderClient.settings().executionOptions().batchSize());
+        assertEquals(15, orderClient.settings().executionOptions().queryTimeoutSeconds());
 
         // 5. 验证 JoyaClientCustomizer 收到同构的客户端名称回调（"primary" 与 "order"）
         assertEquals(List.of("primary", "order"), TestConfig.CUSTOMIZER_INVOKED_FOR);
@@ -557,5 +557,160 @@ class JoyaSpringSidecarIntegrationTest {
 
         assertTrue(joyaClient.of(UserAccount.class).existsById(99L));
         assertFalse(orderClient.of(OrderRecord.class).existsById(999L));
+    }
+
+    @Test
+    void joyaClientBuilder_rejectsMismatchedConnectionProviderAndTxEngine() {
+        DataSource primaryDs = applicationContext.getBean(DataSource.class);
+
+        // SpringConnectionProvider + 默认 TxEngine.JDBC 必须拒绝
+        IllegalArgumentException err1 = assertThrows(IllegalArgumentException.class, () ->
+                JoyaClient.builder(primaryDs)
+                        .connectionProvider(new com.sondertara.joya.spring.support.SpringConnectionProvider(primaryDs, 0))
+                        .build());
+        assertTrue(err1.getMessage().contains("TxEngine.JDBC"), err1.getMessage());
+
+        // 默认 DataSourceConnectionProvider + SpringTxEngine 必须拒绝
+        IllegalArgumentException err2 = assertThrows(IllegalArgumentException.class, () ->
+                JoyaClient.builder(primaryDs)
+                        .txEngine(new com.sondertara.joya.spring.support.SpringTxEngine(primaryDs, transactionManager))
+                        .build());
+        assertTrue(err2.getMessage().contains("SpringTxEngine"), err2.getMessage());
+
+        // 手工构造 SpringTxEngine 传入不匹配 DataSource 的事务管理器或非 ResourceTransactionManager 必须立即拒绝
+        org.h2.jdbcx.JdbcDataSource otherDs = new org.h2.jdbcx.JdbcDataSource();
+        otherDs.setURL("jdbc:h2:mem:other_manual_tx_ds;DB_CLOSE_DELAY=-1");
+        assertThrows(IllegalArgumentException.class,
+                () -> new com.sondertara.joya.spring.support.SpringTxEngine(otherDs, transactionManager));
+        assertThrows(IllegalArgumentException.class,
+                () -> new com.sondertara.joya.spring.support.SpringTxEngine(primaryDs,
+                        new NonResourceTxManagerConfig().customJtaStyleTransactionManager()));
+    }
+
+    @Test
+    void joinedSpringTx_rejectsAccessAfterOuterSpringTransactionCompletes() {
+        org.springframework.transaction.TransactionStatus outerStatus =
+                transactionManager.getTransaction(new org.springframework.transaction.support.DefaultTransactionDefinition());
+        com.sondertara.joya.core.tx.Tx joinedTx = joyaClient.tx().begin();
+        try {
+            // 外层 Spring 事务提前提交，而内层 joinedTx 尚未 close
+            transactionManager.commit(outerStatus);
+
+            assertThrows(com.sondertara.joya.core.tx.IllegalTxStateException.class,
+                    () -> joinedTx.of(UserAccount.class));
+            assertThrows(com.sondertara.joya.core.tx.IllegalTxStateException.class,
+                    () -> joinedTx.sql("SELECT 1").value(Integer.class));
+        } finally {
+            joinedTx.close();
+        }
+        com.sondertara.joya.core.tx.IllegalTxStateException afterClose = assertThrows(
+                com.sondertara.joya.core.tx.IllegalTxStateException.class,
+                () -> joinedTx.sql("SELECT 1").value(Integer.class));
+        assertEquals(com.sondertara.joya.core.tx.TxState.COMMITTED, afterClose.current(),
+                "外层已提交的 joinedTx 在 close() 后终态应保持 COMMITTED，不能被覆盖为 ROLLED_BACK");
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class NonResourceTxManagerConfig {
+        static final AtomicInteger GET_TX_CALLS = new AtomicInteger(0);
+
+        @Bean
+        PlatformTransactionManager customJtaStyleTransactionManager() {
+            return new PlatformTransactionManager() {
+                @Override
+                public org.springframework.transaction.TransactionStatus getTransaction(
+                        org.springframework.transaction.TransactionDefinition definition) {
+                    GET_TX_CALLS.incrementAndGet();
+                    return new org.springframework.transaction.support.SimpleTransactionStatus();
+                }
+
+                @Override
+                public void commit(org.springframework.transaction.TransactionStatus status) {
+                }
+
+                @Override
+                public void rollback(org.springframework.transaction.TransactionStatus status) {
+                }
+            };
+        }
+    }
+
+    @Test
+    void nonResourceTransactionManager_isNotSilentlyAcceptedAndFallsBackToDataSourceTransactionManager() {
+        NonResourceTxManagerConfig.GET_TX_CALLS.set(0);
+        autoDiscoveryRunner()
+                .withUserConfiguration(NonResourceTxManagerConfig.class)
+                .withPropertyValues(
+                        "spring.datasource.url=jdbc:h2:mem:non_resource_tx_match_db;MODE=MYSQL;DB_CLOSE_DELAY=-1",
+                        "spring.datasource.username=sa",
+                        "spring.datasource.password=",
+                        "spring.datasource.type=org.h2.jdbcx.JdbcDataSource")
+                .run(context -> {
+                    assertNull(context.getStartupFailure());
+                    JoyaClient client = context.getBean(JoyaClient.class);
+                    client.tx(tx -> tx.sql("SELECT 1").value(Integer.class));
+                    assertEquals(0, NonResourceTxManagerConfig.GET_TX_CALLS.get(),
+                            "非 ResourceTransactionManager 不应被静默复用，应回退为独立的 DataSourceTransactionManager");
+                });
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class JpaStyleTxManagerConfig {
+        static final AtomicInteger GET_TX_CALLS = new AtomicInteger(0);
+
+        @Bean
+        PlatformTransactionManager jpaStyleTransactionManager(DataSource dataSource) {
+            org.springframework.jdbc.datasource.DataSourceTransactionManager delegate =
+                    new org.springframework.jdbc.datasource.DataSourceTransactionManager(dataSource);
+            return new org.springframework.transaction.support.ResourceTransactionManager() {
+                private final Object fakeEntityManagerFactory = new Object();
+
+                @Override
+                public Object getResourceFactory() {
+                    return fakeEntityManagerFactory;
+                }
+
+                @SuppressWarnings("unused")
+                public DataSource getDataSource() {
+                    return dataSource;
+                }
+
+                @Override
+                public org.springframework.transaction.TransactionStatus getTransaction(
+                        org.springframework.transaction.TransactionDefinition definition) {
+                    GET_TX_CALLS.incrementAndGet();
+                    return delegate.getTransaction(definition);
+                }
+
+                @Override
+                public void commit(org.springframework.transaction.TransactionStatus status) {
+                    delegate.commit(status);
+                }
+
+                @Override
+                public void rollback(org.springframework.transaction.TransactionStatus status) {
+                    delegate.rollback(status);
+                }
+            };
+        }
+    }
+
+    @Test
+    void nonDataSourceResourceTransactionManager_isNotFalselyReusedAndFallsBackToDataSourceTransactionManager() {
+        JpaStyleTxManagerConfig.GET_TX_CALLS.set(0);
+        autoDiscoveryRunner()
+                .withUserConfiguration(JpaStyleTxManagerConfig.class)
+                .withPropertyValues(
+                        "spring.datasource.url=jdbc:h2:mem:jpa_tx_match_db;MODE=MYSQL;DB_CLOSE_DELAY=-1",
+                        "spring.datasource.username=sa",
+                        "spring.datasource.password=",
+                        "spring.datasource.type=org.h2.jdbcx.JdbcDataSource")
+                .run(context -> {
+                    assertNull(context.getStartupFailure());
+                    JoyaClient client = context.getBean(JoyaClient.class);
+                    client.tx(tx -> tx.sql("SELECT 1").value(Integer.class));
+                    assertEquals(0, JpaStyleTxManagerConfig.GET_TX_CALLS.get(),
+                            "非 DataSource 资源工厂的 ResourceTransactionManager（如 JPA）不应被误当成 DataSourceTransactionManager 复用");
+                });
     }
 }

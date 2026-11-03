@@ -4,6 +4,7 @@ import org.jspecify.annotations.Nullable;
 
 import java.util.Locale;
 import java.util.Objects;
+import java.util.regex.Pattern;
 
 /**
  * SQL 渲染与标识符命名策略。
@@ -33,6 +34,8 @@ public record NamingPolicy(
 
     public static final int DEFAULT_MAX_JOIN_TABLE = 10;
 
+    private static final Pattern SAFE_UNQUOTED_SEGMENT = Pattern.compile("^[A-Za-z_][A-Za-z0-9_$]*$");
+
     public static final NamingPolicy DEFAULT =
             new NamingPolicy(DEFAULT_MAX_JOIN_TABLE, false, false, TableNameResolver.IDENTITY, '\0', '\0');
 
@@ -60,6 +63,12 @@ public record NamingPolicy(
         return new NamingPolicy(maxJoinTable, columnUppercase, tableUppercase, tableNameResolver, openQuote, closeQuote);
     }
 
+    /** 派生新的动态表名解析策略，保留其余命名配置。 */
+    public NamingPolicy withTableNameResolver(TableNameResolver resolver) {
+        return new NamingPolicy(maxJoinTable, columnUppercase, tableUppercase,
+                Objects.requireNonNullElse(resolver, TableNameResolver.IDENTITY), openQuote, closeQuote);
+    }
+
     public String formatTable(String tableName) {
         if (tableName == null) {
             return null;
@@ -84,8 +93,41 @@ public record NamingPolicy(
     public String resolveTable(@Nullable String schema, String table) {
         Objects.requireNonNull(table, "table name must not be null");
         String formattedSchema = schema == null || schema.isBlank() ? null : formatTable(schema);
-        String resolved = tableNameResolver.resolve(formattedSchema, formatTable(table));
+        String resolved = validateResolvedTable(tableNameResolver.resolve(formattedSchema, formatTable(table)));
         return quoteIdentifier(resolved);
+    }
+
+    private static String validateResolvedTable(String resolved) {
+        if (resolved == null || resolved.isBlank()) {
+            throw new IllegalArgumentException("TableNameResolver must return a non-blank table name");
+        }
+        String trimmed = resolved.trim();
+        if (trimmed.startsWith(".") || trimmed.endsWith(".") || trimmed.contains("..")) {
+            throw new IllegalArgumentException(
+                    "Invalid physical table name returned by TableNameResolver: '" + resolved + "'");
+        }
+        String[] segments = trimmed.split("\\.");
+        for (String rawSegment : segments) {
+            String segment = rawSegment.trim();
+            if (!isSafeTableSegment(segment)) {
+                throw new IllegalArgumentException(
+                        "Invalid physical table name returned by TableNameResolver: '" + resolved
+                                + "'. Only standard SQL identifiers (optionally schema-qualified) are allowed.");
+            }
+        }
+        return trimmed;
+    }
+
+    private static boolean isSafeTableSegment(String segment) {
+        if (segment.isEmpty()) {
+            return false;
+        }
+        if (SAFE_UNQUOTED_SEGMENT.matcher(segment).matches()) {
+            return true;
+        }
+        return isProperlyQuoted(segment, '"', '"')
+                || isProperlyQuoted(segment, '`', '`')
+                || isProperlyQuoted(segment, '[', ']');
     }
 
     public String quoteIdentifier(String identifier) {
@@ -108,11 +150,34 @@ public record NamingPolicy(
         if (segment.isEmpty() || "*".equals(segment)) {
             return segment;
         }
-        if (segment.length() >= 2 && segment.charAt(0) == openQuote && segment.charAt(segment.length() - 1) == closeQuote) {
+        if (isProperlyQuoted(segment, openQuote, closeQuote)) {
             return segment;
         }
         String closeStr = String.valueOf(closeQuote);
         String escaped = segment.replace(closeStr, closeStr + closeStr);
         return openQuote + escaped + closeQuote;
+    }
+
+    private static boolean isProperlyQuoted(String segment, char open, char close) {
+        if (open == '\0' || close == '\0' || segment.length() < 2) {
+            return false;
+        }
+        if (segment.charAt(0) != open || segment.charAt(segment.length() - 1) != close) {
+            return false;
+        }
+        int end = segment.length() - 1;
+        for (int i = 1; i < end; i++) {
+            char c = segment.charAt(i);
+            if (c == close) {
+                if (i + 1 < end && segment.charAt(i + 1) == close) {
+                    i++;
+                } else {
+                    return false;
+                }
+            } else if (open != close && c == open) {
+                return false;
+            }
+        }
+        return true;
     }
 }

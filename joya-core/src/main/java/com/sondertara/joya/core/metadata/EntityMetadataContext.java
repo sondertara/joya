@@ -21,7 +21,8 @@ import java.util.Set;
  * 实体元数据上下文 —— 纯只读、不可变、可安全缓存复用。
  * <p>
  * 只描述「这个实体对应什么表」，不持有任何业务数据（values）、不持有 PreparedParameter、
- * 不触发 SQL 生成、不被 Builder 修改。所有访问器返回缓存的不可变视图，构造一次、永久复用。
+ * 不触发 SQL 生成、不被 Builder 修改。所有访问器返回缓存的不可变视图，构造一次、永久复用
+ * （列顺序由构造时的添加顺序或 {@link LocalTableMetaCache} 按类继承层级与字节码字段声明顺序一次性固化，同 JVM 内严格稳定）。
  */
 public final class EntityMetadataContext {
 
@@ -266,6 +267,24 @@ public final class EntityMetadataContext {
         return colByField != null ? columnFields.get(colByField) : null;
     }
 
+    /**
+     * 一次性读取全部可映射字段，按列顺序返回；供 {@link EntitySnapshot} 使用，避免逐列二次按名查找。
+     */
+    public Map<String, Object> readFieldValues(Object entity) {
+        Map<String, Object> values = new LinkedHashMap<>(columnFields.size());
+        for (Map.Entry<String, Field> entry : columnFields.entrySet()) {
+            try {
+                values.put(entry.getKey(), entry.getValue().get(entity));
+            } catch (IllegalAccessException ignored) {
+                String fieldName = fieldByColumn(entry.getKey());
+                if (fieldName != null) {
+                    values.put(entry.getKey(), ClassUtils.getFieldValue(entity, fieldName));
+                }
+            }
+        }
+        return values;
+    }
+
     /** 直接通过预缓存的 {@link Field} 读取实体属性值（零二次按名查找）。 */
     public @Nullable Object readFieldValue(Object entity, String columnName) {
         if (entity == null || columnName == null) {
@@ -303,9 +322,7 @@ public final class EntityMetadataContext {
 
     /** 按 Lambda Getter 引用解析规范列名，不存在时抛出 {@link IllegalArgumentException}。 */
     public <E> String resolveColumn(IGetter<E, ?> getter) {
-        String m = LambdaUtils.getImplMethodName(getter);
-        String prop = m.startsWith("get") && m.length() > 3 ? java.beans.Introspector.decapitalize(m.substring(3))
-                : (m.startsWith("is") && m.length() > 2 ? java.beans.Introspector.decapitalize(m.substring(2)) : m);
+        String prop = LambdaUtils.getPropertyName(getter);
         String col = columnByField(prop);
         if (col == null) {
             throw new IllegalArgumentException("Unknown property '" + prop + "' on entity " + entityType.getName());

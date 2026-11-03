@@ -1,28 +1,33 @@
 package com.sondertara.joya.core;
 
+import com.sondertara.joya.core.jdbc.resultset.mapper.DefaultRowMapperFactory;
+import com.sondertara.joya.core.listener.EntityLifecycle;
+import com.sondertara.joya.core.listener.EntityListener;
 import com.sondertara.joya.core.kernel.connection.ConnectionCallback;
-import com.sondertara.joya.core.kernel.dialect.DbType;
-import com.sondertara.joya.core.kernel.JoyaTemplate;
+import com.sondertara.joya.core.kernel.statement.DbType;
+import com.sondertara.joya.core.kernel.ExecutionKernel;
 import com.sondertara.joya.core.kernel.connection.ConnectionProvider;
 import com.sondertara.joya.core.kernel.connection.DataSourceConnectionProvider;
 import com.sondertara.joya.core.kernel.dialect.DialectStrategy;
+import com.sondertara.joya.core.kernel.error.SqlExceptionTranslator;
+import com.sondertara.joya.core.kernel.executor.Executor;
+import com.sondertara.joya.core.kernel.executor.RowMapperFactory;
 import com.sondertara.joya.core.kernel.interceptor.SqlInterceptor;
+import com.sondertara.joya.core.kernel.interceptor.SqlRewriter;
+import com.sondertara.joya.core.kernel.observe.SqlExecutionListener;
 import com.sondertara.joya.core.kernel.statement.SqlStatement;
-import com.sondertara.joya.core.proxy.JdkMapperProxy;
 import com.sondertara.joya.core.query.dsl.Query;
-import com.sondertara.joya.core.tx.JdbcTxEngine;
 import com.sondertara.joya.core.tx.TxCallback;
 import com.sondertara.joya.core.tx.TxConsumer;
 import com.sondertara.joya.core.tx.TxEngine;
+import com.sondertara.joya.core.tx.TxOptions;
 import com.sondertara.joya.core.tx.TxStarter;
 
 import javax.sql.DataSource;
 import java.io.Reader;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Joya 统一客户端门面 —— 实现 {@link DataOps}（1 {@code JoyaClient} = 1 {@link DataSource}）：
@@ -38,32 +43,53 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public final class JoyaClient implements DataOps {
 
-    private final JoyaTemplate template;
+    private final ExecutionKernel kernel;
     private final TxEngine txEngine;
-    private final Map<Class<?>, Object> mapperCache = new ConcurrentHashMap<>();
+    private final EntityLifecycle entityLifecycle;
+    private final DataOpsSupport dataOps;
 
     public JoyaClient(DataSource dataSource) {
-        this(dataSource, List.of());
+        this(builder(dataSource));
     }
 
-    public JoyaClient(DataSource dataSource, List<SqlInterceptor> interceptors) {
-        Objects.requireNonNull(dataSource, "dataSource must not be null");
-        this.template = new JoyaTemplate(dataSource, interceptors == null ? List.of() : interceptors);
-        this.txEngine = JdbcTxEngine.INSTANCE;
-    }
-
-    public JoyaClient(JoyaTemplate template) {
-        this(template, JdbcTxEngine.INSTANCE);
-    }
-
-    public JoyaClient(JoyaTemplate template, TxEngine txEngine) {
-        this.template = Objects.requireNonNull(template, "template must not be null");
-        this.txEngine = Objects.requireNonNull(txEngine, "txEngine must not be null");
+    private JoyaClient(Builder builder) {
+        Objects.requireNonNull(builder, "builder must not be null");
+        ConnectionProvider effectiveConnections = builder.connectionProvider != null
+                ? builder.connectionProvider
+                : new DataSourceConnectionProvider(
+                        builder.dataSource, builder.settings.executionOptions().queryTimeoutSeconds());
+        DialectStrategy effectiveDialect = builder.dialectStrategy != null
+                ? builder.dialectStrategy
+                : DialectStrategy.cached(builder.dataSource);
+        this.txEngine = builder.txEngine != null ? builder.txEngine : TxEngine.JDBC;
+        if (effectiveConnections.isExternallyManaged() && this.txEngine == TxEngine.JDBC) {
+            throw new IllegalArgumentException(
+                    "Externally managed ConnectionProvider ("
+                            + effectiveConnections.unwrap().getClass().getSimpleName()
+                            + ") cannot be paired with TxEngine.JDBC; configure a matching TxEngine (e.g. SpringTxEngine)");
+        }
+        this.txEngine.validateConfiguration(builder.dataSource, effectiveConnections);
+        this.entityLifecycle = builder.entityListeners.isEmpty()
+                ? EntityLifecycle.EMPTY
+                : new EntityLifecycle(builder.entityListeners);
+        this.kernel = new ExecutionKernel(new ExecutionKernel.Config(
+                builder.dataSource,
+                builder.interceptors,
+                builder.rewriters,
+                builder.executionListeners,
+                effectiveConnections,
+                effectiveDialect,
+                builder.settings.executionOptions(),
+                builder.settings.namingPolicy(),
+                builder.rowMapperFactory,
+                builder.exceptionTranslator,
+                builder.executorFactory));
+        this.dataOps = DataOpsSupport.concurrent(this, kernel, entityLifecycle);
     }
 
     /** 快捷创建客户端。 */
     public static JoyaClient create(DataSource dataSource) {
-        return new JoyaClient(dataSource);
+        return builder(dataSource).build();
     }
 
     /** 创建客户端构建器（支持注册 SQL 拦截器、连接提供者、事务引擎、方言策略与客户端配置）。 */
@@ -75,32 +101,27 @@ public final class JoyaClient implements DataOps {
 
     @Override
     public <T> Query<T> from(Class<T> entityType) {
-        return new Query<>(template, entityType);
+        return dataOps.from(entityType);
     }
 
     @Override
     public <T> EntityOps<T> of(Class<T> entityType) {
-        return new EntityOps<>(template, entityType);
+        return dataOps.of(entityType);
     }
 
     @Override
     public SqlOps sql(String sql, Object... args) {
-        return new SqlOps(template, sql, args);
+        return dataOps.sql(sql, args);
     }
 
     @Override
     public SqlOps sql(SqlStatement statement) {
-        return new SqlOps(template, statement);
+        return dataOps.sql(statement);
     }
 
     @Override
-    @SuppressWarnings({"unchecked", "rawtypes"})
     public <M> M mapper(Class<M> mapperType) {
-        Objects.requireNonNull(mapperType, "mapperType must not be null");
-        if (!mapperType.isInterface()) {
-            throw new UnsupportedOperationException("mapperType " + mapperType.getName() + " is not interface.");
-        }
-        return (M) mapperCache.computeIfAbsent(mapperType, cls -> new JdkMapperProxy(this).create((Class) cls));
+        return dataOps.mapper(mapperType);
     }
 
     // ===== 显式事务入口 =====
@@ -109,7 +130,7 @@ public final class JoyaClient implements DataOps {
      * 开启事务配置与执行向导 {@link TxStarter}（需自定义隔离级别、只读、超时或死锁重试时使用）。
      */
     public TxStarter tx() {
-        return new TxStarter(template, txEngine);
+        return new TxStarter(kernel, txEngine, TxOptions.DEFAULT, entityLifecycle);
     }
 
     /**
@@ -126,51 +147,29 @@ public final class JoyaClient implements DataOps {
         return tx().call(body);
     }
 
-    // ===== Mapper 代理入口 =====
-
-    /**
-     * 获取自定义 {@code JoyaMapper} 子接口的动态代理（等价于 {@link #mapper(Class)}）。
-     */
-    public <M> M createMapper(Class<M> mapperType) {
-        return mapper(mapperType);
-    }
-
     // ===== 底层逃生舱与配置访问 =====
 
     /** 执行 SQL 脚本流。 */
+    @Override
     public void script(Reader reader) {
-        template.runScript(reader);
+        dataOps.script(reader);
     }
 
-    /** 在连接回调中执行底层 JDBC 操作。 */
+    /** 在连接回调中执行底层 JDBC 操作（每次借还一条自动提交连接，<b>不参与</b>任何 {@link com.sondertara.joya.core.tx.Tx}）。 */
+    @Override
     public <T> T withConnection(ConnectionCallback<T> action) {
-        return template.withConnection(action);
-    }
-
-    /** 获取底层执行内核 {@link JoyaTemplate}。 */
-    public JoyaTemplate template() {
-        return template;
-    }
-
-    /** 获取当前客户端绑定的 {@link DataSource}。 */
-    public DataSource dataSource() {
-        return template.dataSource();
+        return dataOps.withConnection(action);
     }
 
     /** 获取当前客户端的实例级配置 {@link JoyaSettings}。 */
     @Override
     public JoyaSettings settings() {
-        return JoyaSettings.of(template.executionOptions(), template.namingPolicy());
+        return dataOps.settings();
     }
 
     @Override
     public DbType dbType() {
-        return template.dialect().dbType();
-    }
-
-    /** 获取当前客户端使用的事务引擎 {@link TxEngine}。 */
-    public TxEngine txEngine() {
-        return txEngine;
+        return dataOps.dbType();
     }
 
     // ===== 构建器 =====
@@ -178,11 +177,16 @@ public final class JoyaClient implements DataOps {
     public static final class Builder {
         private final DataSource dataSource;
         private final List<SqlInterceptor> interceptors = new ArrayList<>();
-        private int queryTimeoutSeconds = 0;
+        private final List<SqlRewriter> rewriters = new ArrayList<>();
+        private final List<SqlExecutionListener> executionListeners = new ArrayList<>();
+        private final List<EntityListener> entityListeners = new ArrayList<>();
         private ConnectionProvider connectionProvider;
         private TxEngine txEngine;
         private DialectStrategy dialectStrategy;
         private JoyaSettings settings = JoyaSettings.DEFAULT;
+        private RowMapperFactory rowMapperFactory = DefaultRowMapperFactory.INSTANCE;
+        private SqlExceptionTranslator exceptionTranslator = SqlExceptionTranslator.DEFAULT;
+        private Executor.Factory executorFactory;
 
         private Builder(DataSource dataSource) {
             this.dataSource = Objects.requireNonNull(dataSource, "dataSource must not be null");
@@ -203,9 +207,70 @@ public final class JoyaClient implements DataOps {
             return this;
         }
 
-        /** 设置默认查询超时秒数（{@code <= 0} 表示不限制）。 */
+        /** 追加 SQL 结构改写器（AST 级，推荐用于租户/软删/审计等结构变更）。 */
+        public Builder rewriter(SqlRewriter rewriter) {
+            Objects.requireNonNull(rewriter, "rewriter must not be null");
+            this.rewriters.add(rewriter);
+            return this;
+        }
+
+        /** 批量追加 SQL 结构改写器。 */
+        public Builder rewriters(List<SqlRewriter> list) {
+            if (list != null) {
+                this.rewriters.addAll(list);
+            }
+            return this;
+        }
+
+        /** 追加 SQL 执行观测监听器（日志/指标/Tracing）。 */
+        public Builder executionListener(SqlExecutionListener listener) {
+            this.executionListeners.add(Objects.requireNonNull(listener, "executionListener must not be null"));
+            return this;
+        }
+
+        /** 批量追加 SQL 执行观测监听器。 */
+        public Builder executionListeners(List<SqlExecutionListener> listeners) {
+            if (listeners != null) {
+                this.executionListeners.addAll(listeners);
+            }
+            return this;
+        }
+
+        /** 自定义行映射器工厂。 */
+        public Builder rowMapperFactory(RowMapperFactory factory) {
+            this.rowMapperFactory = Objects.requireNonNull(factory, "rowMapperFactory must not be null");
+            return this;
+        }
+
+        /** 自定义执行器工厂（SQL 执行端口的替换点；事务视图会用事务连接来源重新调用该工厂）。 */
+        public Builder executorFactory(Executor.Factory factory) {
+            this.executorFactory = Objects.requireNonNull(factory, "executorFactory must not be null");
+            return this;
+        }
+
+        /** 自定义 SQL 异常翻译器。 */
+        public Builder exceptionTranslator(SqlExceptionTranslator translator) {
+            this.exceptionTranslator = Objects.requireNonNull(translator, "exceptionTranslator must not be null");
+            return this;
+        }
+
+        /** 注册全局实体生命周期监听器（审计、日志等）。 */
+        public Builder entityListener(EntityListener listener) {
+            this.entityListeners.add(Objects.requireNonNull(listener, "entityListener must not be null"));
+            return this;
+        }
+
+        /** 批量注册全局实体生命周期监听器。 */
+        public Builder entityListeners(List<EntityListener> listeners) {
+            if (listeners != null) {
+                this.entityListeners.addAll(listeners);
+            }
+            return this;
+        }
+
+        /** 设置默认查询超时秒数（{@code <= 0} 表示不限制；直接合并至当前 {@link JoyaSettings}）。 */
         public Builder queryTimeoutSeconds(int queryTimeoutSeconds) {
-            this.queryTimeoutSeconds = queryTimeoutSeconds;
+            this.settings = this.settings.withQueryTimeoutSeconds(queryTimeoutSeconds);
             return this;
         }
 
@@ -240,27 +305,7 @@ public final class JoyaClient implements DataOps {
         }
 
         public JoyaClient build() {
-            JoyaSettings effectiveSettings = (settings.queryTimeoutSeconds() == 0 && queryTimeoutSeconds > 0)
-                    ? settings.withQueryTimeoutSeconds(queryTimeoutSeconds)
-                    : settings;
-            ConnectionProvider effectiveConnections = connectionProvider != null
-                    ? connectionProvider
-                    : new DataSourceConnectionProvider(dataSource, effectiveSettings.queryTimeoutSeconds());
-            DialectStrategy effectiveDialect = dialectStrategy != null
-                    ? dialectStrategy
-                    : DialectStrategy.cached(dataSource);
-            TxEngine effectiveTxEngine = txEngine != null
-                    ? txEngine
-                    : JdbcTxEngine.INSTANCE;
-            JoyaTemplate tpl = new JoyaTemplate(
-                    dataSource,
-                    interceptors,
-                    effectiveConnections,
-                    effectiveDialect,
-                    effectiveSettings.executionOptions(),
-                    effectiveSettings.namingPolicy()
-            );
-            return new JoyaClient(tpl, effectiveTxEngine);
+            return new JoyaClient(this);
         }
     }
 }

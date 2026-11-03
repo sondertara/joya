@@ -1,8 +1,11 @@
 package com.sondertara.joya.core;
 
-import com.sondertara.joya.core.kernel.dialect.DbType;
+import com.sondertara.joya.core.kernel.connection.ConnectionCallback;
+import com.sondertara.joya.core.kernel.statement.DbType;
 import com.sondertara.joya.core.kernel.statement.SqlStatement;
 import com.sondertara.joya.core.query.dsl.Query;
+
+import java.io.Reader;
 
 /**
  * 数据操作入口 —— Joya 统一的数据操作门面：{@code 入口.from(实体)}（统一查询）、{@code 入口.of(实体)}（实体写与按主键读）
@@ -35,16 +38,43 @@ public interface DataOps {
     SqlOps sql(SqlStatement statement);
 
     /**
-     * 获取自定义 {@code JoyaMapper} 子接口的动态代理（支持 {@code @Query} 注解、JPA 方法名派生查询与基础 CRUD）。
+     * 获取自定义 {@code JoyaMapper} 子接口的动态代理（支持基础 CRUD 与 {@code default} 自定义查询方法）。
      */
     <M> M mapper(Class<M> mapperType);
 
-    /** 获取当前数据操作上下文的客户端配置（默认返回 {@link JoyaSettings#DEFAULT}）。 */
+    /**
+     * 连接级逃生舱：在<b>当前数据操作上下文所用的连接</b>上执行底层 JDBC 回调（不经过拦截器链，调用方自负其责）。
+     *
+     * <p>在 {@code JoyaClient} 上每次借还一条自动提交连接；在 {@link com.sondertara.joya.core.tx.Tx} 上则运行于
+     * 该事务的连接，随事务一同提交 / 回滚——事务内不会静默落到事务之外。
+     */
+    <T> T withConnection(ConnectionCallback<T> action);
+
+    /**
+     * 执行 SQL 脚本流（DDL / 初始化数据，不经过拦截器链）。与 {@link #withConnection} 一样，
+     * 在 {@code Tx} 上运行于事务连接。
+     */
+    void script(Reader reader);
+
+    /**
+     * 获取当前数据操作上下文的客户端配置（默认返回 {@link JoyaSettings#DEFAULT}）。
+     *
+     * <p>在 {@link com.sondertara.joya.core.tx.Tx} 上，事务提交/回滚/关闭后访问会抛出
+     * {@link com.sondertara.joya.core.tx.IllegalTxStateException}，避免误用已完成的事务上下文。
+     */
     default JoyaSettings settings() {
         return JoyaSettings.DEFAULT;
     }
 
-    /** 获取当前数据操作上下文绑定的数据库方言类型（默认返回 {@link DbType#other}）。 */
+    /**
+     * 获取当前数据操作上下文绑定的数据库方言类型（默认返回 {@link DbType#other}）。
+     *
+     * <p>默认 {@code DialectStrategy.cached(dataSource)} 或 {@code fixed(...)} 策略下直接返回已缓存的方言类型；
+     * 若显式配置了 {@code DialectStrategy.perConnection()} 动态路由策略，则每次调用会通过当前连接提供者探测一次。
+     *
+     * <p>在 {@link com.sondertara.joya.core.tx.Tx} 上，事务提交/回滚/关闭后访问同样会抛出
+     * {@link com.sondertara.joya.core.tx.IllegalTxStateException}。
+     */
     default DbType dbType() {
         return DbType.other;
     }

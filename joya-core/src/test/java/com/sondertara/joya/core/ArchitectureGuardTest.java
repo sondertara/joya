@@ -1,6 +1,6 @@
 package com.sondertara.joya.core;
 
-import com.sondertara.joya.core.kernel.JoyaTemplate;
+import com.sondertara.joya.core.kernel.ExecutionKernel;
 import com.sondertara.joya.core.kernel.statement.SqlRenderer;
 import org.junit.jupiter.api.Test;
 
@@ -26,7 +26,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *
  * <ul>
  *   <li>{@code kernel} 只允许依赖 {@code kernel} 自身、{@code utils}、{@code exceptions}。</li>
- *   <li>{@code JoyaTemplate} 公开签名不得暴露 {@code PageResult} / {@code PageRequest}。</li>
+ *   <li>{@code ExecutionKernel} 公开签名不得暴露 {@code PageResult} / {@code PageRequest}。</li>
  *   <li>DQL / DML 文本只允许 {@link SqlRenderer} 拼接（方言层的分页语法除外）。</li>
  * </ul>
  */
@@ -44,6 +44,54 @@ class ArchitectureGuardTest {
 
     private static Path corePackage(String relative) {
         return resolveMainJavaRoot().resolve("com/sondertara/joya/core").resolve(relative);
+    }
+
+    private static Path rootPackage(String relative) {
+        return resolveMainJavaRoot().resolve("com/sondertara/joya").resolve(relative);
+    }
+
+    @Test
+    void exceptionsMayNotDependOnAnyOtherProjectPackage() throws IOException {
+        assertOnlyAllowedImports(rootPackage("exceptions"), Set.of(
+                "com.sondertara.joya.exceptions"
+        ));
+    }
+
+    @Test
+    void functionMayNotDependOnAnyOtherProjectPackage() throws IOException {
+        assertOnlyAllowedImports(corePackage("function"), Set.of(
+                "com.sondertara.joya.core.function"
+        ));
+    }
+
+    @Test
+    void utilsMayOnlyDependOnUtilsExceptionsAndFunction() throws IOException {
+        assertOnlyAllowedImports(rootPackage("utils"), Set.of(
+                "com.sondertara.joya.utils",
+                "com.sondertara.joya.exceptions",
+                "com.sondertara.joya.core.function"
+        ));
+    }
+
+    @Test
+    void listenerMayOnlyDependOnListenerAndKernelOrdered() throws IOException {
+        assertOnlyAllowedImports(corePackage("listener"), Set.of(
+                "com.sondertara.joya.core.listener",
+                "com.sondertara.joya.core.kernel.support.Ordered"
+        ));
+    }
+
+    @Test
+    void statementLayerMayNotDependOnCoreFacadesOrJdbc() throws IOException {
+        assertOnlyAllowedImports(corePackage("statement"), Set.of(
+                "com.sondertara.joya.core.statement",
+                "com.sondertara.joya.core.query",
+                "com.sondertara.joya.core.metadata",
+                "com.sondertara.joya.core.naming",
+                "com.sondertara.joya.core.kernel",
+                "com.sondertara.joya.utils",
+                "com.sondertara.joya.exceptions"
+        ));
     }
 
     @Test
@@ -82,18 +130,18 @@ class ArchitectureGuardTest {
     }
 
     @Test
-    void joyaTemplatePublicSignaturesMustNotExposePageResultOrPageRequest() {
-        for (Method method : JoyaTemplate.class.getDeclaredMethods()) {
+    void executionKernelPublicSignaturesMustNotExposePageResultOrPageRequest() {
+        for (Method method : ExecutionKernel.class.getDeclaredMethods()) {
             if (!Modifier.isPublic(method.getModifiers())) {
                 continue;
             }
             String returnType = method.getReturnType().getName();
             assertTrue(!returnType.contains("PageResult") && !returnType.contains("PageRequest"),
-                    "JoyaTemplate public method must not return PageResult/PageRequest: " + method);
+                    "ExecutionKernel public method must not return PageResult/PageRequest: " + method);
             for (Class<?> paramType : method.getParameterTypes()) {
                 String paramName = paramType.getName();
                 assertTrue(!paramName.contains("PageResult") && !paramName.contains("PageRequest"),
-                        "JoyaTemplate public method must not accept PageResult/PageRequest: " + method);
+                        "ExecutionKernel public method must not accept PageResult/PageRequest: " + method);
             }
         }
     }
@@ -136,36 +184,297 @@ class ArchitectureGuardTest {
     }
 
     @Test
-    void coreTopLevelFacadeMustNotDependOnJdbcDao() throws IOException {
-        Path coreRoot = resolveMainJavaRoot().resolve("com/sondertara/joya/core");
+    void mapperFacadeMustNotDependOnJdbcImplementations() throws IOException {
+        Path mapperDir = corePackage("mapper");
         List<String> violations = new ArrayList<>();
-        try (Stream<Path> files = Files.list(coreRoot)) {
-            for (Path file : files.filter(p -> Files.isRegularFile(p) && p.toString().endsWith(".java")).toList()) {
+        try (Stream<Path> files = Files.list(mapperDir)) {
+            for (Path file : files.filter(p -> p.toString().endsWith(".java")).toList()) {
                 String content = stripComments(Files.readString(file));
-                if (content.contains("com.sondertara.joya.core.jdbc.dao")) {
+                if (content.contains("com.sondertara.joya.core.jdbc")) {
                     violations.add(file.getFileName().toString());
                 }
             }
         }
         assertEquals(List.of(), violations,
-                "Top-level core facade files must not depend on com.sondertara.joya.core.jdbc.dao: " + violations);
+                "core/mapper facade must not depend on core.jdbc implementations: " + violations);
     }
 
     @Test
-    void batchPlannerMustStayWriteOnly() throws IOException {
-        assertSourceDoesNotContain(corePackage("BatchPlanner.java"),
-                "Query<", "SelectStatementFactory", "DeleteStatementFactory", "EntityFinder", "EntityDeleter");
+    void jdbcAdapterMayNotDependOnCoreFacades() throws IOException {
+        assertOnlyAllowedImports(corePackage("jdbc"), Set.of(
+                "com.sondertara.joya.core.jdbc",
+                "com.sondertara.joya.core.function",
+                "com.sondertara.joya.core.metadata",
+                "com.sondertara.joya.core.model",
+                "com.sondertara.joya.core.naming",
+                "com.sondertara.joya.core.kernel",
+                "com.sondertara.joya.utils",
+                "com.sondertara.joya.exceptions"
+        ));
     }
 
     @Test
-    void readAndDeleteCollaboratorsMustNotDependOnBatchPlanner() throws IOException {
-        assertSourceDoesNotContain(corePackage("EntityFinder.java"), "BatchPlanner");
-        assertSourceDoesNotContain(corePackage("EntityDeleter.java"), "BatchPlanner");
+    void queryLayerMayNotDependOnJdbcAdapters() throws IOException {
+        assertOnlyAllowedImports(corePackage("query"), Set.of(
+                "com.sondertara.joya.core.query",
+                "com.sondertara.joya.core.kernel",
+                "com.sondertara.joya.core.metadata",
+                "com.sondertara.joya.core.model",
+                "com.sondertara.joya.core.naming",
+                "com.sondertara.joya.core.function",
+                "com.sondertara.joya.utils",
+                "com.sondertara.joya.exceptions"
+        ));
     }
 
     @Test
-    void entityOpsFacadeMustNotAssembleStatements() throws IOException {
-        assertSourceDoesNotContain(corePackage("EntityOps.java"), "SqlStatement", "BatchSqlStatement");
+    void queryStatementAndMapperLayersMustNotBypassTemplateExecution() throws IOException {
+        for (String sub : List.of("query", "statement", "mapper")) {
+            try (Stream<Path> paths = Files.walk(corePackage(sub))) {
+                for (Path file : paths.filter(p -> p.toString().endsWith(".java")).toList()) {
+                    assertSourceDoesNotContain(file, ".connections()", ".dataSource()");
+                }
+            }
+        }
+    }
+
+    @Test
+    void txEnginesMustBorrowConnectionsOnlyThroughConnectionProvider() throws IOException {
+        try (Stream<Path> paths = Files.walk(corePackage("tx"))) {
+            for (Path file : paths.filter(p -> p.toString().endsWith(".java")).toList()) {
+                assertSourceDoesNotContain(file, ".dataSource()", "getConnection(");
+            }
+        }
+    }
+
+    @Test
+    void jdbcExecutorIsOnlyReferencedInsideTheExecutorPackage() throws IOException {
+        List<String> violations = new ArrayList<>();
+        Path mainRoot = resolveMainJavaRoot();
+        try (Stream<Path> paths = Files.walk(mainRoot)) {
+            for (Path file : paths.filter(p -> p.toString().endsWith(".java")).toList()) {
+                String relative = mainRoot.relativize(file).toString().replace('\\', '/');
+                if (relative.startsWith("com/sondertara/joya/core/kernel/executor/")) {
+                    continue;
+                }
+                if (stripComments(Files.readString(file)).contains("JdbcExecutor")) {
+                    violations.add(relative);
+                }
+            }
+        }
+        assertEquals(List.of(), violations,
+                "JdbcExecutor is an adapter behind the Executor port; depend on Executor / Executor.Factory instead");
+    }
+
+    @Test
+    void txEngineSpiMustNotExposeTxFacade() throws NoSuchMethodException {
+        Method open = com.sondertara.joya.core.tx.TxEngine.class.getMethod("open",
+                ExecutionKernel.class, com.sondertara.joya.core.tx.TxOptions.class);
+        assertEquals(com.sondertara.joya.core.tx.TxSession.class, open.getReturnType(),
+                "TxEngine 只产出物理会话；Tx 门面由 TxStarter 统一包装为 TxImpl");
+    }
+
+    /**
+     * 门面簇：{@code JoyaClient → TxStarter}、{@code Tx extends DataOps}、{@code JoyaClient → JdkMapperProxy}、
+     * {@code JoyaMapper → DataOps} 天然互相依赖，视为同一层的三个切片，显式豁免；除此之外不允许任何包级循环。
+     */
+    private static final Set<String> FACADE_CLUSTER = Set.of(
+            "com.sondertara.joya.core",
+            "com.sondertara.joya.core.mapper",
+            "com.sondertara.joya.core.tx");
+
+    @Test
+    void noPackageCyclesExceptTheFacadeCluster() throws IOException {
+        java.util.Map<String, Set<String>> graph = new java.util.TreeMap<>();
+        try (Stream<Path> paths = Files.walk(resolveMainJavaRoot())) {
+            for (Path file : paths.filter(p -> p.toString().endsWith(".java")).toList()) {
+                String content = stripComments(Files.readString(file));
+                java.util.regex.Matcher pkgMatcher = java.util.regex.Pattern
+                        .compile("(?m)^package\\s+([\\w.]+);").matcher(content);
+                assertTrue(pkgMatcher.find(), "missing package declaration: " + file);
+                String owner = pkgMatcher.group(1);
+                Set<String> deps = graph.computeIfAbsent(owner, k -> new java.util.TreeSet<>());
+                java.util.regex.Matcher ref = java.util.regex.Pattern
+                        .compile("com\\.sondertara\\.joya(?:\\.[a-z][A-Za-z0-9_]*)+").matcher(content);
+                while (ref.find()) {
+                    String target = ref.group();
+                    if (!target.equals(owner)) {
+                        deps.add(target);
+                    }
+                }
+            }
+        }
+        // 只保留指向“已存在源码包”的边（过滤掉 import 末段小写的非包片段）
+        for (Set<String> deps : graph.values()) {
+            deps.retainAll(graph.keySet());
+        }
+        List<String> violations = new ArrayList<>();
+        for (List<String> component : stronglyConnectedComponents(graph)) {
+            if (component.size() > 1 && !FACADE_CLUSTER.containsAll(component)) {
+                violations.add(String.join(" <-> ", component));
+            }
+        }
+        assertEquals(List.of(), violations,
+                "Package dependency cycles are not allowed (only the facade cluster "
+                        + FACADE_CLUSTER + " may be mutually dependent): " + violations);
+    }
+
+    @Test
+    void sqlRendererExposesOnlyAstRenderEntryPoint() {
+        List<String> publicMethods = new ArrayList<>();
+        for (Method method : SqlRenderer.class.getDeclaredMethods()) {
+            if (Modifier.isPublic(method.getModifiers())) {
+                publicMethods.add(method.getName());
+            }
+        }
+        assertEquals(List.of("render"), publicMethods,
+                "SqlRenderer must only expose AST-based render(SqlNode, StatementMetadata)");
+    }
+
+    @Test
+    void allPackagesEnforceClassLevelCycleGuardsExceptCohesiveGroups() throws IOException {
+        assertNoClassCycles(corePackage(""));
+        assertNoClassCycles(corePackage("statement"));
+        assertNoClassCycles(corePackage("statement/factory"));
+        assertNoClassCycles(corePackage("metadata"));
+        assertNoClassCycles(corePackage("naming"));
+        assertNoClassCycles(corePackage("model"));
+        assertNoClassCycles(corePackage("function"));
+        assertNoClassCycles(corePackage("listener"));
+        assertNoClassCycles(corePackage("query/criterion"));
+        assertNoClassCycles(corePackage("query/pagination"));
+        assertNoClassCycles(corePackage("query/dynamic"));
+        assertNoClassCycles(corePackage("kernel"));
+        assertNoClassCycles(corePackage("kernel/connection"));
+        assertNoClassCycles(corePackage("kernel/dialect"));
+        assertNoClassCycles(corePackage("kernel/error"));
+        assertNoClassCycles(corePackage("kernel/executor"));
+        assertNoClassCycles(corePackage("kernel/interceptor"));
+        assertNoClassCycles(corePackage("kernel/observe"));
+        assertNoClassCycles(corePackage("kernel/support"));
+        assertNoClassCycles(corePackage("mapper"));
+        assertNoClassCycles(corePackage("jdbc/resultset"));
+        assertNoClassCycles(corePackage("jdbc/resultset/mapper"));
+        assertNoClassCycles(corePackage("kernel/statement"),
+                Set.of(Set.of("ParameterBinder", "SqlParameter")));
+        assertNoClassCycles(corePackage("tx"),
+                Set.of(Set.of("IllegalTxStateException", "TxState"),
+                        Set.of("Tx", "TxCallback", "TxConsumer")));
+        assertNoClassCycles(corePackage("query"),
+                Set.of(Set.of("ColumnMetaProvider", "Expr", "JoinPart", "OnPredicate", "RenderContext", "SqlPredicate")));
+        assertNoClassCycles(corePackage("query/dsl"),
+                Set.of(Set.of("Query", "QueryExecutor", "Select1", "Select2", "Select3",
+                        "Select4", "Select5", "Select6", "Select7", "Select8", "SelectN")));
+    }
+
+    @Test
+    void statementFactoriesMustNotUseRawNodesForTablesOrSelects() throws IOException {
+        try (Stream<Path> files = Files.list(corePackage("statement/factory"))) {
+            for (Path file : files.filter(p -> p.toString().endsWith(".java")).toList()) {
+                assertSourceDoesNotContain(file, "SqlNodes.raw(", "new SqlNode.Raw(");
+            }
+        }
+    }
+
+    @Test
+    void coreDoesNotDependOnSpringAndSpringStarterRespectsLayering() throws IOException {
+        try (Stream<Path> paths = Files.walk(resolveMainJavaRoot())) {
+            for (Path file : paths.filter(p -> p.toString().endsWith(".java")).toList()) {
+                assertSourceDoesNotContain(file, "com.sondertara.joya.spring", "org.springframework");
+            }
+        }
+        Path springRoot = Path.of("joya-spring-boot-starter/src/main/java/com/sondertara/joya/spring");
+        if (!Files.isDirectory(springRoot)) {
+            springRoot = Path.of("../joya-spring-boot-starter/src/main/java/com/sondertara/joya/spring");
+        }
+        if (Files.isDirectory(springRoot)) {
+            assertOnlyAllowedImports(springRoot.resolve("support"), Set.of(
+                    "com.sondertara.joya.spring.support",
+                    "com.sondertara.joya.core",
+                    "com.sondertara.joya.exceptions",
+                    "com.sondertara.joya.utils"
+            ));
+            assertNoClassCycles(springRoot.resolve("support"));
+            assertNoClassCycles(springRoot.resolve("autoconfigure"));
+        }
+    }
+
+    /** 同一目录（不含子目录）内的类级循环检测：以简单类名的词边界引用作为依赖边。 */
+    private static void assertNoClassCycles(Path dir) throws IOException {
+        assertNoClassCycles(dir, Set.of());
+    }
+
+    private static void assertNoClassCycles(Path dir, Set<Set<String>> allowedCohesiveGroups) throws IOException {
+        java.util.Map<String, String> sources = new java.util.TreeMap<>();
+        try (Stream<Path> files = Files.list(dir)) {
+            for (Path file : files.filter(p -> p.toString().endsWith(".java")).toList()) {
+                String name = file.getFileName().toString().replace(".java", "");
+                sources.put(name, stripComments(Files.readString(file)));
+            }
+        }
+        java.util.Map<String, Set<String>> graph = new java.util.TreeMap<>();
+        for (java.util.Map.Entry<String, String> entry : sources.entrySet()) {
+            Set<String> deps = graph.computeIfAbsent(entry.getKey(), k -> new java.util.TreeSet<>());
+            for (String other : sources.keySet()) {
+                if (!other.equals(entry.getKey())
+                        && java.util.regex.Pattern.compile("\\b" + other + "\\b").matcher(entry.getValue()).find()) {
+                    deps.add(other);
+                }
+            }
+        }
+        List<String> violations = new ArrayList<>();
+        for (List<String> component : stronglyConnectedComponents(graph)) {
+            if (component.size() > 1 && !allowedCohesiveGroups.contains(Set.copyOf(component))) {
+                violations.add(String.join(" <-> ", component));
+            }
+        }
+        assertEquals(List.of(), violations, "Class-level cycles in " + dir + ": " + violations);
+    }
+
+    /** Tarjan 强连通分量（纯 JDK 实现，保证守卫测试零额外依赖）。 */
+    private static List<List<String>> stronglyConnectedComponents(java.util.Map<String, Set<String>> graph) {
+        java.util.Map<String, Integer> index = new java.util.HashMap<>();
+        java.util.Map<String, Integer> low = new java.util.HashMap<>();
+        java.util.Deque<String> stack = new java.util.ArrayDeque<>();
+        Set<String> onStack = new java.util.HashSet<>();
+        List<List<String>> result = new ArrayList<>();
+        int[] counter = {0};
+        for (String node : graph.keySet()) {
+            if (!index.containsKey(node)) {
+                strongConnect(node, graph, index, low, stack, onStack, result, counter);
+            }
+        }
+        return result;
+    }
+
+    private static void strongConnect(String v, java.util.Map<String, Set<String>> graph,
+                                      java.util.Map<String, Integer> index, java.util.Map<String, Integer> low,
+                                      java.util.Deque<String> stack, Set<String> onStack,
+                                      List<List<String>> result, int[] counter) {
+        index.put(v, counter[0]);
+        low.put(v, counter[0]);
+        counter[0]++;
+        stack.push(v);
+        onStack.add(v);
+        for (String w : graph.getOrDefault(v, Set.of())) {
+            if (!index.containsKey(w)) {
+                strongConnect(w, graph, index, low, stack, onStack, result, counter);
+                low.put(v, Math.min(low.get(v), low.get(w)));
+            } else if (onStack.contains(w)) {
+                low.put(v, Math.min(low.get(v), index.get(w)));
+            }
+        }
+        if (low.get(v).equals(index.get(v))) {
+            List<String> component = new ArrayList<>();
+            String w;
+            do {
+                w = stack.pop();
+                onStack.remove(w);
+                component.add(w);
+            } while (!w.equals(v));
+            java.util.Collections.sort(component);
+            result.add(component);
+        }
     }
 
     // ===== 实现 =====

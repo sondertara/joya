@@ -1,30 +1,30 @@
 package com.sondertara.joya.core.kernel.executor;
 
 import com.sondertara.joya.core.kernel.connection.ConnectionCallback;
-import com.sondertara.joya.core.kernel.executor.ListRecordExtractor;
-import com.sondertara.joya.core.kernel.executor.ResultSetExtractor;
-import com.sondertara.joya.core.kernel.executor.RowMapper;
+import com.sondertara.joya.core.kernel.error.SqlExceptionTranslator;
 import com.sondertara.joya.core.kernel.support.LoggingOutputStream;
 import com.sondertara.joya.core.kernel.support.ScriptRunner;
-import com.sondertara.joya.core.kernel.ExecutionOptions;
 import com.sondertara.joya.core.kernel.connection.ConnectionProvider;
-import com.sondertara.joya.core.kernel.executor.Executor;
 import com.sondertara.joya.core.kernel.statement.BatchSqlStatement;
 import com.sondertara.joya.core.kernel.statement.ColumnBinding;
+import com.sondertara.joya.core.kernel.statement.DbType;
 import com.sondertara.joya.core.kernel.statement.ParameterBinder;
 import com.sondertara.joya.core.kernel.statement.SqlParameter;
 import com.sondertara.joya.core.kernel.statement.SqlStatement;
 import com.sondertara.joya.exceptions.DbException;
-import com.sondertara.joya.utils.SqlFormatUtils;
+import com.sondertara.joya.core.kernel.statement.SqlFormatUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.event.Level;
 
 import java.io.PrintWriter;
 import java.io.Reader;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Proxy;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
@@ -32,6 +32,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.OptionalInt;
 import java.util.stream.Stream;
+import org.jspecify.annotations.Nullable;
 
 /**
  * JDBC 执行器：只负责"借连接 → 执行 SQL → 还连接"。
@@ -46,25 +47,70 @@ public class JdbcExecutor implements Executor {
     private static final Logger logger = LoggerFactory.getLogger(JdbcExecutor.class);
 
     private final ConnectionProvider connections;
+    private final SqlExceptionTranslator exceptionTranslator;
 
-    public JdbcExecutor(ConnectionProvider connections) {
+    public JdbcExecutor(ConnectionProvider connections, SqlExceptionTranslator exceptionTranslator) {
         this.connections = Objects.requireNonNull(connections, "connectionProvider must not be null");
-    }
-
-    public ConnectionProvider connections() {
-        return connections;
+        this.exceptionTranslator = exceptionTranslator == null ? SqlExceptionTranslator.DEFAULT : exceptionTranslator;
     }
 
     // ===== 连接作用域 =====
 
     @Override
     public <T> T withConnection(ConnectionCallback<T> action) {
+        Objects.requireNonNull(action, "action must not be null");
+        return withConnection(null, conn -> action.doWork(guardConnection(conn)));
+    }
+
+    private Connection guardConnection(Connection target) {
+        boolean transactional = connections instanceof ResultSetSpliterator.StreamAccess;
+        return (Connection) Proxy.newProxyInstance(
+                Connection.class.getClassLoader(),
+                new Class<?>[]{Connection.class},
+                (proxy, method, args) -> {
+                    String name = method.getName();
+                    if ("close".equals(name) || "abort".equals(name)) {
+                        return null;
+                    }
+                    if (transactional && isTransactionControlMethod(name)) {
+                        throw new UnsupportedOperationException(
+                                "Cannot invoke " + name + "() directly on a Joya-managed transactional Connection; "
+                                        + "use Tx APIs (commit / rollback / savepoint) instead");
+                    }
+                    if ("equals".equals(name)) {
+                        Object other = args != null && args.length > 0 ? args[0] : null;
+                        return proxy == other || target.equals(other);
+                    }
+                    if ("hashCode".equals(name)) {
+                        return System.identityHashCode(proxy);
+                    }
+                    if ("toString".equals(name)) {
+                        return "JoyaGuardedConnection[" + target + "]";
+                    }
+                    try {
+                        return method.invoke(target, args);
+                    } catch (InvocationTargetException e) {
+                        throw e.getTargetException();
+                    }
+                });
+    }
+
+    private static boolean isTransactionControlMethod(String methodName) {
+        return switch (methodName) {
+            case "commit", "rollback", "setAutoCommit",
+                    "setSavepoint", "releaseSavepoint",
+                    "setTransactionIsolation", "setReadOnly" -> true;
+            default -> false;
+        };
+    }
+
+    private <T> T withConnection(@Nullable SqlStatement statement, ConnectionCallback<T> action) {
         Connection conn = null;
         try {
             conn = connections.acquire();
             return action.doWork(conn);
         } catch (SQLException e) {
-            throw new DbException(e);
+            throw exceptionTranslator.translate("jdbc", statement, e);
         } finally {
             releaseQuietly(conn);
         }
@@ -85,7 +131,7 @@ public class JdbcExecutor implements Executor {
 
     @Override
     public <T> T query(SqlStatement statement, ResultSetExtractor<T> extractor) {
-        return withConnection(conn -> {
+        return withConnection(statement, conn -> {
             try (PreparedStatement ps = prepare(conn, statement, false);
                  ResultSet rs = ps.executeQuery()) {
                 return extractor.extract(rs);
@@ -101,7 +147,7 @@ public class JdbcExecutor implements Executor {
     @Override
     public <T> Stream<T> queryStream(SqlStatement statement, RowMapper<T> mapper) {
         var dbType = statement.metadata().dbType();
-        int fetchSize = dbType != null && dbType.isLikeMysql() ? Integer.MIN_VALUE : 2000;
+        int fetchSize = dbType != null ? dbType.defaultStreamFetchSize() : 2000;
         return queryStream(statement, mapper, fetchSize);
     }
 
@@ -122,15 +168,18 @@ public class JdbcExecutor implements Executor {
                     ? access
                     : null;
             java.util.concurrent.atomic.AtomicBoolean cleanedUp = new java.util.concurrent.atomic.AtomicBoolean();
+            java.util.concurrent.atomic.AtomicReference<Runnable> cleanupRef =
+                    new java.util.concurrent.atomic.AtomicReference<>();
             Runnable cleanup = () -> {
                 if (cleanedUp.compareAndSet(false, true)) {
                     closeStreamResources(
                             capturedRs,
                             capturedPs,
                             capturedConn,
-                            streamAccess != null ? streamAccess::onStreamClosed : null);
+                            streamAccess != null ? () -> streamAccess.onStreamClosed(cleanupRef.get()) : null);
                 }
             };
+            cleanupRef.set(cleanup);
             // 流关闭时才归还连接；事务边界也可通过 StreamAccess 对称清理同一组资源。
             Stream<T> stream = new ResultSetSpliterator<>(capturedRs, mapper, streamAccess)
                     .stream()
@@ -147,13 +196,16 @@ public class JdbcExecutor implements Executor {
             if (t instanceof Error err) {
                 throw err;
             }
+            if (t instanceof SQLException sqlException) {
+                throw exceptionTranslator.translate("queryStream", statement, sqlException);
+            }
             throw new DbException(t);
         }
     }
 
     @Override
     public int update(SqlStatement statement) {
-        return withConnection(conn -> {
+        return withConnection(statement, conn -> {
             try (PreparedStatement ps = prepare(conn, statement, false)) {
                 return ps.executeUpdate();
             }
@@ -161,28 +213,20 @@ public class JdbcExecutor implements Executor {
     }
 
     @Override
-    public Object insert(SqlStatement statement) {
-        return insertExecute(statement).generatedKey();
-    }
-
-    @Override
     public InsertSlice insertExecute(SqlStatement statement) {
-        return withConnection(conn -> {
+        String pkColumn = statement.metadata() != null ? statement.metadata().primaryKey() : null;
+        return withConnection(statement, conn -> {
             try (PreparedStatement ps = prepare(conn, statement, true)) {
                 int affected = ps.executeUpdate();
                 try (ResultSet keys = ps.getGeneratedKeys()) {
-                    Object key = keys != null && keys.next() ? keys.getObject(1) : null;
+                    Object key = keys != null && keys.next() ? extractGeneratedKey(keys, pkColumn) : null;
                     return new InsertSlice(affected, key);
                 } catch (SQLException | RuntimeException | AbstractMethodError ignored) {
+                    logger.debug("Failed to read generated keys after insert; returning affected rows without key", ignored);
                     return new InsertSlice(affected, null);
                 }
             }
         });
-    }
-
-    @Override
-    public int[] batchUpdate(BatchSqlStatement batch) {
-        return batchExecute(batch).batchCounts();
     }
 
     @Override
@@ -195,8 +239,10 @@ public class JdbcExecutor implements Executor {
         int totalRows = rows.size();
         int chunkSize = batch.batchSize() > 0 ? batch.batchSize() : ExecutionOptions.DEFAULT_BATCH_SIZE;
         boolean wantKeys = batch.returnGeneratedKeys();
+        String pkColumn = batch.metadata() != null ? batch.metadata().primaryKey() : null;
 
-        return withConnection(conn -> {
+        SqlStatement probe = SqlStatement.of(batch.sql(), List.of(), batch.metadata());
+        return withConnection(probe, conn -> {
             int[] allCounts = new int[totalRows];
             int countOffset = 0;
             List<Object> generatedKeys = wantKeys ? new ArrayList<>(totalRows) : List.of();
@@ -215,60 +261,23 @@ public class JdbcExecutor implements Executor {
                         ColumnBinding column = columns.get(c);
                         column.binder().bindValue(ps, c + 1, column.name(), row[c]);
                     }
+                    List<ColumnBinding> extraColumns = batch.extraColumns();
+                    List<Object> extraValues = batch.extraValues();
+                    for (int e = 0; e < extraColumns.size(); e++) {
+                        ColumnBinding column = extraColumns.get(e);
+                        column.binder().bindValue(ps, columns.size() + e + 1, column.name(), extraValues.get(e));
+                    }
                     ps.addBatch();
                     inChunk++;
                     if (inChunk >= chunkSize) {
-                        countOffset = flushChunk(ps, allCounts, countOffset, wantKeys, generatedKeys);
+                        countOffset = flushChunk(ps, allCounts, countOffset, wantKeys, pkColumn, generatedKeys);
                         inChunk = 0;
                     }
                 }
                 if (inChunk > 0) {
-                    flushChunk(ps, allCounts, countOffset, wantKeys, generatedKeys);
+                    flushChunk(ps, allCounts, countOffset, wantKeys, pkColumn, generatedKeys);
                 }
                 return BatchSlice.of(allCounts, generatedKeys);
-            }
-        });
-    }
-
-    @Override
-    public int[] batchUpdate(SqlStatement template, List<Object[]> rows) {
-        return batchUpdate(template, rows, ExecutionOptions.DEFAULT_BATCH_SIZE);
-    }
-
-    public int[] batchUpdate(SqlStatement template, List<Object[]> rows, int batchSize) {
-        if (rows == null || rows.isEmpty()) {
-            return new int[0];
-        }
-        int totalRows = rows.size();
-        int chunkSize = batchSize > 0 ? batchSize : ExecutionOptions.DEFAULT_BATCH_SIZE;
-        var dbType = template.metadata() != null ? template.metadata().dbType() : null;
-        int expectedParams = SqlFormatUtils.countPlaceholders(template.sql(), dbType);
-        return withConnection(conn -> {
-            int[] allCounts = new int[totalRows];
-            int countOffset = 0;
-            try (PreparedStatement ps = prepare(conn, template.sql(), dbType, false)) {
-                int inChunk = 0;
-                for (int r = 0; r < totalRows; r++) {
-                    Object[] row = rows.get(r);
-                    if (row == null) {
-                        throw new IllegalArgumentException("Batch row at index " + r + " must not be null");
-                    }
-                    if (expectedParams > 0 && row.length != expectedParams) {
-                        throw new IllegalArgumentException("Batch row at index " + r + " has " + row.length
-                                + " parameters, but SQL expects " + expectedParams + ": " + template.sql());
-                    }
-                    bindRow(ps, row);
-                    ps.addBatch();
-                    inChunk++;
-                    if (inChunk >= chunkSize) {
-                        countOffset = flushChunk(ps, allCounts, countOffset, false, List.of());
-                        inChunk = 0;
-                    }
-                }
-                if (inChunk > 0) {
-                    flushChunk(ps, allCounts, countOffset, false, List.of());
-                }
-                return allCounts;
             }
         });
     }
@@ -278,6 +287,7 @@ public class JdbcExecutor implements Executor {
             int[] allCounts,
             int countOffset,
             boolean wantKeys,
+            @Nullable String pkColumn,
             List<Object> generatedKeys
     ) throws SQLException {
         int[] chunkCounts = ps.executeBatch();
@@ -291,7 +301,7 @@ public class JdbcExecutor implements Executor {
         if (wantKeys) {
             try (ResultSet keys = ps.getGeneratedKeys()) {
                 while (keys != null && keys.next()) {
-                    generatedKeys.add(keys.getObject(1));
+                    generatedKeys.add(extractGeneratedKey(keys, pkColumn));
                 }
             } catch (SQLException | RuntimeException | AbstractMethodError ignored) {
                 // 部分驱动在 executeBatch 后不支持 getGeneratedKeys，优雅降级不阻断主流程
@@ -299,6 +309,26 @@ public class JdbcExecutor implements Executor {
         }
         ps.clearBatch();
         return countOffset;
+    }
+
+    private static @Nullable Object extractGeneratedKey(ResultSet keys, @Nullable String pkColumn) throws SQLException {
+        if (pkColumn != null && !pkColumn.isEmpty()) {
+            try {
+                ResultSetMetaData metaData = keys.getMetaData();
+                if (metaData != null && metaData.getColumnCount() > 1) {
+                    for (int i = 1; i <= metaData.getColumnCount(); i++) {
+                        String label = metaData.getColumnLabel(i);
+                        String name = metaData.getColumnName(i);
+                        if (pkColumn.equalsIgnoreCase(label) || pkColumn.equalsIgnoreCase(name)) {
+                            return keys.getObject(i);
+                        }
+                    }
+                }
+            } catch (SQLException ignored) {
+                // 元数据不可用时回退到第 1 列
+            }
+        }
+        return keys.getObject(1);
     }
 
     @Override
@@ -350,7 +380,7 @@ public class JdbcExecutor implements Executor {
     private PreparedStatement prepare(
             Connection conn,
             String sql,
-            com.sondertara.joya.core.kernel.dialect.DbType dbType,
+            DbType dbType,
             boolean generatedKeys,
             Object... params
     ) throws SQLException {
@@ -461,24 +491,6 @@ public class JdbcExecutor implements Executor {
                 // 清理阶段异常不掩盖主流程
             }
         }
-    }
-
-    /**
-     * 创建并绑定预处理语句（支持 {@code ?1 ?2} 序号占位符，自动转为 JDBC 风格）。
-     */
-    public static PreparedStatement createPreparedStatement(Connection conn, String sql, boolean autoGeneratedKeys,
-                                                            Object... params) throws SQLException {
-        String jdbcStyleSql = SqlFormatUtils.getJdbcStyleSql(sql);
-        PreparedStatement stmt = autoGeneratedKeys
-                ? conn.prepareStatement(jdbcStyleSql, Statement.RETURN_GENERATED_KEYS)
-                : conn.prepareStatement(jdbcStyleSql);
-        try {
-            bindRow(stmt, params);
-        } catch (SQLException | RuntimeException e) {
-            closeQuietly(stmt);
-            throw e;
-        }
-        return stmt;
     }
 
     private static void bindRow(PreparedStatement stmt, Object[] params) throws SQLException {

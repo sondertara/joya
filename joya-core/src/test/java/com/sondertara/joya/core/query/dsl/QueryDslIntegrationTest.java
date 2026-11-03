@@ -1,19 +1,22 @@
 package com.sondertara.joya.core.query.dsl;
 
+import com.sondertara.joya.core.query.Expr;
 import com.sondertara.joya.core.JoyaClient;
 import com.sondertara.joya.core.JoyaSettings;
-import com.sondertara.joya.core.kernel.dialect.DbType;
+import com.sondertara.joya.core.kernel.statement.DbType;
 import com.sondertara.joya.core.kernel.dialect.QuoteStyle;
 import com.sondertara.joya.core.kernel.interceptor.Chain;
 import com.sondertara.joya.core.kernel.interceptor.RewriteContext;
 import com.sondertara.joya.core.kernel.interceptor.SqlInterceptor;
 import com.sondertara.joya.core.kernel.statement.SqlStatement;
 import com.sondertara.joya.core.query.PageResult;
-import com.sondertara.joya.core.query.pagination.FieldParam;
-import com.sondertara.joya.core.query.pagination.OrderParam;
-import com.sondertara.joya.core.query.pagination.PageQueryParam;
-import com.sondertara.joya.core.query.pagination.PageQueryParams;
+import com.sondertara.joya.core.query.dynamic.PageQueryParams;
+import com.sondertara.joya.core.query.pagination.FilterCondition;
+import com.sondertara.joya.core.query.pagination.FilterOperator;
+import com.sondertara.joya.core.query.pagination.PageQueryRequest;
 import com.sondertara.joya.core.query.pagination.PageRequest;
+import com.sondertara.joya.core.query.pagination.SortCondition;
+import com.sondertara.joya.core.query.pagination.SortDirection;
 import org.h2.jdbcx.JdbcDataSource;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -149,7 +152,7 @@ class QueryDslIntegrationTest {
         }
     }
 
-    /** 宽 DTO：含 @Column 与 @Transient 字段。 */
+    /** 跨表宽 DTO：含 @Column 与 @Transient 字段。 */
     public static class UserDeptBriefDto {
         private String name;
         @Column(name = "dept_name")
@@ -163,6 +166,39 @@ class QueryDslIntegrationTest {
 
         public void setName(String name) {
             this.name = name;
+        }
+
+        public String getDepartment() {
+            return department;
+        }
+
+        public void setDepartment(String department) {
+            this.department = department;
+        }
+
+        public String getIgnoredRemark() {
+            return ignoredRemark;
+        }
+
+        public void setIgnoredRemark(String ignoredRemark) {
+            this.ignoredRemark = ignoredRemark;
+        }
+    }
+
+    /** 单表宽 DTO：含 @Column 与 @Transient 字段。 */
+    public static class DeptBriefDto {
+        private Long id;
+        @Column(name = "dept_name")
+        private String department;
+        @Transient
+        private String ignoredRemark = "keep";
+
+        public Long getId() {
+            return id;
+        }
+
+        public void setId(Long id) {
+            this.id = id;
         }
 
         public String getDepartment() {
@@ -255,15 +291,22 @@ class QueryDslIntegrationTest {
         assertEquals(10L, depts.get(0).getId());
         assertEquals("R&D", depts.get(0).getDeptName());
 
-        // 宽 DTO 自动跨表匹配无歧义字段（name 来自 User，@Column("dept_name") 来自 Dept，跳过 @Transient）
-        List<UserDeptBriefDto> briefs = joya.from(User.class)
-                .join(User::getDeptId, Dept::getId)
-                .where(w -> w.eq(User::getId, 1L))
-                .list(UserDeptBriefDto.class);
+        // 单表宽 DTO 自动匹配主表字段与 @Column("dept_name")，并跳过 @Transient
+        List<DeptBriefDto> briefs = joya.from(Dept.class)
+                .where(w -> w.eq(Dept::getId, 10L))
+                .list(DeptBriefDto.class);
         assertEquals(1, briefs.size());
-        assertEquals("Alice", briefs.get(0).getName());
+        assertEquals(10L, briefs.get(0).getId());
         assertEquals("R&D", briefs.get(0).getDepartment());
         assertEquals("keep", briefs.get(0).getIgnoredRemark());
+
+        // 联表后对非实体 DTO 不写 select 直接调用 list(DTO.class) 应拒绝并引导显式 select(...)
+        IllegalStateException ex = assertThrows(IllegalStateException.class, () ->
+                joya.from(User.class)
+                        .join(User::getDeptId, Dept::getId)
+                        .where(w -> w.eq(User::getId, 1L))
+                        .list(UserDeptBriefDto.class));
+        assertTrue(ex.getMessage().contains("select(...)"), ex.getMessage());
     }
 
     @Test
@@ -361,23 +404,28 @@ class QueryDslIntegrationTest {
 
     @Test
     void checklist_9_pageQueryParamsNestedAndOrConditions() {
-        PageQueryParam param = new PageQueryParam();
-        param.page(0);
-        param.pageSize(10);
-        param.addSearchParam("deptId", 10L, FieldParam.Operator.EQ);
+        PageQueryRequest param = new PageQueryRequest()
+                .pageNum(1)
+                .pageSize(10)
+                .addFilter("deptId", FilterOperator.EQ, 10L);
 
-        PageQueryParam.Nested nested = new PageQueryParam.Nested();
-        nested.addOrParam("name", "Alice", FieldParam.Operator.EQ);
-        nested.addOrParam("name", "Bob", FieldParam.Operator.EQ);
-        param.setNested(nested);
-        param.setOrderList(List.of(new OrderParam("age", OrderParam.OrderBy.ASC)));
+        PageQueryRequest.Nested nested = new PageQueryRequest.Nested()
+                .addOr("name", FilterOperator.EQ, "Alice")
+                .addOr("name", FilterOperator.EQ, "Bob");
+        param.nested(nested)
+                .addSortAsc("age");
 
         PageResult<User> result = joya.from(User.class)
                 .apply(PageQueryParams.of(param))
                 .page(param.toPageRequest());
-        assertEquals(2L, result.getTotal());
-        assertEquals("Bob", result.getData().get(0).getName());
-        assertEquals("Alice", result.getData().get(1).getName());
+        assertEquals(2L, result.total());
+        assertEquals(2, result.items().size());
+        assertEquals(1, result.pageNum());
+        assertEquals(10, result.pageSize());
+        assertFalse(result.hasPrev());
+        assertFalse(result.hasNext());
+        assertEquals("Bob", result.items().get(0).getName());
+        assertEquals("Alice", result.items().get(1).getName());
     }
 
     @Test
@@ -420,8 +468,8 @@ class QueryDslIntegrationTest {
 
     @Test
     void pageQueryParamsBoxesPrimitiveArrays() {
-        PageQueryParam param = new PageQueryParam();
-        param.addSearchParam("id", new int[]{1, 3}, FieldParam.Operator.IN);
+        PageQueryRequest param = new PageQueryRequest()
+                .addFilter("id", FilterOperator.IN, new int[]{1, 3});
 
         List<User> users = joya.from(User.class)
                 .apply(PageQueryParams.of(param))
@@ -429,6 +477,49 @@ class QueryDslIntegrationTest {
                 .list();
 
         assertEquals(List.of(1L, 3L), users.stream().map(User::getId).toList());
+    }
+
+    @Test
+    void pageQueryParams_supportsExtendedFilterOperatorsAndNeedTotalFalse() {
+        executedStatements.clear();
+
+        // 1. needTotal = false 跳过 COUNT SQL，total = -1，totalPages = -1，hasPrev / hasNext 正常工作
+        PageQueryRequest noTotalReq = new PageQueryRequest()
+                .pageNum(1)
+                .pageSize(2)
+                .needTotal(false)
+                .addSortAsc("id");
+        PageResult<User> slicePage = joya.from(User.class)
+                .apply(PageQueryParams.of(noTotalReq))
+                .page(noTotalReq.toPageRequest());
+
+        assertEquals(1, executedStatements.size(), "needTotal=false 应只执行 1 条数据查询 SQL，不执行 COUNT");
+        assertEquals(-1L, slicePage.total());
+        assertEquals(-1, slicePage.getTotalPages());
+        assertEquals(2, slicePage.items().size());
+        assertEquals(1, slicePage.pageNum());
+        assertEquals(2, slicePage.pageSize());
+        assertFalse(slicePage.hasPrev());
+        assertTrue(slicePage.hasNext());
+
+        // 2. NOT_IN / BETWEEN / IS_NULL / IS_NOT_NULL 与 FilterOperator.fromCode
+        PageQueryRequest extFilterReq = new PageQueryRequest()
+                .addFilter(FilterCondition.of("id", FilterOperator.fromCode("notIn"), List.of(2L)))
+                .addFilter(FilterCondition.of("id", FilterOperator.fromCode("between"), List.of(1L, 3L)))
+                .addFilter(FilterCondition.of("age", FilterOperator.fromCode("isNotNull"), null));
+        List<User> filtered = joya.from(User.class)
+                .apply(PageQueryParams.of(extFilterReq))
+                .orderByAsc(User::getId)
+                .list();
+        assertEquals(List.of(1L), filtered.stream().map(User::getId).toList());
+
+        PageQueryRequest isNullReq = new PageQueryRequest()
+                .addFilter(FilterCondition.of("age", FilterOperator.fromCode("isNull"), null));
+        List<User> nullAgeUsers = joya.from(User.class)
+                .apply(PageQueryParams.of(isNullReq))
+                .list();
+        assertEquals(1, nullAgeUsers.size());
+        assertEquals("Charlie", nullAgeUsers.get(0).getName());
     }
 
     @Test
@@ -441,13 +532,12 @@ class QueryDslIntegrationTest {
                         .build())
                 .build();
 
-        List<UserDeptBriefDto> rows = quoted.from(User.class)
-                .join(User::getDeptId, Dept::getId)
-                .where(w -> w.eq(User::getId, 1L))
-                .list(UserDeptBriefDto.class);
+        List<DeptBriefDto> rows = quoted.from(Dept.class)
+                .where(w -> w.eq(Dept::getId, 10L))
+                .list(DeptBriefDto.class);
 
         assertEquals(1, rows.size());
-        assertEquals("Alice", rows.get(0).getName());
+        assertEquals(10L, rows.get(0).getId());
         assertEquals("R&D", rows.get(0).getDepartment());
     }
 

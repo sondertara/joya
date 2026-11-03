@@ -50,7 +50,7 @@ public final class DataSourceConnectionProvider implements ConnectionProvider {
     @Override
     public void release(Connection connection) throws SQLException {
         if (connection != null) {
-            boolean restoreManual = flippedAutoCommit.remove(connection);
+            boolean restoreManual = !flippedAutoCommit.isEmpty() && flippedAutoCommit.remove(connection);
             SQLException restoreError = null;
             if (restoreManual) {
                 try {
@@ -77,5 +77,9 @@ public final class DataSourceConnectionProvider implements ConnectionProvider {
     @Override
     public OptionalInt queryTimeoutSeconds() {
         return queryTimeoutSeconds > 0 ? OptionalInt.of(queryTimeoutSeconds) : OptionalInt.empty();
+    }
+
+    public DataSource dataSource() {
+        return dataSource;
     }
 }

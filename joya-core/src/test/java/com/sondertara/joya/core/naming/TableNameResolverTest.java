@@ -1,6 +1,6 @@
 package com.sondertara.joya.core.naming;
 
-import com.sondertara.joya.core.cache.CacheHolder;
+import com.sondertara.joya.core.metadata.LocalTableMetaCache;
 import com.sondertara.joya.core.kernel.statement.BatchSqlStatement;
 import com.sondertara.joya.core.kernel.statement.SqlStatement;
 import com.sondertara.joya.core.metadata.EntityMetadataContext;
@@ -70,7 +70,7 @@ class TableNameResolverTest {
             (schema == null ? "" : schema + ".") + table + "_202610";
 
     private static EntityMetadataContext meta(Class<?> type) {
-        return CacheHolder.tableMetaCache().getMetadataContext(type);
+        return LocalTableMetaCache.getMetadataContext(type);
     }
 
     @Test
