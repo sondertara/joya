@@ -19,12 +19,9 @@ import lombok.Getter;
 import org.jspecify.annotations.Nullable;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
-import java.util.StringJoiner;
 import java.util.function.UnaryOperator;
 
 /**
@@ -91,17 +88,7 @@ public class WhereCriterion implements OnPredicate {
     /**
      * 获取已收集的惰性谓词列表（只读视图）。
      */
-    public List<SqlPredicate> getPredicates() {
-        return Collections.unmodifiableList(predicates);
-    }
 
-    /**
-     * 将当前条件构建器中的所有谓词渲染到目标 SQL 缓冲与参数列表中。
-     */
-    @Override
-    public void render(RenderContext ctx, StringBuilder sql, SqlParameterList params, ParameterSource source) {
-        GroupPredicate.renderChildren(currentOpt, predicates, ctx, sql, params, source);
-    }
 
     /**
      * 把当前条件树转换为主干与叶子均结构化的 {@link SqlNode}（仅调用方通过 {@link #addCondition}
@@ -131,32 +118,37 @@ public class WhereCriterion implements OnPredicate {
             return this;
         }
         Object[] capturedParams = params == null ? new Object[0] : params.clone();
-        predicates.add(new NodePredicate((ctx, source) -> {
-            String formatted = SqlFormatUtils.underlineColumn(part.trim());
-            formatted = SqlFormatUtils.getJdbcStyleSql(formatted);
+        String formatted = SqlFormatUtils.getJdbcStyleSql(SqlFormatUtils.underlineColumn(part.trim()));
+        int expected = SqlFormatUtils.countPlaceholders(formatted);
+        if (expected != capturedParams.length) {
+            throw new IllegalArgumentException("Placeholder count mismatch in addCondition(\"" + part
+                    + "\"): expected " + expected + " parameter(s), got " + capturedParams.length);
+        }
+        predicates.add((ctx, source) -> {
+            String rendered = formatted;
             if (!ctx.isAliased()) {
-                formatted = SqlFormatUtils.stripTableAlias(formatted);
+                rendered = SqlFormatUtils.stripTableAlias(rendered);
             }
-            if (formatted.isEmpty()) {
+            if (rendered.isEmpty()) {
                 return null;
             }
             SqlParameterList paramList = new SqlParameterList();
             for (Object param : capturedParams) {
                 paramList.add(null, param, source);
             }
-            return SqlNodes.raw(formatted, paramList.toList());
-        }));
+            return SqlNodes.raw(rendered, paramList.toList());
+        });
         return this;
     }
 
     // ==================== 比较条件（严格非空：传 null 立即抛 IllegalArgumentException） ====================
 
     public <T> WhereCriterion eq(IGetter<T, ?> fn, Object value) {
-        return addBinaryComparison(ColumnMetaProvider.fromGetter(fn), " = ?", requireValue("eq", value));
+        return addBinaryComparison(ColumnMetaProvider.fromGetter(fn), "=", requireValue("eq", value));
     }
 
     public WhereCriterion eq(String columnName, Object value) {
-        return addBinaryComparison(ColumnMetaProvider.fromName(columnName), " = ?", requireValue("eq", value));
+        return addBinaryComparison(ColumnMetaProvider.fromName(columnName), "=", requireValue("eq", value));
     }
 
     public <L, R> WhereCriterion eq(IGetter<L, ?> left, IGetter<R, ?> right) {
@@ -164,11 +156,11 @@ public class WhereCriterion implements OnPredicate {
     }
 
     public <T> WhereCriterion ne(IGetter<T, ?> fn, Object value) {
-        return addBinaryComparison(ColumnMetaProvider.fromGetter(fn), " <> ?", requireValue("ne", value));
+        return addBinaryComparison(ColumnMetaProvider.fromGetter(fn), "<>", requireValue("ne", value));
     }
 
     public WhereCriterion ne(String columnName, Object value) {
-        return addBinaryComparison(ColumnMetaProvider.fromName(columnName), " <> ?", requireValue("ne", value));
+        return addBinaryComparison(ColumnMetaProvider.fromName(columnName), "<>", requireValue("ne", value));
     }
 
     public <L, R> WhereCriterion ne(IGetter<L, ?> left, IGetter<R, ?> right) {
@@ -176,11 +168,11 @@ public class WhereCriterion implements OnPredicate {
     }
 
     public <T> WhereCriterion gt(IGetter<T, ?> fn, Object value) {
-        return addBinaryComparison(ColumnMetaProvider.fromGetter(fn), " > ?", requireValue("gt", value));
+        return addBinaryComparison(ColumnMetaProvider.fromGetter(fn), ">", requireValue("gt", value));
     }
 
     public WhereCriterion gt(String columnName, Object value) {
-        return addBinaryComparison(ColumnMetaProvider.fromName(columnName), " > ?", requireValue("gt", value));
+        return addBinaryComparison(ColumnMetaProvider.fromName(columnName), ">", requireValue("gt", value));
     }
 
     public <L, R> WhereCriterion gt(IGetter<L, ?> left, IGetter<R, ?> right) {
@@ -188,11 +180,11 @@ public class WhereCriterion implements OnPredicate {
     }
 
     public <T> WhereCriterion gte(IGetter<T, ?> fn, Object value) {
-        return addBinaryComparison(ColumnMetaProvider.fromGetter(fn), " >= ?", requireValue("gte", value));
+        return addBinaryComparison(ColumnMetaProvider.fromGetter(fn), ">=", requireValue("gte", value));
     }
 
     public WhereCriterion gte(String columnName, Object value) {
-        return addBinaryComparison(ColumnMetaProvider.fromName(columnName), " >= ?", requireValue("gte", value));
+        return addBinaryComparison(ColumnMetaProvider.fromName(columnName), ">=", requireValue("gte", value));
     }
 
     public <L, R> WhereCriterion gte(IGetter<L, ?> left, IGetter<R, ?> right) {
@@ -200,11 +192,11 @@ public class WhereCriterion implements OnPredicate {
     }
 
     public <T> WhereCriterion lt(IGetter<T, ?> fn, Object value) {
-        return addBinaryComparison(ColumnMetaProvider.fromGetter(fn), " < ?", requireValue("lt", value));
+        return addBinaryComparison(ColumnMetaProvider.fromGetter(fn), "<", requireValue("lt", value));
     }
 
     public WhereCriterion lt(String columnName, Object value) {
-        return addBinaryComparison(ColumnMetaProvider.fromName(columnName), " < ?", requireValue("lt", value));
+        return addBinaryComparison(ColumnMetaProvider.fromName(columnName), "<", requireValue("lt", value));
     }
 
     public <L, R> WhereCriterion lt(IGetter<L, ?> left, IGetter<R, ?> right) {
@@ -212,11 +204,11 @@ public class WhereCriterion implements OnPredicate {
     }
 
     public <T> WhereCriterion lte(IGetter<T, ?> fn, Object value) {
-        return addBinaryComparison(ColumnMetaProvider.fromGetter(fn), " <= ?", requireValue("lte", value));
+        return addBinaryComparison(ColumnMetaProvider.fromGetter(fn), "<=", requireValue("lte", value));
     }
 
     public WhereCriterion lte(String columnName, Object value) {
-        return addBinaryComparison(ColumnMetaProvider.fromName(columnName), " <= ?", requireValue("lte", value));
+        return addBinaryComparison(ColumnMetaProvider.fromName(columnName), "<=", requireValue("lte", value));
     }
 
     public <L, R> WhereCriterion lte(IGetter<L, ?> left, IGetter<R, ?> right) {
@@ -230,8 +222,8 @@ public class WhereCriterion implements OnPredicate {
         requireValue(method, right);
         ColumnMetaProvider leftProvider = ColumnMetaProvider.fromGetter(left);
         ColumnMetaProvider rightProvider = ColumnMetaProvider.fromGetter(right);
-        predicates.add(new NodePredicate((ctx, source) ->
-                new SqlNode.Binary(operator, leftProvider.resolveNode(ctx), rightProvider.resolveNode(ctx))));
+        predicates.add((ctx, source) ->
+                new SqlNode.Binary(operator, leftProvider.resolveNode(ctx), rightProvider.resolveNode(ctx)));
         return this;
     }
 
@@ -416,25 +408,25 @@ public class WhereCriterion implements OnPredicate {
         boolean escaped = containsLikeMetaChar(str);
         String body = escaped ? escapeLikeCharacters(str) : str;
         String pattern = (prefix ? "%" : "") + body + (suffix ? "%" : "");
-        predicates.add(new NodePredicate((ctx, source) -> {
+        predicates.add((ctx, source) -> {
             ColumnAlias alias = col.resolveAlias(ctx);
             return new SqlNode.Like(
                     SqlNodes.column(alias.getTableAlias(), alias.getColumnName()),
                     SqlNodes.param(alias.getColumnName(), pattern, source),
                     negated, escaped);
-        }));
+        });
         return this;
     }
 
     private WhereCriterion addRawLikeComparison(ColumnMetaProvider col, boolean negated, Object rawPattern) {
         String pattern = rawPattern.toString();
-        predicates.add(new NodePredicate((ctx, source) -> {
+        predicates.add((ctx, source) -> {
             ColumnAlias alias = col.resolveAlias(ctx);
             return new SqlNode.Like(
                     SqlNodes.column(alias.getTableAlias(), alias.getColumnName()),
                     SqlNodes.param(alias.getColumnName(), pattern, source),
                     negated, false);
-        }));
+        });
         return this;
     }
 
@@ -700,41 +692,41 @@ public class WhereCriterion implements OnPredicate {
 
     public <T> WhereCriterion isNull(IGetter<T, ?> fn) {
         ColumnMetaProvider provider = ColumnMetaProvider.fromGetter(fn);
-        predicates.add(new NodePredicate((ctx, source) -> {
+        predicates.add((ctx, source) -> {
             ColumnAlias alias = provider.resolveAlias(ctx);
             return new SqlNode.Unary("IS NULL",
                     SqlNodes.column(alias.getTableAlias(), alias.getColumnName()));
-        }));
+        });
         return this;
     }
 
     public WhereCriterion isNull(String columnName) {
         ColumnMetaProvider provider = ColumnMetaProvider.fromName(columnName);
-        predicates.add(new NodePredicate((ctx, source) -> {
+        predicates.add((ctx, source) -> {
             ColumnAlias alias = provider.resolveAlias(ctx);
             return new SqlNode.Unary("IS NULL",
                     SqlNodes.column(alias.getTableAlias(), alias.getColumnName()));
-        }));
+        });
         return this;
     }
 
     public <T> WhereCriterion isNotNull(IGetter<T, ?> fn) {
         ColumnMetaProvider provider = ColumnMetaProvider.fromGetter(fn);
-        predicates.add(new NodePredicate((ctx, source) -> {
+        predicates.add((ctx, source) -> {
             ColumnAlias alias = provider.resolveAlias(ctx);
             return new SqlNode.Unary("IS NOT NULL",
                     SqlNodes.column(alias.getTableAlias(), alias.getColumnName()));
-        }));
+        });
         return this;
     }
 
     public WhereCriterion isNotNull(String columnName) {
         ColumnMetaProvider provider = ColumnMetaProvider.fromName(columnName);
-        predicates.add(new NodePredicate((ctx, source) -> {
+        predicates.add((ctx, source) -> {
             ColumnAlias alias = provider.resolveAlias(ctx);
             return new SqlNode.Unary("IS NOT NULL",
                     SqlNodes.column(alias.getTableAlias(), alias.getColumnName()));
-        }));
+        });
         return this;
     }
 
@@ -851,26 +843,25 @@ public class WhereCriterion implements OnPredicate {
         return value;
     }
 
-    private WhereCriterion addBinaryComparison(ColumnMetaProvider provider, String operatorWithPlaceholder, Object value) {
-        String operator = operatorWithPlaceholder.replace("?", "").trim();
-        predicates.add(new NodePredicate((ctx, source) -> {
+    private WhereCriterion addBinaryComparison(ColumnMetaProvider provider, String operator, Object value) {
+        predicates.add((ctx, source) -> {
             ColumnAlias alias = provider.resolveAlias(ctx);
             return new SqlNode.Binary(operator,
                     SqlNodes.column(alias.getTableAlias(), alias.getColumnName()),
                     SqlNodes.param(alias.getColumnName(), value, source));
-        }));
+        });
         return this;
     }
 
     private WhereCriterion addBetween(ColumnMetaProvider provider, Object leftValue, Object rightValue, boolean notBetween) {
-        predicates.add(new NodePredicate((ctx, source) -> {
+        predicates.add((ctx, source) -> {
             ColumnAlias alias = provider.resolveAlias(ctx);
             return new SqlNode.Between(
                     SqlNodes.column(alias.getTableAlias(), alias.getColumnName()),
                     SqlNodes.param(alias.getColumnName(), leftValue, source),
                     SqlNodes.param(alias.getColumnName(), rightValue, source),
                     notBetween);
-        }));
+        });
         return this;
     }
 
@@ -886,7 +877,7 @@ public class WhereCriterion implements OnPredicate {
             }
             snapshot.add(val);
         }
-        predicates.add(new NodePredicate((ctx, source) -> {
+        predicates.add((ctx, source) -> {
             ColumnAlias alias = provider.resolveAlias(ctx);
             List<SqlNode> nodes = new ArrayList<>(snapshot.size());
             for (Object val : snapshot) {
@@ -895,7 +886,7 @@ public class WhereCriterion implements OnPredicate {
             return new SqlNode.In(
                     SqlNodes.column(alias.getTableAlias(), alias.getColumnName()),
                     nodes, notIn);
-        }));
+        });
         return this;
     }
 

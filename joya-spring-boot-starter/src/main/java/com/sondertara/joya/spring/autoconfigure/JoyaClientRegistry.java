@@ -17,11 +17,11 @@ import java.util.Set;
  *
  * <pre>{@code
  * // 1. 主库操作（等价于 get("primary")）
- * joyaRegistry.primary().from(UserAccount.class).where(...).fetch();
+ * joyaRegistry.primary().from(UserAccount.class).where(...).list();
  * joyaRegistry.primary().mapper(UserAccountMapper.class).findByUserName("Alice");
  *
  * // 2. 扩展库操作（名称对应 joya.datasources.<name>）
- * joyaRegistry.get("order").from(UserAccount.class).where(...).fetch();
+ * joyaRegistry.get("order").from(UserAccount.class).where(...).list();
  * joyaRegistry.get("order").mapper(UserAccountMapper.class).findByUserName("Alice");
  *
  * // 3. 动态路由与降级

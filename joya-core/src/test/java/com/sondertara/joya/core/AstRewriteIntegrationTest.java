@@ -1,6 +1,5 @@
 package com.sondertara.joya.core;
 
-import com.sondertara.joya.core.kernel.interceptor.SqlInterceptor;
 import com.sondertara.joya.core.kernel.interceptor.SqlRewriteContext;
 import com.sondertara.joya.core.kernel.interceptor.SqlRewriteException;
 import com.sondertara.joya.core.kernel.interceptor.SqlRewriter;
@@ -131,13 +130,15 @@ class AstRewriteIntegrationTest {
     @Test
     void selectRewriter_addsTenantPredicate() {
         List<String> statements = new ArrayList<>();
-        SqlInterceptor recorder = (ctx, chain) -> {
-            statements.add(ctx.statement().sql());
-            return chain.proceed(ctx);
+        SqlExecutionListener recorder = new SqlExecutionListener() {
+            @Override
+            public void beforeExecute(SqlExecutionContext ctx) {
+                statements.add(ctx.statement().sql());
+            }
         };
         JoyaClient joya = JoyaClient.builder(dataSource)
                 .rewriter(new TenantRewriter("t1"))
-                .interceptor(recorder)
+                .executionListener(recorder)
                 .build();
 
         List<AstUser> users = joya.from(AstUser.class)
@@ -433,12 +434,10 @@ class AstRewriteIntegrationTest {
         // 直接使用仅匹配 SqlNode.Insert 的 InsertTenantRewriter，验证 StatementPreparer 自动解包/重包装 Upsert
         com.sondertara.joya.core.kernel.ExecutionKernel kernel =
                 new com.sondertara.joya.core.kernel.ExecutionKernel(new com.sondertara.joya.core.kernel.ExecutionKernel.Config(
-                        dataSource,
-                        List.of(),
                         List.of(new InsertTenantRewriter("t_up")),
                         List.of(),
                         new com.sondertara.joya.core.kernel.connection.DataSourceConnectionProvider(dataSource, 0),
-                        null, null, null, null, null, null));
+                        com.sondertara.joya.core.kernel.dialect.DialectStrategy.cached(dataSource), null, null, null, null, null));
 
         kernel.batchExecute(batch);
 
@@ -504,6 +503,119 @@ class AstRewriteIntegrationTest {
                 () -> prependWhereUpdateClient.of(PlainUser.class).updateAll(List.of(new PlainUser(10L, "x"))));
     }
 
+    @Test
+    void batchRewrite_enforcesShapeAndDistinctColumns_andSupportsFilterWorks() {
+        // 1. 把 Upsert 改写为纯 Insert：单条与批量都必须被 validateRewrittenShape 拦截
+        SqlRewriter unwrapUpsertRewriter = (node, ctx) -> {
+            if (node instanceof SqlNode.Upsert upsert) {
+                return upsert.insert();
+            }
+            return node;
+        };
+        JoyaClient unwrapClient = JoyaClient.builder(dataSource).rewriter(unwrapUpsertRewriter).build();
+        assertThrows(SqlRewriteException.class,
+                () -> unwrapClient.of(PlainUser.class).save(new PlainUser(70L, "u70")));
+        BatchSqlStatement upsertBatch = UpsertStatementFactory.createBatch(
+                LocalTableMetaCache.getMetadataContext(PlainUser.class),
+                List.of("id", "name"),
+                List.<Object[]>of(new Object[]{71L, "u71"}),
+                NamingPolicy.DEFAULT,
+                100,
+                "id",
+                UpsertStyle.MERGE);
+        com.sondertara.joya.core.kernel.ExecutionKernel unwrapKernel =
+                new com.sondertara.joya.core.kernel.ExecutionKernel(new com.sondertara.joya.core.kernel.ExecutionKernel.Config(
+                        List.of(unwrapUpsertRewriter),
+                        List.of(),
+                        new com.sondertara.joya.core.kernel.connection.DataSourceConnectionProvider(dataSource, 0),
+                        com.sondertara.joya.core.kernel.dialect.DialectStrategy.cached(dataSource), null, null, null, null, null));
+        assertThrows(SqlRewriteException.class, () -> unwrapKernel.batchExecute(upsertBatch));
+
+        // 批量 UPDATE 被改写为 DELETE 时同样被 validateRewrittenShape 拦截
+        JoyaClient updateToDeleteClient = JoyaClient.builder(dataSource)
+                .rewriter((node, ctx) -> {
+                    if (node instanceof SqlNode.Update update) {
+                        return new SqlNode.Delete(update.table(), update.where());
+                    }
+                    return node;
+                })
+                .build();
+        assertThrows(SqlRewriteException.class,
+                () -> updateToDeleteClient.of(PlainUser.class).updateAll(List.of(new PlainUser(10L, "u10"))));
+
+        // 2. 批量 INSERT 改写器追加已存在的重复列名时，必须被 requireDistinctColumns 拒绝
+        JoyaClient dupColBatchClient = JoyaClient.builder(dataSource)
+                .rewriter((node, ctx) -> {
+                    if (node instanceof SqlNode.Insert insert) {
+                        List<String> cols = new ArrayList<>(insert.columns());
+                        cols.add("name");
+                        List<List<SqlNode>> rows = new ArrayList<>();
+                        for (List<SqlNode> row : insert.rows()) {
+                            List<SqlNode> copy = new ArrayList<>(row);
+                            copy.add(SqlNodes.param("dup_name", "dup", ParameterSource.RAW));
+                            rows.add(copy);
+                        }
+                        return new SqlNode.Insert(insert.table(), cols, rows);
+                    }
+                    return node;
+                })
+                .build();
+        assertThrows(SqlRewriteException.class,
+                () -> dupColBatchClient.of(PlainUser.class)
+                        .insertAll(List.of(new PlainUser(72L, "u72"))));
+
+        // 3. supports(ctx) 返回 false 的改写器必须被跳过
+        AtomicInteger skippedCalls = new AtomicInteger();
+        SqlRewriter skippedRewriter = new SqlRewriter() {
+            @Override
+            public boolean supports(SqlRewriteContext context) {
+                return false;
+            }
+
+            @Override
+            public SqlNode rewrite(SqlNode node, SqlRewriteContext context) {
+                skippedCalls.incrementAndGet();
+                throw new AssertionError("supports() == false 的改写器不应被调用");
+            }
+        };
+        JoyaClient filteredClient = JoyaClient.builder(dataSource).rewriter(skippedRewriter).build();
+        assertEquals(3, filteredClient.from(AstUser.class).count());
+        filteredClient.of(PlainUser.class).insertAll(List.of(new PlainUser(73L, "u73")));
+        assertEquals(0, skippedCalls.get());
+    }
+
+    @Test
+    void rewriterParameterMismatch_failsFastBeforeJdbc_andImplicitCountPageRewritesOnce() {
+        // 1. 改写器产出 SqlNode.Raw 占位符与参数数量失配时，validateParameterContract 必须在发往 JDBC 前拦截
+        JoyaClient mismatchClient = JoyaClient.builder(dataSource)
+                .rewriter((node, ctx) -> {
+                    if (node instanceof SqlNode.Select select) {
+                        SqlNode badRaw = SqlNodes.raw("1 = ? AND 2 = ?",
+                                List.of(com.sondertara.joya.core.kernel.statement.SqlParameter.of(
+                                        1, "onlyOne", 1, ParameterSource.RAW)));
+                        return select.withWhere(SqlNodes.and(select.where(), badRaw));
+                    }
+                    return node;
+                })
+                .build();
+        assertThrows(IllegalArgumentException.class, () -> mismatchClient.from(AstUser.class).list());
+
+        // 2. 隐式计数分页对带 AST 的语句只执行一次改写，再派生 countSql 与 pageSql
+        AtomicInteger rewriteCount = new AtomicInteger();
+        JoyaClient pageClient = JoyaClient.builder(dataSource)
+                .rewriter((node, ctx) -> {
+                    rewriteCount.incrementAndGet();
+                    return new TenantRewriter("t1").rewrite(node, ctx);
+                })
+                .build();
+        SqlStatement astSelect = pageClient.from(AstUser.class).toSqlStatement();
+        com.sondertara.joya.core.query.PageResult<AstUser> page = pageClient.sql(astSelect)
+                .page(AstUser.class, com.sondertara.joya.core.query.pagination.PageRequest.of(0, 10));
+        assertEquals(2L, page.total());
+        assertEquals(2, page.items().size());
+        assertEquals(1, rewriteCount.get(), "隐式计数分页只应对基础 AST 语句触发一次 SqlRewriter");
+    }
+
     /**
      * 批量 INSERT 租户改写器：在列尾追加 tenant_id，并给模板行追加常量参数。
      */
@@ -546,7 +658,7 @@ class AstRewriteIntegrationTest {
         public SqlNode rewrite(SqlNode node, SqlRewriteContext ctx) {
             if (node instanceof SqlNode.Select select) {
                 SqlNode predicate = SqlNodes.eq(
-                        SqlNodes.column("t0", "tenant_id"),
+                        SqlNodes.column(ctx.rootAlias(), "tenant_id"),
                         SqlNodes.param("tenantId", tenantId, ParameterSource.TENANT));
                 return select.withWhere(SqlNodes.and(select.where(), predicate));
             }

@@ -11,7 +11,7 @@ import java.util.Set;
  *
  * @param operation  操作类型
  * @param dbType     目标数据库类型
- * @param tables     语句涉及的物理表引用（分片/租户拦截器依赖此字段）
+ * @param tables     语句涉及的物理表引用（供 AST 改写器与执行监听器读取）
  * @param entityType 实体类型（实体 CRUD 语句填充，裸 SQL 为 null）
  * @param primaryKey 主键列名（实体 INSERT 语句填充，用于多列 GeneratedKeys 精确定位主键列）
  */

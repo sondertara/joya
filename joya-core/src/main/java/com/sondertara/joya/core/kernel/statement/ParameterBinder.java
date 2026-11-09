@@ -9,6 +9,7 @@ import java.sql.Types;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.util.Date;
+import java.util.Map;
 
 /**
  * 参数绑定策略：将 {@link SqlParameter} 的值写入 {@link PreparedStatement} 指定位置。
@@ -105,9 +106,29 @@ public interface ParameterBinder {
         }
         try {
             Connection conn = statement.getConnection();
-            return conn != null && DbType.oracle.equals(DbType.of(conn));
+            if (conn == null) {
+                return false;
+            }
+            synchronized (ParameterBinderSupport.ORACLE_CONNECTIONS) {
+                Boolean cached = ParameterBinderSupport.ORACLE_CONNECTIONS.get(conn);
+                if (cached != null) {
+                    return cached;
+                }
+                boolean oracle = DbType.oracle.equals(DbType.of(conn));
+                ParameterBinderSupport.ORACLE_CONNECTIONS.put(conn, oracle);
+                return oracle;
+            }
         } catch (Exception ignored) {
             return false;
         }
     }
+}
+
+/** {@link ParameterBinder} 的进程级缓存：按连接弱引用缓存 Oracle 判定，避免代理 PreparedStatement 每条语句重复探测元数据。 */
+final class ParameterBinderSupport {
+
+    private ParameterBinderSupport() {
+    }
+
+    static final Map<Connection, Boolean> ORACLE_CONNECTIONS = new java.util.WeakHashMap<>();
 }

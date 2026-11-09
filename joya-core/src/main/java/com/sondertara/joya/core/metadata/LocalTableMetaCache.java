@@ -1,7 +1,9 @@
 package com.sondertara.joya.core.metadata;
 
+import com.sondertara.joya.core.function.FieldAlias;
 import com.sondertara.joya.exceptions.DbException;
 import com.sondertara.joya.utils.Strings;
+import com.sondertara.joya.utils.TypeUtils;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
@@ -17,6 +19,10 @@ import java.util.Optional;
  *
  * <p><b>列顺序契约</b>：实体字段按继承层级（基类在先、子类在后）与字节码字段声明顺序（{@link Class#getDeclaredFields()}）
  * 收集一次并固化为不可变列表，在同一 JVM 生命周期内对所有查询/变更操作保持严格稳定一致。
+ *
+ * <p><b>扁平映射契约</b>：只收集可直接映射为 JDBC 列的标量字段（{@link TypeUtils#isColumnType(Class)}）。
+ * 关联字段、集合、嵌套 DTO 一律不是列；Joya 不解析任何 JPA 关联注解，也不会自动 join。
+ * 需要 join 时请在实体中提供标量 FK 字段，并在 DSL 中显式调用 {@code join(...)}。
  *
  * @author huangxiaohu
  */
@@ -91,6 +97,24 @@ public final class LocalTableMetaCache {
             String colName = columnMeta.map(PersistenceAnnotations.ColumnMeta::name)
                     .filter(Strings::isNotBlank)
                     .orElseGet(() -> Strings.toUnderlineCase(field.getName()));
+
+            boolean scalar = TypeUtils.isColumnType(field.getType());
+            boolean fieldAlias = field.isAnnotationPresent(FieldAlias.class);
+            boolean idField = PersistenceAnnotations.isIdPresent(field);
+            if (!scalar && !fieldAlias) {
+                if (idField) {
+                    throw new DbException("Primary key field [" + field.getName() + "] on entity ["
+                            + entityClass.getName() + "] must be a scalar column type; composite/embedded "
+                            + "primary keys are not supported (got [" + field.getType().getName() + "])");
+                }
+                // 关联字段、集合、嵌套对象：不是列，Joya 不解析任何 JPA 关联注解。
+                continue;
+            }
+            if (fieldAlias && !scalar) {
+                // 自定义读转换器：可读，但 Joya 不知道如何写回数据库。
+                builder.nonInsertableColumn(colName);
+                builder.nonUpdatableColumn(colName);
+            }
             if (columnMeta.isPresent()) {
                 if (!columnMeta.get().insertable()) {
                     builder.nonInsertableColumn(colName);
@@ -99,7 +123,7 @@ public final class LocalTableMetaCache {
                     builder.nonUpdatableColumn(colName);
                 }
             }
-            if (PersistenceAnnotations.isIdPresent(field)) {
+            if (idField) {
                 if (field.getType().isPrimitive()) {
                     throw new DbException("Primary key field [" + field.getName() + "] on entity ["
                             + entityClass.getName() + "] must use a wrapper type instead of primitive type ["

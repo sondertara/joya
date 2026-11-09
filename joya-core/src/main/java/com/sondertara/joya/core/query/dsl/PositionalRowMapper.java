@@ -1,5 +1,7 @@
 package com.sondertara.joya.core.query.dsl;
 
+import com.sondertara.joya.utils.TypeUtils;
+
 import com.sondertara.joya.core.kernel.executor.RowMapper;
 
 import java.sql.ResultSet;
@@ -29,7 +31,7 @@ final class PositionalRowMapper<V> implements RowMapper<V> {
         for (int i = 0; i < columnTypes.length; i++) {
             Object value = ColumnValues.read(record, i + 1, columnTypes[i]);
             if (value == null && parameterTypes != null && i < parameterTypes.length) {
-                value = ColumnValues.primitiveDefault(parameterTypes[i]);
+                value = TypeUtils.defaultValue(parameterTypes[i]);
             }
             args[i] = value;
         }

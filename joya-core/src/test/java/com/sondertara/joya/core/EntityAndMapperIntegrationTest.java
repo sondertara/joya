@@ -4,9 +4,6 @@ import com.sondertara.joya.core.metadata.LocalTableMetaCache;
 import com.sondertara.joya.core.mapper.JoyaMapper;
 import com.sondertara.joya.core.jdbc.resultset.mapper.BeanRowMapper;
 import com.sondertara.joya.core.listener.EntityListener;
-import com.sondertara.joya.core.kernel.interceptor.Chain;
-import com.sondertara.joya.core.kernel.interceptor.RewriteContext;
-import com.sondertara.joya.core.kernel.interceptor.SqlInterceptor;
 import com.sondertara.joya.core.kernel.statement.BatchSqlStatement;
 import com.sondertara.joya.core.kernel.statement.Operation;
 import com.sondertara.joya.core.kernel.statement.ParameterBinder;
@@ -452,9 +449,11 @@ class EntityAndMapperIntegrationTest {
 
         executedStatements = new ArrayList<>();
         executedBatches = new ArrayList<>();
-        SqlInterceptor recorder = (RewriteContext context, Chain chain) -> {
-            executedStatements.add(context.statement());
-            return chain.proceed(context);
+        SqlExecutionListener recorder = new SqlExecutionListener() {
+            @Override
+            public void beforeExecute(SqlExecutionContext context) {
+                executedStatements.add(context.statement());
+            }
         };
         SqlExecutionListener batchRecorder = new SqlExecutionListener() {
             @Override
@@ -465,7 +464,7 @@ class EntityAndMapperIntegrationTest {
             }
         };
 
-        joya = JoyaClient.builder(ds).interceptor(recorder).executionListener(batchRecorder).build();
+        joya = JoyaClient.builder(ds).executionListener(recorder).executionListener(batchRecorder).build();
         joya.sql("""
                 DROP TABLE IF EXISTS t_account;
                 CREATE TABLE t_account (
@@ -494,13 +493,15 @@ class EntityAndMapperIntegrationTest {
     private JoyaClient clientWithBatchSize(int batchSize) {
         JdbcDataSource ds = new JdbcDataSource();
         ds.setURL("jdbc:h2:mem:joya_entity_mapper_test;DB_CLOSE_DELAY=-1");
-        SqlInterceptor recorder = (RewriteContext context, Chain chain) -> {
-            executedStatements.add(context.statement());
-            return chain.proceed(context);
+        SqlExecutionListener recorder = new SqlExecutionListener() {
+            @Override
+            public void beforeExecute(SqlExecutionContext context) {
+                executedStatements.add(context.statement());
+            }
         };
         return JoyaClient.builder(ds)
                 .settings(JoyaSettings.builder().batchSize(batchSize).build())
-                .interceptor(recorder)
+                .executionListener(recorder)
                 .build();
     }
 
@@ -685,7 +686,10 @@ class EntityAndMapperIntegrationTest {
         assertEquals(Operation.UPDATE, executedStatements.get(0).metadata().operation());
         assertEquals(Account.class, executedStatements.get(0).metadata().entityType());
         assertNotNull(executedStatements.get(0).metadata().dbType(), "批量语句应注入 dbType");
-        assertTrue(executedStatements.get(0).parameters().isEmpty(), "批量探针不携带参数");
+        assertEquals(com.sondertara.joya.core.kernel.statement.SqlFormatUtils.countPlaceholders(
+                        executedStatements.get(0).sql(), executedStatements.get(0).metadata().dbType()),
+                executedStatements.get(0).parameters().size(),
+                "批量探针参数必须与 SQL 占位符一一对应（监听器可安全做参数脱敏/指纹）");
 
         executedStatements.clear();
         joya.of(Account.class).truncate();

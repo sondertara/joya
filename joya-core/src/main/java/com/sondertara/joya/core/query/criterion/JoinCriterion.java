@@ -6,7 +6,6 @@ import com.sondertara.joya.core.query.JoinType;
 import com.sondertara.joya.core.query.ColumnMetaProvider;
 import com.sondertara.joya.core.query.LinkType;
 import com.sondertara.joya.exceptions.DbException;
-import lombok.extern.slf4j.Slf4j;
 import org.jspecify.annotations.Nullable;
 
 import java.util.LinkedList;
@@ -23,7 +22,6 @@ import java.util.function.UnaryOperator;
  * @date 2021/11/15 16:44
  * @since 1.0.0
  */
-@Slf4j
 public class JoinCriterion {
 
     private final LinkedList<JoinPart> segments;
@@ -154,9 +152,6 @@ public class JoinCriterion {
                 Objects.requireNonNull(onCondition, "onCondition must not be null"));
     }
 
-    public LinkedList<JoinPart> getSegments() {
-        return segments;
-    }
 
     /**
      * Join table with explicit {@link JoinType}.

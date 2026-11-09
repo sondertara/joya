@@ -2,9 +2,8 @@ package com.sondertara.joya.core;
 
 import com.sondertara.joya.core.mapper.JoyaMapper;
 import com.sondertara.joya.core.mapper.JoyaRepository;
-import com.sondertara.joya.core.kernel.interceptor.Chain;
-import com.sondertara.joya.core.kernel.interceptor.RewriteContext;
-import com.sondertara.joya.core.kernel.interceptor.SqlInterceptor;
+import com.sondertara.joya.core.kernel.observe.SqlExecutionContext;
+import com.sondertara.joya.core.kernel.observe.SqlExecutionListener;
 import com.sondertara.joya.core.kernel.statement.SqlStatement;
 import com.sondertara.joya.core.kernel.statement.TableRef;
 import com.sondertara.joya.core.query.PageResult;
@@ -208,13 +207,15 @@ class JoyaFluentApiAndTxIntegrationTest {
         dsAudit.setURL("jdbc:h2:mem:joya_test_audit;DB_CLOSE_DELAY=-1");
 
         interceptedStatements = new ArrayList<>();
-        SqlInterceptor recorder = (RewriteContext ctx, Chain chain) -> {
-            interceptedStatements.add(ctx.statement());
-            return chain.proceed(ctx);
+        SqlExecutionListener recorder = new SqlExecutionListener() {
+            @Override
+            public void beforeExecute(SqlExecutionContext ctx) {
+                interceptedStatements.add(ctx.statement());
+            }
         };
 
         joya = JoyaClient.builder(dsPrimary)
-                .interceptor(recorder)
+                .executionListener(recorder)
                 .queryTimeoutSeconds(30)
                 .build();
 
@@ -369,7 +370,7 @@ class JoyaFluentApiAndTxIntegrationTest {
     }
 
     @Test
-    void regression_T4_transactionalOpsWalkSqlInterceptorChain() {
+    void regression_T4_transactionalOpsWalkSqlExecutionListener() {
         interceptedStatements.clear();
 
         joya.tx(tx -> {
@@ -378,7 +379,7 @@ class JoyaFluentApiAndTxIntegrationTest {
             tx.sql("UPDATE t_account SET balance = ? WHERE id = ?", 500, 1L).update();
         });
 
-        assertEquals(3, interceptedStatements.size(), "事务内的实体读写与原生 SQL 均必须经过同一套拦截器链");
+        assertEquals(3, interceptedStatements.size(), "事务内的实体读写与原生 SQL 均必须经过同一套执行监听器");
     }
 
     @Test
@@ -548,7 +549,7 @@ class JoyaFluentApiAndTxIntegrationTest {
         assertEquals(2, aliceOrders.size());
         assertEquals("Keyboard", aliceOrders.get(0).getItemName());
 
-        // 验证 SqlInterceptor 拿到了多表 TableRef 元数据
+        // 验证 SqlExecutionListener 拿到了多表 TableRef 元数据
         assertFalse(interceptedStatements.isEmpty());
         Set<String> tableNames = interceptedStatements.get(0).metadata().tables().stream()
                 .map(TableRef::name)

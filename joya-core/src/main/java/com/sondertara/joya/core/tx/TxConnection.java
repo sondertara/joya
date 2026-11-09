@@ -39,7 +39,6 @@ public final class TxConnection implements TxSession {
 
     private RestorePoint restorePoint;
     private TxState state = TxState.NONE;
-    private int depth;
     private boolean globalRollbackOnly;
     private boolean commitFailed;
     private boolean rollbackFailed;
@@ -80,7 +79,6 @@ public final class TxConnection implements TxSession {
         applyOptions(options);
         support.startDeadline(options.timeout());
         transitionTo(TxState.ACTIVE);
-        depth++;
         beginIncomplete = false;
     }
 
@@ -90,8 +88,7 @@ public final class TxConnection implements TxSession {
     @Override
     public void exitCommit() throws SQLException {
         support.checkOwner();
-        depth = Math.max(0, depth - 1);
-        if (depth > 0) {
+        if (support.hasSavepoint()) {
             return;
         }
         if (globalRollbackOnly) {
@@ -113,8 +110,7 @@ public final class TxConnection implements TxSession {
     @Override
     public void exitRollback() throws SQLException {
         support.checkOwner();
-        depth = Math.max(0, depth - 1);
-        if (depth > 0) {
+        if (support.hasSavepoint()) {
             markRollbackOnlyState();
             return;
         }
@@ -134,13 +130,12 @@ public final class TxConnection implements TxSession {
 
     // ===== 保存点（Tx#savepoint / Tx#savepointCall） =====
 
-    /** 创建保存点并进入一层。保存点创建成功后才增加深度，失败不留下半状态。 */
+    /** 创建保存点并进入一层。保存点栈长度即为唯一深度真相源。 */
     @Override
     public void enterSavepoint() throws SQLException {
         support.checkOwner();
         requireActive();
         support.pushSavepoint(connection.setSavepoint());
-        depth++;
     }
 
     /** 成功退出保存点层：释放保存点，不影响外层物理事务。 */
@@ -148,7 +143,6 @@ public final class TxConnection implements TxSession {
     public void exitSavepointCommit() throws SQLException {
         support.checkOwner();
         Savepoint sp = support.popSavepoint();
-        depth = Math.max(0, depth - 1);
         try {
             connection.releaseSavepoint(sp);
         } catch (SQLFeatureNotSupportedException ignored) {
@@ -164,7 +158,6 @@ public final class TxConnection implements TxSession {
     public void exitSavepointRollback() throws SQLException {
         support.checkOwner();
         Savepoint sp = support.popSavepoint();
-        depth = Math.max(0, depth - 1);
         try {
             connection.rollback(sp);
         } catch (SQLException | RuntimeException | Error e) {
@@ -282,8 +275,12 @@ public final class TxConnection implements TxSession {
                 }
             } finally {
                 try {
-                    if (baseConnections != null && !commitFailed && !rollbackFailed && !restoreFailed && !isActive()) {
-                        baseConnections.release(connection);
+                    if (baseConnections != null) {
+                        if (!commitFailed && !rollbackFailed && !restoreFailed && !isActive()) {
+                            baseConnections.release(connection);
+                        } else {
+                            baseConnections.discard(connection);
+                        }
                     } else {
                         connection.close();   // 归还池或关闭污染连接
                     }

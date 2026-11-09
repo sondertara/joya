@@ -13,8 +13,6 @@ import com.sondertara.joya.core.tx.TxSessionSupport;
 import com.sondertara.joya.core.tx.TxState;
 import com.sondertara.joya.core.tx.TxTimeoutException;
 import com.sondertara.joya.core.tx.UnexpectedRollbackException;
-import org.springframework.core.InfrastructureProxy;
-import org.springframework.jdbc.datasource.DelegatingDataSource;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.TransactionException;
@@ -50,55 +48,44 @@ public final class SpringTxEngine implements TxEngine {
     public SpringTxEngine(DataSource dataSource, PlatformTransactionManager transactionManager) {
         this.dataSource = Objects.requireNonNull(dataSource, "dataSource must not be null");
         this.transactionManager = Objects.requireNonNull(transactionManager, "transactionManager must not be null");
-        if (!(transactionManager instanceof ResourceTransactionManager rtm)
-                || !matchesDataSource(rtm.getResourceFactory(), dataSource)) {
+        if (!isCompatibleTransactionManager(transactionManager, dataSource)) {
             throw new IllegalArgumentException(
-                    "SpringTxEngine requires a ResourceTransactionManager (such as DataSourceTransactionManager) "
-                            + "whose resourceFactory matches the configured DataSource, got: "
+                    "SpringTxEngine requires a DataSourceTransactionManager whose resourceFactory matches the "
+                            + "configured DataSource, or a JpaTransactionManager with setDataSource(...) bound to it; got: "
                             + transactionManager.getClass().getName());
         }
     }
 
     /**
-     * 判断事务管理器关联的 {@code resourceFactory} 是否与目标 {@link DataSource} 属于同一物理数据源（支持剥离代理与委托包装）。
+     * 判断事务管理器关联的 {@code resourceFactory} 与目标 {@link DataSource} 在
+     * {@link TransactionSynchronizationManager} 中是否映射到同一个资源键。
      */
     public static boolean matchesDataSource(Object resourceFactory, DataSource targetDataSource) {
-        if (resourceFactory == null || targetDataSource == null) {
-            return false;
-        }
-        if (resourceFactory == targetDataSource || resourceFactory.equals(targetDataSource)) {
-            return true;
-        }
-        Object unwrappedFactory = unwrapResourceFactory(resourceFactory);
-        Object unwrappedTarget = unwrapResourceFactory(targetDataSource);
-        return unwrappedFactory == unwrappedTarget || unwrappedFactory.equals(unwrappedTarget);
+        return SpringConnectionProvider.matchesDataSource(resourceFactory, targetDataSource);
     }
 
-    private static Object unwrapResourceFactory(Object candidate) {
-        Object current = candidate;
-        while (current != null) {
-            if (current instanceof InfrastructureProxy proxy) {
-                Object unwrapped = proxy.getWrappedObject();
-                if (unwrapped != null && unwrapped != current) {
-                    current = unwrapped;
-                    continue;
-                }
-            }
-            if (current instanceof DelegatingDataSource delegating) {
-                DataSource target = delegating.getTargetDataSource();
-                if (target != null && target != current) {
-                    current = target;
-                    continue;
-                }
-            }
-            break;
+    /**
+     * 兼容两类管理器：
+     * <ul>
+     *   <li>DataSourceTransactionManager 体系：resourceFactory 直接匹配 DataSource；</li>
+     *   <li>JpaTransactionManager：必须显式 setDataSource(...)，其 JDBC ConnectionHolder 才会绑定到 DataSourceUtils。</li>
+     * </ul>
+     */
+    static boolean isCompatibleTransactionManager(PlatformTransactionManager manager, DataSource dataSource) {
+        if (manager instanceof ResourceTransactionManager rtm
+                && matchesDataSource(rtm.getResourceFactory(), dataSource)) {
+            return true;
         }
-        return current;
+        if (JpaTransactionManagerSupport.isJpa(manager)) {
+            DataSource jpaDataSource = JpaTransactionManagerSupport.dataSource(manager);
+            return jpaDataSource != null && matchesDataSource(jpaDataSource, dataSource);
+        }
+        return false;
     }
 
     @Override
-    public TxSession open(ExecutionKernel rootTemplate, TxOptions options) {
-        Objects.requireNonNull(rootTemplate, "rootTemplate must not be null");
+    public TxSession open(ExecutionKernel rootKernel, TxOptions options) {
+        Objects.requireNonNull(rootKernel, "rootKernel must not be null");
         Objects.requireNonNull(options, "options must not be null");
 
         boolean existingTxForDataSource = TransactionSynchronizationManager.getResource(dataSource) != null
@@ -129,7 +116,7 @@ public final class SpringTxEngine implements TxEngine {
         TransactionStatus status = null;
         try {
             status = transactionManager.getTransaction(def);
-            return new SpringTxSession(rootTemplate, transactionManager, status, options);
+            return new SpringTxSession(rootKernel, transactionManager, status, options);
         } catch (Throwable beginFailure) {
             if (status != null) {
                 try {
@@ -167,10 +154,10 @@ public final class SpringTxEngine implements TxEngine {
             throw new IllegalArgumentException(
                     "SpringTxEngine DataSource must match JoyaClient DataSource");
         }
-        if (!(this.transactionManager instanceof ResourceTransactionManager rtm)
-                || !matchesDataSource(rtm.getResourceFactory(), clientDataSource)) {
+        if (!isCompatibleTransactionManager(this.transactionManager, clientDataSource)) {
             throw new IllegalArgumentException(
-                    "SpringTxEngine requires a ResourceTransactionManager whose resourceFactory matches JoyaClient DataSource");
+                    "SpringTxEngine requires a DataSourceTransactionManager or a JpaTransactionManager "
+                            + "whose JDBC DataSource matches JoyaClient DataSource");
         }
         ConnectionProvider unwrapped = connectionProvider == null ? null : connectionProvider.unwrap();
         if (!(unwrapped instanceof SpringConnectionProvider scp)) {
@@ -185,7 +172,7 @@ public final class SpringTxEngine implements TxEngine {
 
     private static final class SpringTxSession implements TxSession {
 
-        private final ExecutionKernel rootTemplate;
+        private final ExecutionKernel rootKernel;
         private final PlatformTransactionManager txManager;
         private final TransactionStatus status;
         private final boolean synchronizationActiveAtStart;
@@ -196,9 +183,9 @@ public final class SpringTxEngine implements TxEngine {
         private boolean completed;
         private boolean closed;
 
-        SpringTxSession(ExecutionKernel rootTemplate, PlatformTransactionManager txManager,
+        SpringTxSession(ExecutionKernel rootKernel, PlatformTransactionManager txManager,
                         TransactionStatus status, TxOptions options) {
-            this.rootTemplate = rootTemplate;
+            this.rootKernel = rootKernel;
             this.txManager = txManager;
             this.status = status;
             this.synchronizationActiveAtStart = TransactionSynchronizationManager.isActualTransactionActive();
@@ -228,17 +215,17 @@ public final class SpringTxEngine implements TxEngine {
                 throw new IllegalTxStateException(current, TxState.ACTIVE, current.allowedTransitions());
             }
             support.checkDeadline(this::markRollbackOnly);
-            return rootTemplate.connections().acquire();
+            return rootKernel.connections().acquire();
         }
 
         @Override
         public void release(Connection connection) throws SQLException {
-            rootTemplate.connections().release(connection);
+            rootKernel.connections().release(connection);
         }
 
         @Override
         public OptionalInt queryTimeoutSeconds() {
-            return support.resolveQueryTimeoutSeconds(TxSessionSupport.resolveDefaultQueryTimeout(rootTemplate));
+            return support.resolveQueryTimeoutSeconds(TxSessionSupport.resolveDefaultQueryTimeout(rootKernel));
         }
 
         @Override

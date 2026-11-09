@@ -322,7 +322,7 @@ public record TxOptions(
 
 #### 3.4 多数据源（沿用 `05` 阶段 3）
 
-`DataSourceId` / `DataSourceRegistry` / `RoutingStrategy`（begin 时解析一次并钉死）/ `SqlInterceptor.mayChangePhysicalDatabase()` 链上校验 / `readOnly` 真正 `setReadOnly(true)` / 移除 `@ConditionalOnSingleCandidate`。
+`1 JoyaClient = 1 DataSource`（早期草案中的 `DataSourceId` / `RoutingStrategy` / 文本拦截器跨库校验已由单库客户端隔离 + `SqlRewriter` AST 表名守卫替代）/ `readOnly` 真正 `setReadOnly(true)` / 移除 `@ConditionalOnSingleCandidate`。
 
 #### 3.5 启动期静态校验（新增，P2）
 

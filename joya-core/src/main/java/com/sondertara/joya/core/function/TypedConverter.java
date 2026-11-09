@@ -1,7 +1,7 @@
 package com.sondertara.joya.core.function;
 
 /**
- * 字段级自定义类型转换器接口（用于 {@link com.sondertara.joya.core.jdbc.resultset.FieldAlias}）。
+ * 字段级自定义类型转换器接口（用于 {@link com.sondertara.joya.core.function.FieldAlias}）。
  *
  * @param <S> 源值类型
  * @param <T> 目标值类型

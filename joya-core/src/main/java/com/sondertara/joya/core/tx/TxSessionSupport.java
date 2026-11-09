@@ -78,12 +78,12 @@ public final class TxSessionSupport<S> {
     }
 
     /** 从根内核解析非限时事务的默认语句超时秒数（优先连接提供者，其次 {@code ExecutionOptions}）。 */
-    public static OptionalInt resolveDefaultQueryTimeout(ExecutionKernel rootTemplate) {
-        OptionalInt providerTimeout = rootTemplate.connections().queryTimeoutSeconds();
+    public static OptionalInt resolveDefaultQueryTimeout(ExecutionKernel rootKernel) {
+        OptionalInt providerTimeout = rootKernel.connections().queryTimeoutSeconds();
         if (providerTimeout != null && providerTimeout.isPresent()) {
             return providerTimeout;
         }
-        int configuredTimeout = rootTemplate.executionOptions().queryTimeoutSeconds();
+        int configuredTimeout = rootKernel.executionOptions().queryTimeoutSeconds();
         return configuredTimeout > 0 ? OptionalInt.of(configuredTimeout) : OptionalInt.empty();
     }
 
@@ -95,5 +95,10 @@ public final class TxSessionSupport<S> {
     /** 弹出最近一层保存点。 */
     public S popSavepoint() {
         return savepoints.pop();
+    }
+
+    /** 是否处于保存点嵌套作用域内。 */
+    public boolean hasSavepoint() {
+        return !savepoints.isEmpty();
     }
 }

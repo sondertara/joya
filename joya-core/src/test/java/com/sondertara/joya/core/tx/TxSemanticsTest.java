@@ -368,8 +368,10 @@ class TxSemanticsTest {
 
         joya.sql("UPDATE t SET a = 1").update();
 
-        assertEquals(List.of("setAutoCommit(true)", "EXEC", "setAutoCommit(false)", "CLOSE"), spy.ops(),
-                "manualCommitPool 非事务执行必须开启 autoCommit=true 并在归还前恢复 false: " + spy.opsAsString());
+        assertEquals(List.of("setAutoCommit(true)", "setAutoCommit(false)", "CLOSE",
+                        "setAutoCommit(true)", "EXEC", "setAutoCommit(false)", "CLOSE"), spy.ops(),
+                "首次方言解析会借还一条连接；执行连接仍必须开启 autoCommit=true 并在归还前恢复 false: "
+                        + spy.opsAsString());
     }
 
     @Test
@@ -436,7 +438,8 @@ class TxSemanticsTest {
 
         assertEquals(9, joya.settings().executionOptions().queryTimeoutSeconds(),
                 "Builder.queryTimeoutSeconds 应按调用顺序直接更新 JoyaSettings");
-        assertEquals(1, customAcquireCount.get(), "自动提交执行应走自定义 ConnectionProvider");
+        assertEquals(2, customAcquireCount.get(),
+                "首次方言解析与执行都必须走自定义 ConnectionProvider");
         assertEquals(9, spy.queryTimeoutSeconds(), "自动提交模式下自定义 provider 空超时同样回退 ExecutionOptions");
     }
 
@@ -616,12 +619,10 @@ class TxSemanticsTest {
         delegate.begin(TxOptions.DEFAULT);
         com.sondertara.joya.core.kernel.ExecutionKernel rootKernel =
                 new com.sondertara.joya.core.kernel.ExecutionKernel(new com.sondertara.joya.core.kernel.ExecutionKernel.Config(
-                        spy.dataSource(),
-                        List.of(),
                         List.of(),
                         List.of(),
                         new com.sondertara.joya.core.kernel.connection.DataSourceConnectionProvider(spy.dataSource(), 0),
-                        null, null, null, null, null, null));
+                        com.sondertara.joya.core.kernel.dialect.DialectStrategy.cached(spy.dataSource()), null, null, null, null, null));
         TxImpl tx = new TxImpl(rootKernel, rejectAfterCommitRegistration(delegate));
         java.util.concurrent.atomic.AtomicBoolean callbackRan = new java.util.concurrent.atomic.AtomicBoolean();
 

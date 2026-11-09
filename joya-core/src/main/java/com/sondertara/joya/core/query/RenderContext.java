@@ -531,7 +531,7 @@ public final class RenderContext {
     }
 
     /**
-     * 提取当前查询涉及的表引用集合（供分片/多租户等拦截器直接读取，无需正则解析 SQL）。
+     * 提取当前查询涉及的表引用集合（供 AST 改写器与执行监听器直接读取，无需正则解析 SQL）。
      */
     public Set<TableRef> extractTables() {
         Set<TableRef> result = new LinkedHashSet<>();

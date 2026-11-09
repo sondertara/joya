@@ -32,9 +32,6 @@ public record SqlExecutionResult(
         return new SqlExecutionResult(-1L, rowCount, new int[0], List.of(), 0L);
     }
 
-    public static SqlExecutionResult batch(int[] counts) {
-        return new SqlExecutionResult(-1L, -1L, counts, List.of(), 0L);
-    }
 
     public static SqlExecutionResult insert(long affectedRows, Object generatedKey) {
         return new SqlExecutionResult(affectedRows, -1L, new int[0],

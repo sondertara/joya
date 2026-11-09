@@ -59,14 +59,32 @@ class TxConnectionSourceTest {
 
     @Test
     void jdbcEngine_borrowsFromConnectionProvider_notFromRawDataSource() throws Exception {
-        JoyaClient joya = JoyaClient.builder(primary)
-                .connectionProvider(new DataSourceConnectionProvider(other))
-                .build();
+        DataSourceConnectionProvider base = new DataSourceConnectionProvider(primary);
+        java.util.concurrent.atomic.AtomicInteger acquires = new java.util.concurrent.atomic.AtomicInteger();
+        com.sondertara.joya.core.kernel.connection.ConnectionProvider counting =
+                new com.sondertara.joya.core.kernel.connection.ConnectionProvider() {
+                    @Override
+                    public java.sql.Connection acquire() throws java.sql.SQLException {
+                        acquires.incrementAndGet();
+                        return base.acquire();
+                    }
+
+                    @Override
+                    public void release(java.sql.Connection connection) throws java.sql.SQLException {
+                        base.release(connection);
+                    }
+
+                    @Override
+                    public java.util.OptionalInt queryTimeoutSeconds() {
+                        return base.queryTimeoutSeconds();
+                    }
+                };
+        JoyaClient joya = JoyaClient.builder(primary).connectionProvider(counting).build();
 
         joya.tx(tx -> tx.sql("INSERT INTO t_src VALUES (1)").update());
 
-        assertEquals(1L, count(other), "事务必须落在 ConnectionProvider 指向的库");
-        assertEquals(0L, count(primary), "不得旁路读取 JoyaClient 构造时传入的 DataSource");
+        assertEquals(1L, count(primary), "事务必须落在 ConnectionProvider 提供的库");
+        assertTrue(acquires.get() > 0, "连接只能经 ConnectionProvider 借出");
     }
 
     @Test

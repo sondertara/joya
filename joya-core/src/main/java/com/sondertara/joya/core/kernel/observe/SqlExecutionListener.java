@@ -5,7 +5,7 @@ import com.sondertara.joya.core.kernel.support.Ordered;
 /**
  * SQL 执行观测扩展点（与改写分离）。
  *
- * <p>{@code SqlInterceptor}/{@code SqlRewriter} 负责改 SQL；本接口只负责看结果：
+ * <p>{@code SqlRewriter} 负责改 SQL；本接口只负责看结果：
  * 耗时、行数、生成键、异常。日志、Micrometer、OpenTelemetry、慢查询都接在这里。
  */
 public interface SqlExecutionListener extends Ordered {

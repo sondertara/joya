@@ -110,6 +110,11 @@ public enum PaginationStyle {
     }
 
     static String renderCountSql(String sql, DbType dbType, boolean supportsSubqueryAliasAs) {
+        // FOR UPDATE 属于行锁子句，计数包装既无意义又可能被部分数据库拒绝。
+        int forUpdateIdx = findTopLevelForUpdateIndex(sql, dbType);
+        if (forUpdateIdx >= 0) {
+            sql = sql.substring(0, forUpdateIdx).stripTrailing();
+        }
         boolean sqlServerLike = dbType != null && dbType.isLikeSqlServer();
         int statementStart = skipTrivia(sql, 0, dbType);
         String leadingTrivia = sql.substring(0, statementStart);

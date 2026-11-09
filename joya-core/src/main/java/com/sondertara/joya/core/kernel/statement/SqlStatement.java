@@ -3,7 +3,6 @@ package com.sondertara.joya.core.kernel.statement;
 import org.jspecify.annotations.Nullable;
 
 import java.util.List;
-import java.util.Objects;
 
 /**
  * 不可变 SQL 语句值对象 —— 全框架唯一的 SQL 契约。
@@ -11,7 +10,7 @@ import java.util.Objects;
  * 设计原则：
  * <ul>
  *   <li>不可变：所有改写方法返回新实例，无副作用，天然线程安全。</li>
- *   <li>自描述：携带 {@code tables} 供拦截器（分片/租户）使用，无需正则解析 SQL。</li>
+ *   <li>自描述：携带 {@code tables} 供 AST 改写器与执行监听器使用，无需正则解析 SQL。</li>
  *   <li>参数有序：{@code parameters} 携带名称、来源与绑定策略，替代裸 {@code Object}。</li>
  *   <li>零成本：{@code record} 无继承、无反射，{@code GraalVM native} 友好。</li>
  * </ul>
@@ -42,6 +41,11 @@ public record SqlStatement(
     /** 从有序参数列表构建（推荐）。 */
     public static SqlStatement of(String sql, List<SqlParameter> parameters, StatementMetadata metadata) {
         return new SqlStatement(sql, parameters, metadata, null);
+    }
+
+    /** 按显式操作类型从可变参数构建（DDL / TRUNCATE 等非 CRUD 语句使用）。 */
+    public static SqlStatement of(String sql, Operation op, Object... args) {
+        return fromArgs(sql, op, args);
     }
 
     /** 从 AST 渲染结果构建。 */
@@ -82,26 +86,7 @@ public record SqlStatement(
         return new SqlStatement(sql, parameters, metadata, newAst);
     }
 
-    /** 追加参数（如租户拦截器追加 {@code tenant_id = ?}），自动重排 index，返回新实例。 */
-    public SqlStatement appendParameter(String name, Object value, ParameterSource source) {
-        List<SqlParameter> newParams = new java.util.ArrayList<>(parameters);
-        int index = newParams.size() + 1;
-        newParams.add(SqlParameter.of(index, name, value, source));
-        return new SqlStatement(sql, newParams, metadata, ast);
-    }
 
-    /** 替换指定 index 处的参数，返回新实例。 */
-    public SqlStatement replaceParameter(int index, SqlParameter parameter) {
-        Objects.requireNonNull(parameter, "parameter must not be null");
-        List<SqlParameter> newParams = new java.util.ArrayList<>(parameters);
-        int target = index - 1;
-        if (target < 0 || target >= newParams.size()) {
-            throw new IndexOutOfBoundsException("parameter index out of range: " + index);
-        }
-        newParams.set(target, new SqlParameter(
-                index, parameter.name(), parameter.value(), parameter.source(), parameter.binder()));
-        return new SqlStatement(sql, newParams, metadata, ast);
-    }
 
     // ===== 静态工厂：提升调用可读性，并强制表达操作类型 =====
 

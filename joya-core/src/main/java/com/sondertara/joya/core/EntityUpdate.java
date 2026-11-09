@@ -30,15 +30,15 @@ import java.util.function.UnaryOperator;
  */
 public final class EntityUpdate<T> {
 
-    private final ExecutionKernel template;
+    private final ExecutionKernel kernel;
     private final EntityMetadataContext meta;
     private final Map<String, Object> values = new LinkedHashMap<>();
     private final List<UnaryOperator<WhereCriterion>> whereCallbacks = new ArrayList<>();
     private final List<WhereCriterion> explicitCriteria = new ArrayList<>();
     private boolean allowAll;
 
-    EntityUpdate(ExecutionKernel template, EntityMetadataContext meta) {
-        this.template = Objects.requireNonNull(template, "template must not be null");
+    EntityUpdate(ExecutionKernel kernel, EntityMetadataContext meta) {
+        this.kernel = Objects.requireNonNull(kernel, "kernel must not be null");
         this.meta = Objects.requireNonNull(meta, "meta must not be null");
     }
 
@@ -77,7 +77,7 @@ public final class EntityUpdate<T> {
     public <N extends Number> EntityUpdate<T> incr(IGetter<T, N> column, Number delta) {
         Objects.requireNonNull(delta, "delta must not be null");
         String colName = validateUpdatableColumn(meta.resolveColumn(column));
-        String formattedCol = meta.formatColumn(colName, template.namingPolicy());
+        String formattedCol = meta.formatColumn(colName, kernel.namingPolicy());
         values.put(colName, new SqlNode.Binary("+",
                 SqlNodes.column((SqlNode.Table) null, formattedCol),
                 SqlNodes.param(colName, delta, ParameterSource.SET)));
@@ -90,7 +90,7 @@ public final class EntityUpdate<T> {
     public EntityUpdate<T> incr(String columnOrField, Number delta) {
         Objects.requireNonNull(delta, "delta must not be null");
         String colName = validateUpdatableColumn(meta.resolveColumnName(columnOrField));
-        String formattedCol = meta.formatColumn(colName, template.namingPolicy());
+        String formattedCol = meta.formatColumn(colName, kernel.namingPolicy());
         values.put(colName, new SqlNode.Binary("+",
                 SqlNodes.column((SqlNode.Table) null, formattedCol),
                 SqlNodes.param(colName, delta, ParameterSource.SET)));
@@ -142,7 +142,7 @@ public final class EntityUpdate<T> {
         if (values.isEmpty()) {
             throw new IllegalStateException("Update values must not be empty");
         }
-        return UpdatePlan.explicit(meta, values, buildWhere(), allowAll).toSqlStatement(template);
+        return UpdatePlan.explicit(meta, values, buildWhere(), allowAll).toSqlStatement(kernel);
     }
 
     /** 执行更新并返回 {@link MutationResult}。 */
@@ -150,7 +150,7 @@ public final class EntityUpdate<T> {
         if (values.isEmpty()) {
             throw new IllegalStateException("Update values must not be empty");
         }
-        return UpdatePlan.explicit(meta, values, buildWhere(), allowAll).execute(template);
+        return UpdatePlan.explicit(meta, values, buildWhere(), allowAll).execute(kernel);
     }
 
     private WhereCriterion buildWhere() {

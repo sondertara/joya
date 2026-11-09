@@ -59,9 +59,9 @@ public class PageQueryRequest implements Serializable, Cloneable {
         return Math.max(pageNum, 1);
     }
 
-    /** 页大小归一化：小于 1 按 1 处理。 */
+    /** 页大小归一化：小于 1 按 1 处理，大于 {@link PageRequest#MAX_PAGE_SIZE} 截断。 */
     public int normalizedPageSize() {
-        return Math.max(pageSize, 1);
+        return Math.min(Math.max(pageSize, 1), PageRequest.MAX_PAGE_SIZE);
     }
 
     /** 当前页之前需要跳过的记录数（64 位防溢出）。 */

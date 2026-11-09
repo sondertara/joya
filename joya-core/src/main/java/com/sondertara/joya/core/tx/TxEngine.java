@@ -27,15 +27,15 @@ public interface TxEngine {
      * 纯 JDBC 事务引擎默认实现：统一经 {@link ExecutionKernel#connections()} 借还连接，
      * 不再直接读取 {@code DataSource}（连接来源只有 {@link ConnectionProvider} 一个真相源）。
      */
-    TxEngine JDBC = (rootTemplate, options) -> {
-        Objects.requireNonNull(rootTemplate, "rootTemplate must not be null");
+    TxEngine JDBC = (rootKernel, options) -> {
+        Objects.requireNonNull(rootKernel, "rootKernel must not be null");
         Objects.requireNonNull(options, "options must not be null");
-        ConnectionProvider connections = rootTemplate.connections();
+        ConnectionProvider connections = rootKernel.connections();
         TxConnection txConn = null;
         Connection raw = null;
         try {
             raw = connections.acquire();
-            txConn = new TxConnection(raw, connections, TxSessionSupport.resolveDefaultQueryTimeout(rootTemplate));
+            txConn = new TxConnection(raw, connections, TxSessionSupport.resolveDefaultQueryTimeout(rootKernel));
             txConn.begin(options);
             return txConn;
         } catch (Throwable beginFailure) {
@@ -64,11 +64,11 @@ public interface TxEngine {
     /**
      * 开启一个底层事务会话。
      *
-     * @param rootTemplate 客户端根执行模板
+     * @param rootKernel 客户端根执行模板
      * @param options      事务配置选项
      * @return 已开启的事务会话；由调用方（{@link TxStarter}）负责包装为 {@link Tx} 并最终关闭
      */
-    TxSession open(ExecutionKernel rootTemplate, TxOptions options);
+    TxSession open(ExecutionKernel rootKernel, TxOptions options);
 
     /**
      * 校验当前事务引擎与客户端 {@link DataSource} 及 {@link ConnectionProvider} 的配置一致性。

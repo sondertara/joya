@@ -29,29 +29,29 @@ public final class TxStarter {
     private static final long BASE_RETRY_DELAY_MS = 10L;
     private static final long MAX_RETRY_DELAY_MS = 500L;
 
-    private final ExecutionKernel template;
+    private final ExecutionKernel kernel;
     private final TxEngine txEngine;
     private final TxOptions options;
     private final EntityLifecycle entityLifecycle;
 
-    public TxStarter(ExecutionKernel template) {
-        this(template, TxEngine.JDBC, TxOptions.DEFAULT, EntityLifecycle.EMPTY);
+    public TxStarter(ExecutionKernel kernel) {
+        this(kernel, TxEngine.JDBC, TxOptions.DEFAULT, EntityLifecycle.EMPTY);
     }
 
-    public TxStarter(ExecutionKernel template, TxOptions options) {
-        this(template, TxEngine.JDBC, options, EntityLifecycle.EMPTY);
+    public TxStarter(ExecutionKernel kernel, TxOptions options) {
+        this(kernel, TxEngine.JDBC, options, EntityLifecycle.EMPTY);
     }
 
-    public TxStarter(ExecutionKernel template, TxEngine txEngine) {
-        this(template, txEngine, TxOptions.DEFAULT, EntityLifecycle.EMPTY);
+    public TxStarter(ExecutionKernel kernel, TxEngine txEngine) {
+        this(kernel, txEngine, TxOptions.DEFAULT, EntityLifecycle.EMPTY);
     }
 
-    public TxStarter(ExecutionKernel template, TxEngine txEngine, TxOptions options) {
-        this(template, txEngine, options, EntityLifecycle.EMPTY);
+    public TxStarter(ExecutionKernel kernel, TxEngine txEngine, TxOptions options) {
+        this(kernel, txEngine, options, EntityLifecycle.EMPTY);
     }
 
-    public TxStarter(ExecutionKernel template, TxEngine txEngine, TxOptions options, EntityLifecycle entityLifecycle) {
-        this.template = Objects.requireNonNull(template, "template must not be null");
+    public TxStarter(ExecutionKernel kernel, TxEngine txEngine, TxOptions options, EntityLifecycle entityLifecycle) {
+        this.kernel = Objects.requireNonNull(kernel, "kernel must not be null");
         this.txEngine = Objects.requireNonNull(txEngine, "txEngine must not be null");
         this.options = Objects.requireNonNull(options, "options must not be null");
         this.entityLifecycle = entityLifecycle == null ? EntityLifecycle.EMPTY : entityLifecycle;
@@ -60,7 +60,7 @@ public final class TxStarter {
     // ===== 流式配置（每个方法返回新实例） =====
 
     public TxStarter isolation(Isolation isolation) {
-        return new TxStarter(template, txEngine, options.withIsolation(isolation), entityLifecycle);
+        return new TxStarter(kernel, txEngine, options.withIsolation(isolation), entityLifecycle);
     }
 
     public TxStarter serializable() {
@@ -68,7 +68,7 @@ public final class TxStarter {
     }
 
     public TxStarter readOnly() {
-        return new TxStarter(template, txEngine, options.withReadOnly(true), entityLifecycle);
+        return new TxStarter(kernel, txEngine, options.withReadOnly(true), entityLifecycle);
     }
 
     /** 事务超时：超时后后续语句抛 {@link TxTimeoutException}，并作为语句级 queryTimeout 下沉。 */
@@ -77,7 +77,7 @@ public final class TxStarter {
     }
 
     public TxStarter timeout(Duration timeout) {
-        return new TxStarter(template, txEngine, options.withTimeout(timeout), entityLifecycle);
+        return new TxStarter(kernel, txEngine, options.withTimeout(timeout), entityLifecycle);
     }
 
     /**
@@ -86,7 +86,7 @@ public final class TxStarter {
      * 期间注册的 {@link Tx#afterCompletion} 仅在最终尝试完成时触发一次。
      */
     public TxStarter retryOnDeadlock(int maxAttempts) {
-        return new TxStarter(template, txEngine, options.withRetryAttempts(maxAttempts), entityLifecycle);
+        return new TxStarter(kernel, txEngine, options.withRetryAttempts(maxAttempts), entityLifecycle);
     }
 
     // ===== 终端操作 =====
@@ -98,9 +98,9 @@ public final class TxStarter {
 
     /** 由引擎开启物理会话，并统一包装为唯一的 {@link Tx} 实现 {@link TxImpl}。 */
     private TxImpl open() {
-        TxSession session = txEngine.open(template, options);
+        TxSession session = txEngine.open(kernel, options);
         try {
-            return new TxImpl(template, session, entityLifecycle);
+            return new TxImpl(kernel, session, entityLifecycle);
         } catch (Throwable wrapFailure) {
             try {
                 session.close();

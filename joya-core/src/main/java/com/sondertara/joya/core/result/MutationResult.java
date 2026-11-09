@@ -9,7 +9,6 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 
 /**
  * 变更操作结果 —— 统一承载单条与批量 INSERT/UPDATE/DELETE/UPSERT 的执行结果。

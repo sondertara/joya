@@ -5,9 +5,8 @@ import com.sondertara.joya.core.JoyaClient;
 import com.sondertara.joya.core.JoyaSettings;
 import com.sondertara.joya.core.kernel.statement.DbType;
 import com.sondertara.joya.core.kernel.dialect.QuoteStyle;
-import com.sondertara.joya.core.kernel.interceptor.Chain;
-import com.sondertara.joya.core.kernel.interceptor.RewriteContext;
-import com.sondertara.joya.core.kernel.interceptor.SqlInterceptor;
+import com.sondertara.joya.core.kernel.observe.SqlExecutionContext;
+import com.sondertara.joya.core.kernel.observe.SqlExecutionListener;
 import com.sondertara.joya.core.kernel.statement.SqlStatement;
 import com.sondertara.joya.core.query.PageResult;
 import com.sondertara.joya.core.query.dynamic.PageQueryParams;
@@ -246,12 +245,14 @@ class QueryDslIntegrationTest {
         dataSource.setURL("jdbc:h2:mem:joya_query_dsl_test;DB_CLOSE_DELAY=-1");
 
         executedStatements = new ArrayList<>();
-        SqlInterceptor recorder = (RewriteContext ctx, Chain chain) -> {
-            executedStatements.add(ctx.statement());
-            return chain.proceed(ctx);
+        SqlExecutionListener recorder = new SqlExecutionListener() {
+            @Override
+            public void beforeExecute(SqlExecutionContext ctx) {
+                executedStatements.add(ctx.statement());
+            }
         };
 
-        joya = JoyaClient.builder(dataSource).interceptor(recorder).build();
+        joya = JoyaClient.builder(dataSource).executionListener(recorder).build();
         joya.sql("""
                 DROP TABLE IF EXISTS t_user;
                 DROP TABLE IF EXISTS t_dept;

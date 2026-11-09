@@ -24,14 +24,14 @@ import java.util.function.UnaryOperator;
  */
 public final class EntityDelete<T> {
 
-    private final ExecutionKernel template;
+    private final ExecutionKernel kernel;
     private final EntityMetadataContext meta;
     private final List<UnaryOperator<WhereCriterion>> whereCallbacks = new ArrayList<>();
     private final List<WhereCriterion> explicitCriteria = new ArrayList<>();
     private boolean allowAll;
 
-    EntityDelete(ExecutionKernel template, EntityMetadataContext meta) {
-        this.template = Objects.requireNonNull(template, "template must not be null");
+    EntityDelete(ExecutionKernel kernel, EntityMetadataContext meta) {
+        this.kernel = Objects.requireNonNull(kernel, "kernel must not be null");
         this.meta = Objects.requireNonNull(meta, "meta must not be null");
     }
 
@@ -60,13 +60,13 @@ public final class EntityDelete<T> {
     /** 渲染为不可变 {@link SqlStatement}。 */
     public SqlStatement toSqlStatement() {
         WhereCriterion where = buildWhere();
-        MutationContext ctx = new MutationContext(meta, Map.of(), where, Set.of(), false, allowAll, template.namingPolicy());
+        MutationContext ctx = new MutationContext(meta, Map.of(), where, Set.of(), false, allowAll, kernel.namingPolicy());
         return DeleteStatementFactory.create(ctx);
     }
 
     /** 执行删除并返回 {@link MutationResult}。 */
     public MutationResult execute() {
-        int affected = template.update(toSqlStatement());
+        int affected = kernel.update(toSqlStatement());
         return MutationResult.ofAffected(affected);
     }
 

@@ -12,7 +12,6 @@ import com.sondertara.joya.core.kernel.dialect.DialectStrategy;
 import com.sondertara.joya.core.kernel.error.SqlExceptionTranslator;
 import com.sondertara.joya.core.kernel.executor.Executor;
 import com.sondertara.joya.core.kernel.executor.RowMapperFactory;
-import com.sondertara.joya.core.kernel.interceptor.SqlInterceptor;
 import com.sondertara.joya.core.kernel.interceptor.SqlRewriter;
 import com.sondertara.joya.core.kernel.observe.SqlExecutionListener;
 import com.sondertara.joya.core.kernel.statement.SqlStatement;
@@ -58,9 +57,19 @@ public final class JoyaClient implements DataOps {
                 ? builder.connectionProvider
                 : new DataSourceConnectionProvider(
                         builder.dataSource, builder.settings.executionOptions().queryTimeoutSeconds());
+        ConnectionProvider unwrappedConnections = effectiveConnections.unwrap();
+        DataSource providerDataSource = unwrappedConnections.originDataSource();
+        if (providerDataSource != null && !unwrappedConnections.matchesDataSource(builder.dataSource)) {
+            throw new IllegalArgumentException(
+                    "ConnectionProvider is bound to a different DataSource than the JoyaClient; "
+                            + "dialect probing and SQL execution would target different databases. "
+                            + "Pass the same DataSource to builder(...) and the ConnectionProvider.");
+        }
         DialectStrategy effectiveDialect = builder.dialectStrategy != null
                 ? builder.dialectStrategy
-                : DialectStrategy.cached(builder.dataSource);
+                : (providerDataSource != null
+                        ? DialectStrategy.cached(providerDataSource)
+                        : DialectStrategy.cachedFromProvider());
         this.txEngine = builder.txEngine != null ? builder.txEngine : TxEngine.JDBC;
         if (effectiveConnections.isExternallyManaged() && this.txEngine == TxEngine.JDBC) {
             throw new IllegalArgumentException(
@@ -73,8 +82,6 @@ public final class JoyaClient implements DataOps {
                 ? EntityLifecycle.EMPTY
                 : new EntityLifecycle(builder.entityListeners);
         this.kernel = new ExecutionKernel(new ExecutionKernel.Config(
-                builder.dataSource,
-                builder.interceptors,
                 builder.rewriters,
                 builder.executionListeners,
                 effectiveConnections,
@@ -92,7 +99,7 @@ public final class JoyaClient implements DataOps {
         return builder(dataSource).build();
     }
 
-    /** 创建客户端构建器（支持注册 SQL 拦截器、连接提供者、事务引擎、方言策略与客户端配置）。 */
+    /** 创建客户端构建器（支持注册 SQL 结构改写器、执行监听器、连接提供者、事务引擎、方言策略与客户端配置）。 */
     public static Builder builder(DataSource dataSource) {
         return new Builder(dataSource);
     }
@@ -155,7 +162,14 @@ public final class JoyaClient implements DataOps {
         dataOps.script(reader);
     }
 
-    /** 在连接回调中执行底层 JDBC 操作（每次借还一条自动提交连接，<b>不参与</b>任何 {@link com.sondertara.joya.core.tx.Tx}）。 */
+    /**
+     * 在连接回调中执行底层 JDBC 操作（每次借还一条连接，不经过改写器/观测管线）。
+     *
+     * <p>连接来源由 {@code ConnectionProvider} 决定：自动提交客户端使用独立连接；Spring/JPA 环境下
+     * {@code DataSourceUtils} 可能返回外层 {@code @Transactional} 绑定的连接。事务控制方法
+     * （{@code commit / rollback / setAutoCommit / setSavepoint ...}）受连接能力位保护，禁止在此直接调用；
+     * 需要事务请使用 {@link com.sondertara.joya.core.tx.Tx}。
+     */
     @Override
     public <T> T withConnection(ConnectionCallback<T> action) {
         return dataOps.withConnection(action);
@@ -176,7 +190,6 @@ public final class JoyaClient implements DataOps {
 
     public static final class Builder {
         private final DataSource dataSource;
-        private final List<SqlInterceptor> interceptors = new ArrayList<>();
         private final List<SqlRewriter> rewriters = new ArrayList<>();
         private final List<SqlExecutionListener> executionListeners = new ArrayList<>();
         private final List<EntityListener> entityListeners = new ArrayList<>();
@@ -190,21 +203,6 @@ public final class JoyaClient implements DataOps {
 
         private Builder(DataSource dataSource) {
             this.dataSource = Objects.requireNonNull(dataSource, "dataSource must not be null");
-        }
-
-        /** 追加单个 SQL 拦截器。 */
-        public Builder interceptor(SqlInterceptor interceptor) {
-            Objects.requireNonNull(interceptor, "interceptor must not be null");
-            this.interceptors.add(interceptor);
-            return this;
-        }
-
-        /** 批量追加 SQL 拦截器。 */
-        public Builder interceptors(List<SqlInterceptor> list) {
-            if (list != null) {
-                this.interceptors.addAll(list);
-            }
-            return this;
         }
 
         /** 追加 SQL 结构改写器（AST 级，推荐用于租户/软删/审计等结构变更）。 */
@@ -274,7 +272,14 @@ public final class JoyaClient implements DataOps {
             return this;
         }
 
-        /** 自定义连接提供者（例如 Spring 环境的 {@code SpringConnectionProvider}）。 */
+        /**
+         * 自定义连接提供者（例如 Spring 环境的 {@code SpringConnectionProvider}）。
+         *
+         * <p>若自定义提供者的 {@link ConnectionProvider#originDataSource()} 返回 {@code null} 且未显式指定
+         * {@link #dialectStrategy(DialectStrategy)}，则客户端默认采用 {@link DialectStrategy#cachedFromProvider()}
+         * （首次执行时经该提供者探测一次并缓存方言）；对于会在运行期跨异构数据库动态切换路由的提供者，
+         * 必须显式配置 {@code .dialectStrategy(DialectStrategy.perConnection())}。
+         */
         public Builder connectionProvider(ConnectionProvider connectionProvider) {
             this.connectionProvider = Objects.requireNonNull(connectionProvider, "connectionProvider must not be null");
             return this;

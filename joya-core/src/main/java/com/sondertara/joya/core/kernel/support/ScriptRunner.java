@@ -50,18 +50,11 @@ public class ScriptRunner {
 
     private boolean stopOnError;
     private boolean throwWarning;
-    private boolean autoCommit;
-
-    private boolean sendFullScript;
-    private boolean logFullScript;
-    private boolean removeCRs;
-    private boolean escapeProcessing = true;
 
     private PrintWriter logWriter = new PrintWriter(System.out);
     private PrintWriter errorLogWriter = new PrintWriter(System.err);
 
     private String delimiter = DEFAULT_DELIMITER;
-    private boolean fullLineDelimiter;
 
     public ScriptRunner(Connection connection) {
         this.connection = connection;
@@ -75,32 +68,10 @@ public class ScriptRunner {
         this.throwWarning = throwWarning;
     }
 
-    public void setAutoCommit(boolean autoCommit) {
-        this.autoCommit = autoCommit;
-    }
 
-    public void setSendFullScript(boolean sendFullScript) {
-        this.sendFullScript = sendFullScript;
-    }
 
-    /** 显式开启完整脚本日志；默认仅输出语句类型、长度与指纹，避免泄露参数和字面量。 */
-    public void setLogFullScript(boolean logFullScript) {
-        this.logFullScript = logFullScript;
-    }
 
-    public void setRemoveCRs(boolean removeCRs) {
-        this.removeCRs = removeCRs;
-    }
 
-    /**
-     * Sets the escape processing.
-     *
-     * @param escapeProcessing the new escape processing
-     * @since 3.1.1
-     */
-    public void setEscapeProcessing(boolean escapeProcessing) {
-        this.escapeProcessing = escapeProcessing;
-    }
 
     public void setLogWriter(PrintWriter logWriter) {
         this.logWriter = logWriter;
@@ -110,40 +81,12 @@ public class ScriptRunner {
         this.errorLogWriter = errorLogWriter;
     }
 
-    public void setDelimiter(String delimiter) {
-        this.delimiter = delimiter;
-    }
 
-    public void setFullLineDelimiter(boolean fullLineDelimiter) {
-        this.fullLineDelimiter = fullLineDelimiter;
-    }
 
     public void runScript(Reader reader) {
-        if (sendFullScript) {
-            executeFullScript(reader);
-        } else {
-            executeLineByLine(reader);
-        }
+        executeLineByLine(reader);
     }
 
-    private void executeFullScript(Reader reader) {
-        StringBuilder script = new StringBuilder();
-        try {
-            BufferedReader lineReader = new BufferedReader(reader);
-            String line;
-            while ((line = lineReader.readLine()) != null) {
-                script.append(line);
-                script.append(LINE_SEPARATOR);
-            }
-            String command = script.toString();
-            println(commandLog(command));
-            executeStatement(command);
-        } catch (Exception e) {
-            String message = "Error executing: " + commandDescription(script) + ".  Cause: " + e;
-            printlnError(message);
-            throw new DbException(message, e);
-        }
-    }
 
     private void executeLineByLine(Reader reader) {
         StringBuilder command = new StringBuilder();
@@ -175,11 +118,11 @@ public class ScriptRunner {
             if (matcher.find()) {
                 delimiter = matcher.group(5);
             }
-            println(logFullScript ? trimmedLine : "SQL script comment");
+            println("SQL script comment");
         } else if (commandReadyToExecute(trimmedLine)) {
             command.append(line, 0, line.lastIndexOf(delimiter));
             command.append(LINE_SEPARATOR);
-            println(commandLog(command));
+            println(commandDescription(command));
             executeStatement(command.toString());
             command.setLength(0);
         } else if (!trimmedLine.isEmpty()) {
@@ -194,18 +137,13 @@ public class ScriptRunner {
 
     private boolean commandReadyToExecute(String trimmedLine) {
         // issue #561 remove anything after the delimiter
-        return !fullLineDelimiter && trimmedLine.contains(delimiter) || fullLineDelimiter && trimmedLine.equals(delimiter);
+        return trimmedLine.contains(delimiter);
     }
 
     private void executeStatement(String command) throws SQLException {
         try (Statement statement = connection.createStatement()) {
-            statement.setEscapeProcessing(escapeProcessing);
-            String sql = command;
-            if (removeCRs) {
-                sql = sql.replace("\r\n", "\n");
-            }
-            try {
-                boolean hasResults = statement.execute(sql);
+                try {
+                boolean hasResults = statement.execute(command);
                 // DO NOT try to 'imporove' the condition even if IDE tells you to!
                 // It's important that getUpdateCount() is called here.
                 while (!(!hasResults && statement.getUpdateCount() == -1)) {
@@ -237,15 +175,9 @@ public class ScriptRunner {
         }
     }
 
-    private String commandLog(CharSequence command) {
-        return logFullScript ? command.toString() : commandDescription(command);
-    }
 
     private String commandDescription(CharSequence command) {
         String sql = command.toString().trim();
-        if (logFullScript) {
-            return sql;
-        }
         int keywordEnd = 0;
         while (keywordEnd < sql.length() && !Character.isWhitespace(sql.charAt(keywordEnd))) {
             keywordEnd++;

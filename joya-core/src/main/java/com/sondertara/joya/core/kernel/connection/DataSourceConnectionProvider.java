@@ -15,8 +15,7 @@ public final class DataSourceConnectionProvider implements ConnectionProvider {
 
     private final DataSource dataSource;
     private final int queryTimeoutSeconds;
-    private final java.util.Set<Connection> flippedAutoCommit =
-            java.util.Collections.synchronizedSet(java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>()));
+    private final AutoCommitFlipTracker autoCommitFlips = new AutoCommitFlipTracker();
 
     public DataSourceConnectionProvider(DataSource dataSource) {
         this(dataSource, 0);
@@ -31,13 +30,10 @@ public final class DataSourceConnectionProvider implements ConnectionProvider {
     public Connection acquire() throws SQLException {
         Connection conn = dataSource.getConnection();
         try {
-            if (!conn.getAutoCommit()) {
-                conn.setAutoCommit(true);
-                flippedAutoCommit.add(conn);
-            }
+            autoCommitFlips.flipToAutoCommit(conn);
             return conn;
         } catch (SQLException | RuntimeException e) {
-            flippedAutoCommit.remove(conn);
+            autoCommitFlips.forget(conn);
             try {
                 conn.close();
             } catch (SQLException closeEx) {
@@ -50,14 +46,11 @@ public final class DataSourceConnectionProvider implements ConnectionProvider {
     @Override
     public void release(Connection connection) throws SQLException {
         if (connection != null) {
-            boolean restoreManual = !flippedAutoCommit.isEmpty() && flippedAutoCommit.remove(connection);
             SQLException restoreError = null;
-            if (restoreManual) {
-                try {
-                    connection.setAutoCommit(false);
-                } catch (SQLException e) {
-                    restoreError = e;
-                }
+            try {
+                autoCommitFlips.restore(connection);
+            } catch (SQLException e) {
+                restoreError = e;
             }
             try {
                 connection.close();
@@ -75,11 +68,24 @@ public final class DataSourceConnectionProvider implements ConnectionProvider {
     }
 
     @Override
+    public void discard(Connection connection) throws SQLException {
+        if (connection != null) {
+            autoCommitFlips.forget(connection);
+            connection.close();
+        }
+    }
+
+    @Override
     public OptionalInt queryTimeoutSeconds() {
         return queryTimeoutSeconds > 0 ? OptionalInt.of(queryTimeoutSeconds) : OptionalInt.empty();
     }
 
     public DataSource dataSource() {
+        return dataSource;
+    }
+
+    @Override
+    public DataSource originDataSource() {
         return dataSource;
     }
 }

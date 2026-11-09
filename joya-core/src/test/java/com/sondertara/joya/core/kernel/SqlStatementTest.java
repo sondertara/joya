@@ -65,16 +65,6 @@ class SqlStatementTest {
         assertEquals(List.of(1), rewritten.args(), "改写不应丢失参数");
     }
 
-    @Test
-    void appendParameter_addsParamWithSequentialIndexAndName() {
-        SqlStatement s = SqlStatement.select("SELECT * FROM t WHERE a = ? AND b = ?", List.of(1))
-                .appendParameter("b", 2, ParameterSource.WHERE);
-
-        assertEquals(List.of(1, 2), s.args());
-        assertEquals(2, s.parameters().get(1).index(), "追加参数应自动重排 index");
-        assertEquals("b", s.parameters().get(1).name());
-        assertEquals(ParameterSource.WHERE, s.parameters().get(1).source());
-    }
 
     @Test
     void parameters_defensiveCopyAndImmutable() {

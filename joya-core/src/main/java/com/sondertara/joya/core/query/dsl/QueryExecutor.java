@@ -5,11 +5,13 @@ import com.sondertara.joya.core.kernel.PageSlice;
 import com.sondertara.joya.core.kernel.executor.RowMapper;
 import com.sondertara.joya.core.kernel.executor.SingleColumnRowMapper;
 import com.sondertara.joya.core.kernel.statement.SqlNode;
+import com.sondertara.joya.core.kernel.statement.SqlNodes;
 import com.sondertara.joya.core.kernel.statement.SqlStatement;
 import com.sondertara.joya.core.query.PageResult;
 import com.sondertara.joya.core.query.RenderContext;
 import com.sondertara.joya.core.query.pagination.PageRequest;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -20,11 +22,13 @@ import java.util.stream.Stream;
  */
 final class QueryExecutor<T> {
 
-    private final ExecutionKernel template;
+    private static final List<SqlNode> EXISTS_PROJECTION = List.of(SqlNodes.raw("1"));
+
+    private final ExecutionKernel kernel;
     private final QueryRenderer<T> renderer;
 
-    QueryExecutor(ExecutionKernel template, QueryRenderer<T> renderer) {
-        this.template = template;
+    QueryExecutor(ExecutionKernel kernel, QueryRenderer<T> renderer) {
+        this.kernel = kernel;
         this.renderer = renderer;
     }
 
@@ -33,12 +37,12 @@ final class QueryExecutor<T> {
     }
 
     private <V> List<V> executeList(QuerySpec<T> spec, Projection<V> projection, RenderContext ctx) {
-        SqlStatement stmt = renderer.renderStatementNodes(spec, projection.nodes(), true, ctx);
+        SqlStatement stmt = renderer.renderStatement(spec, projection.nodes(), true, ctx);
         if (spec.limit() != null) {
             long start = spec.offset() == null ? 0L : spec.offset();
-            return requireTemplate().queryLimit(stmt, mapper(projection), start, spec.limit());
+            return requireKernel().queryLimit(stmt, mapper(projection), start, spec.limit());
         }
-        return requireTemplate().queryList(stmt, mapper(projection));
+        return requireKernel().queryList(stmt, mapper(projection));
     }
 
     <V> Optional<V> executeOne(QuerySpec<T> spec, Projection<V> projection) {
@@ -46,10 +50,10 @@ final class QueryExecutor<T> {
     }
 
     private <V> Optional<V> executeOne(QuerySpec<T> spec, Projection<V> projection, RenderContext ctx) {
-        SqlStatement stmt = renderer.renderStatementNodes(spec, projection.nodes(), true, ctx);
+        SqlStatement stmt = renderer.renderStatement(spec, projection.nodes(), true, ctx);
         if (spec.limit() != null) {
             long start = spec.offset() == null ? 0L : spec.offset();
-            List<V> rows = requireTemplate().queryLimit(stmt, mapper(projection), start,
+            List<V> rows = requireKernel().queryLimit(stmt, mapper(projection), start,
                     Math.min(spec.limit(), 2));
             if (rows.isEmpty()) {
                 return Optional.empty();
@@ -60,7 +64,7 @@ final class QueryExecutor<T> {
             }
             return Optional.ofNullable(rows.get(0));
         }
-        return Optional.ofNullable(requireTemplate().queryOne(stmt, mapper(projection)));
+        return Optional.ofNullable(requireKernel().queryOne(stmt, mapper(projection)));
     }
 
     <V> Optional<V> executeFirst(QuerySpec<T> spec, Projection<V> projection) {
@@ -68,9 +72,9 @@ final class QueryExecutor<T> {
     }
 
     private <V> Optional<V> executeFirst(QuerySpec<T> spec, Projection<V> projection, RenderContext ctx) {
-        SqlStatement stmt = renderer.renderStatementNodes(spec, projection.nodes(), true, ctx);
+        SqlStatement stmt = renderer.renderStatement(spec, projection.nodes(), true, ctx);
         long start = spec.offset() == null ? 0L : spec.offset();
-        List<V> rows = requireTemplate().queryLimit(stmt, mapper(projection), start, 1L);
+        List<V> rows = requireKernel().queryLimit(stmt, mapper(projection), start, 1L);
         return rows.isEmpty() ? Optional.empty() : Optional.ofNullable(rows.get(0));
     }
 
@@ -79,12 +83,12 @@ final class QueryExecutor<T> {
     }
 
     private <V> Stream<V> executeStream(QuerySpec<T> spec, Projection<V> projection, RenderContext ctx) {
-        SqlStatement stmt = renderer.renderStatementNodes(spec, projection.nodes(), true, ctx);
+        SqlStatement stmt = renderer.renderStatement(spec, projection.nodes(), true, ctx);
         if (spec.limit() != null) {
             long start = spec.offset() == null ? 0L : spec.offset();
-            return requireTemplate().queryStream(stmt, mapper(projection), start, spec.limit());
+            return requireKernel().queryStream(stmt, mapper(projection), start, spec.limit());
         }
-        return requireTemplate().queryStream(stmt, mapper(projection));
+        return requireKernel().queryStream(stmt, mapper(projection));
     }
 
     <V> PageResult<V> executePage(QuerySpec<T> spec, PageRequest page, Projection<V> projection) {
@@ -94,27 +98,29 @@ final class QueryExecutor<T> {
     private <V> PageResult<V> executePage(QuerySpec<T> spec, PageRequest page,
                                           Projection<V> projection, RenderContext ctx) {
         Objects.requireNonNull(page, "page must not be null");
-        SqlStatement dataStmt = renderer.renderStatementNodes(spec, projection.nodes(), true, ctx);
+        SqlStatement dataStmt = renderer.renderStatement(spec, projection.nodes(), true, ctx);
         if (!page.isNeedTotal()) {
             long baseOffset = spec.offset() == null ? 0L : spec.offset();
-            long pageRelOffset = page.getOffsetAsLong();
+            long pageRelOffset = page.getOffset();
             long effectiveOffset = Math.addExact(baseOffset, pageRelOffset);
+            long requested = (long) page.getSize() + 1L;
             long effectiveLimit = spec.limit() == null
-                    ? page.getSize()
-                    : Math.min((long) page.getSize(), Math.max(0L, spec.limit() - pageRelOffset));
-            List<V> rows = effectiveLimit <= 0L
+                    ? requested
+                    : Math.min(requested, Math.max(0L, spec.limit() - pageRelOffset));
+            List<V> fetched = effectiveLimit <= 0L
                     ? List.of()
-                    : requireTemplate().queryLimit(dataStmt, mapper(projection), effectiveOffset, effectiveLimit);
-            return PageResult.of(rows, -1L, page.getPageNum(), page.getSize());
+                    : requireKernel().queryLimit(dataStmt, mapper(projection), effectiveOffset, effectiveLimit);
+            boolean hasNext = fetched.size() > page.getSize();
+            List<V> rows = hasNext
+                    ? new ArrayList<>(fetched.subList(0, page.getSize()))
+                    : fetched;
+            return PageResult.of(rows, -1L, page.getPageNum(), page.getSize(), hasNext);
         }
         if (spec.limit() != null || spec.offset() != null) {
             long total = count(spec, projection.nodes(), projection.aggregate(), ctx);
-            long pageRelOffset = page.getOffsetAsLong();
+            long pageRelOffset = page.getOffset();
             if (total <= 0L || pageRelOffset >= total) {
-                return PageResult.<V>of(List.of())
-                        .pagination(page.getPage(), page.getSize())
-                        .total(total)
-                        .build();
+                return PageResult.of(List.of(), total, page.getPageNum(), page.getSize());
             }
             long baseOffset = spec.offset() == null ? 0L : spec.offset();
             long effectiveOffset = Math.addExact(baseOffset, pageRelOffset);
@@ -123,19 +129,13 @@ final class QueryExecutor<T> {
                     : Math.min((long) page.getSize(), Math.max(0L, spec.limit() - pageRelOffset));
             List<V> rows = effectiveLimit <= 0L
                     ? List.of()
-                    : requireTemplate().queryLimit(dataStmt, mapper(projection), effectiveOffset, effectiveLimit);
-            return PageResult.of(rows)
-                    .pagination(page.getPage(), page.getSize())
-                    .total(total)
-                    .build();
+                    : requireKernel().queryLimit(dataStmt, mapper(projection), effectiveOffset, effectiveLimit);
+            return PageResult.of(rows, total, page.getPageNum(), page.getSize());
         }
         SqlStatement countStmt = renderer.renderCountStatement(spec, projection.nodes(), projection.aggregate(), ctx);
-        PageSlice<V> slice = requireTemplate().queryPage(
-                dataStmt, countStmt, mapper(projection), page.getOffsetAsLong(), page.getSize());
-        return PageResult.of(slice.rows())
-                .pagination(page.getPage(), page.getSize())
-                .total(slice.total())
-                .build();
+        PageSlice<V> slice = requireKernel().queryPage(
+                dataStmt, countStmt, mapper(projection), page.getOffset(), page.getSize());
+        return PageResult.of(slice.rows(), slice.total(), page.getPageNum(), page.getSize());
     }
 
     long count(QuerySpec<T> spec, List<SqlNode> projectionNodes, boolean hasAggregate, RenderContext ctx) {
@@ -143,7 +143,7 @@ final class QueryExecutor<T> {
             return 0L;
         }
         SqlStatement countStmt = renderer.renderCountStatement(spec, projectionNodes, hasAggregate, ctx);
-        Long total = requireTemplate().query(countStmt, new SingleColumnRowMapper<>(Long.class));
+        Long total = requireKernel().query(countStmt, new SingleColumnRowMapper<>(Long.class));
         long rawTotal = total == null ? 0L : total;
         if (spec.offset() != null && spec.offset() > 0L) {
             rawTotal = Math.max(0L, rawTotal - spec.offset());
@@ -159,10 +159,10 @@ final class QueryExecutor<T> {
             return false;
         }
         RenderContext ctx = renderer.renderContext(spec);
-        SqlStatement stmt = renderer.renderStatement(spec, List.of("1"),
+        SqlStatement stmt = renderer.renderStatement(spec, EXISTS_PROJECTION,
                 spec.offset() != null && spec.offset() > 0L, ctx);
         long start = spec.offset() == null ? 0L : spec.offset();
-        List<Integer> rows = requireTemplate().queryLimit(stmt,
+        List<Integer> rows = requireKernel().queryLimit(stmt,
                 new SingleColumnRowMapper<>(Integer.class), start, 1L);
         return !rows.isEmpty();
     }
@@ -175,14 +175,14 @@ final class QueryExecutor<T> {
         if (projection.mapper() != null) {
             return projection.mapper();
         }
-        return requireTemplate().mapperFor(projection.resultType(), projection.resultClass());
+        return requireKernel().mapperFor(projection.resultType(), projection.resultClass());
     }
 
-    private ExecutionKernel requireTemplate() {
-        if (template == null) {
+    private ExecutionKernel requireKernel() {
+        if (kernel == null) {
             throw new IllegalStateException(
                     "Query was created offline via Query.of(...) and is not bound to a JoyaClient or Tx");
         }
-        return template;
+        return kernel;
     }
 }

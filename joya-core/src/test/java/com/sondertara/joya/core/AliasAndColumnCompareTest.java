@@ -563,7 +563,7 @@ class AliasAndColumnCompareTest {
                 .toSqlStatement();
         assertTrue(group5AndSelect9.sql().contains("GROUP BY t0.id, t0.buyer_id, t0.seller_id, t0.amount, buyer.dept_id"));
 
-        // 4. [2.3-1 & 2.3-3] TableRef 自动剥离引号；4.1-4 SqlParameter 拒绝 index=0 且 replaceParameter 保留自定义 binder
+        // 4. [2.3-1 & 2.3-3] TableRef 自动剥离引号；4.1-4 SqlParameter 拒绝 index=0 且自定义 binder 在构造时保留
         com.sondertara.joya.core.kernel.statement.TableRef ref =
                 com.sondertara.joya.core.kernel.statement.TableRef.ofQualified("`app`.`t_user`", "t0");
         assertEquals("app", ref.schema());
@@ -574,9 +574,13 @@ class AliasAndColumnCompareTest {
                         0, "p", 1, com.sondertara.joya.core.kernel.statement.ParameterSource.RAW));
 
         com.sondertara.joya.core.kernel.statement.ParameterBinder customBinder = (ps, idx, val) -> ps.setObject(idx, val);
-        SqlStatement stmtWithCustomBinder = SqlStatement.select("SELECT * FROM t_batch_seq WHERE id = ?", 1L)
-                .replaceParameter(1, com.sondertara.joya.core.kernel.statement.SqlParameter.of(
-                        1, "id", 2L, com.sondertara.joya.core.kernel.statement.ParameterSource.WHERE, customBinder));
+        com.sondertara.joya.core.kernel.statement.SqlParameter customParameter =
+                com.sondertara.joya.core.kernel.statement.SqlParameter.of(
+                        1, "id", 2L, com.sondertara.joya.core.kernel.statement.ParameterSource.WHERE, customBinder);
+        SqlStatement stmtWithCustomBinder = SqlStatement.of(
+                "SELECT * FROM t_batch_seq WHERE id = ?", java.util.List.of(customParameter),
+                com.sondertara.joya.core.kernel.statement.StatementMetadata.of(
+                        com.sondertara.joya.core.kernel.statement.Operation.SELECT));
         assertEquals(customBinder, stmtWithCustomBinder.parameters().get(0).binder());
 
         // 5. [4.1-1 & 4.1-3] 执行期自动填充已缓存 dbType

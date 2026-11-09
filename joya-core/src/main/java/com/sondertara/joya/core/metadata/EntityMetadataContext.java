@@ -2,6 +2,7 @@ package com.sondertara.joya.core.metadata;
 
 import com.sondertara.joya.core.function.IGetter;
 import com.sondertara.joya.core.naming.NamingPolicy;
+import com.sondertara.joya.exceptions.DbException;
 import com.sondertara.joya.utils.ClassUtils;
 import com.sondertara.joya.utils.LambdaUtils;
 import com.sondertara.joya.utils.Strings;
@@ -165,7 +166,7 @@ public final class EntityMetadataContext {
     }
 
     /** 按命名策略格式化列名（默认原样保留 {@code @Column(name)} 注解原文，开启 {@link NamingPolicy#columnUppercase()} 时转为大写）。 */
-    public String formatColumn(String columnName, @Nullable NamingPolicy namingPolicy) {
+    public @Nullable String formatColumn(@Nullable String columnName, @Nullable NamingPolicy namingPolicy) {
         if (columnName == null) {
             return null;
         }
@@ -383,6 +384,7 @@ public final class EntityMetadataContext {
         private Class<?> primaryKeyType;
         private final List<String> columnNames = new ArrayList<>();
         private final Map<String, String> columnToField = new LinkedHashMap<>();
+        private final Map<String, String> lowerColumnToField = new LinkedHashMap<>();
         private final Map<String, String> fieldToColumn = new LinkedHashMap<>();
         private final Map<String, Field> columnFields = new LinkedHashMap<>();
         private final Set<String> generatedColumns = new LinkedHashSet<>();
@@ -423,8 +425,15 @@ public final class EntityMetadataContext {
         }
 
         public Builder column(String columnName, String fieldName, @Nullable Field field) {
-            columnNames.add(columnName);
+            String lowered = columnName.toLowerCase(Locale.ROOT);
+            String previousField = lowerColumnToField.putIfAbsent(lowered, fieldName);
+            if (previousField != null) {
+                throw new DbException("Duplicate column name '" + columnName + "' mapped by fields ["
+                        + previousField + ", " + fieldName + "] on entity ["
+                        + (entityType != null ? entityType.getName() : "unknown") + "]");
+            }
             columnToField.put(columnName, fieldName);
+            columnNames.add(columnName);
             fieldToColumn.put(fieldName, columnName);
             if (field != null) {
                 columnFields.put(columnName, field);

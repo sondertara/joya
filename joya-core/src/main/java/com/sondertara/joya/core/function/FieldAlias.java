@@ -1,6 +1,4 @@
-package com.sondertara.joya.core.jdbc.resultset;
-
-import com.sondertara.joya.core.function.TypedConverter;
+package com.sondertara.joya.core.function;
 
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;

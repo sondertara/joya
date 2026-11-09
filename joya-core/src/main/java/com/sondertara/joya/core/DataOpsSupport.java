@@ -27,7 +27,7 @@ public final class DataOpsSupport {
     };
 
     private final DataOps owner;
-    private final ExecutionKernel template;
+    private final ExecutionKernel kernel;
     private final EntityLifecycle entityLifecycle;
     private final JoyaSettings settings;
     private final boolean concurrent;
@@ -36,14 +36,14 @@ public final class DataOpsSupport {
     private Map<Class<?>, Object> mapperCache;
 
     private DataOpsSupport(DataOps owner,
-                           ExecutionKernel template,
+                           ExecutionKernel kernel,
                            EntityLifecycle entityLifecycle,
                            boolean concurrent,
                            Runnable accessGuard) {
         this.owner = Objects.requireNonNull(owner, "owner must not be null");
-        this.template = Objects.requireNonNull(template, "template must not be null");
+        this.kernel = Objects.requireNonNull(kernel, "kernel must not be null");
         this.entityLifecycle = entityLifecycle == null ? EntityLifecycle.EMPTY : entityLifecycle;
-        this.settings = JoyaSettings.of(template.executionOptions(), template.namingPolicy());
+        this.settings = JoyaSettings.of(kernel.executionOptions(), kernel.namingPolicy());
         this.concurrent = concurrent;
         this.accessGuard = accessGuard == null ? NOOP : accessGuard;
         if (concurrent) {
@@ -53,21 +53,21 @@ public final class DataOpsSupport {
     }
 
     /** 创建多线程共享的客户端门面委托。 */
-    public static DataOpsSupport concurrent(DataOps owner, ExecutionKernel template, EntityLifecycle entityLifecycle) {
-        return new DataOpsSupport(owner, template, entityLifecycle, true, NOOP);
+    public static DataOpsSupport concurrent(DataOps owner, ExecutionKernel kernel, EntityLifecycle entityLifecycle) {
+        return new DataOpsSupport(owner, kernel, entityLifecycle, true, NOOP);
     }
 
     /** 创建单线程独占的事务门面委托（所有入口调用前先触发 {@code accessGuard}）。 */
     public static DataOpsSupport singleThread(DataOps owner,
-                                              ExecutionKernel template,
+                                              ExecutionKernel kernel,
                                               EntityLifecycle entityLifecycle,
                                               Runnable accessGuard) {
-        return new DataOpsSupport(owner, template, entityLifecycle, false, accessGuard);
+        return new DataOpsSupport(owner, kernel, entityLifecycle, false, accessGuard);
     }
 
     public <T> Query<T> from(Class<T> entityType) {
         accessGuard.run();
-        return new Query<>(template, entityType);
+        return new Query<>(kernel, entityType);
     }
 
     @SuppressWarnings("unchecked")
@@ -78,17 +78,17 @@ public final class DataOpsSupport {
             opsCache = new HashMap<>(4);
         }
         return (EntityOps<T>) opsCache.computeIfAbsent(entityType,
-                type -> EntityOps.of(template, (Class<Object>) type, entityLifecycle));
+                type -> EntityOps.of(kernel, (Class<Object>) type, entityLifecycle));
     }
 
     public SqlOps sql(String sql, Object... args) {
         accessGuard.run();
-        return new SqlOps(template, sql, args);
+        return new SqlOps(kernel, sql, args);
     }
 
     public SqlOps sql(SqlStatement statement) {
         accessGuard.run();
-        return new SqlOps(template, statement);
+        return new SqlOps(kernel, statement);
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
@@ -106,12 +106,12 @@ public final class DataOpsSupport {
 
     public <T> T withConnection(ConnectionCallback<T> action) {
         accessGuard.run();
-        return template.withConnection(action);
+        return kernel.withConnection(action);
     }
 
     public void script(Reader reader) {
         accessGuard.run();
-        template.runScript(reader);
+        kernel.runScript(reader);
     }
 
     public JoyaSettings settings() {
@@ -121,6 +121,6 @@ public final class DataOpsSupport {
 
     public DbType dbType() {
         accessGuard.run();
-        return template.dialect().dbType();
+        return kernel.dialect().dbType();
     }
 }

@@ -69,14 +69,14 @@ public record NamingPolicy(
                 Objects.requireNonNullElse(resolver, TableNameResolver.IDENTITY), openQuote, closeQuote);
     }
 
-    public String formatTable(String tableName) {
+    public @Nullable String formatTable(@Nullable String tableName) {
         if (tableName == null) {
             return null;
         }
         return tableUppercase ? tableName.toUpperCase(Locale.ROOT) : tableName;
     }
 
-    public String formatColumn(String columnName) {
+    public @Nullable String formatColumn(@Nullable String columnName) {
         if (columnName == null) {
             return null;
         }

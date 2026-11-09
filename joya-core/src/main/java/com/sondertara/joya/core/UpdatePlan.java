@@ -1,7 +1,6 @@
 package com.sondertara.joya.core;
 
 import com.sondertara.joya.core.listener.EntityLifecycle;
-import com.sondertara.joya.core.listener.EntityListener;
 import com.sondertara.joya.core.kernel.executor.ExecutionOptions;
 import com.sondertara.joya.core.kernel.ExecutionKernel;
 import com.sondertara.joya.core.kernel.executor.BatchSlice;
@@ -62,10 +61,6 @@ final class UpdatePlan<T> {
     /**
      * 按实体主键更新：先触发 {@code preUpdate} 与主键校验，再对实体做快照。
      */
-    static <T> UpdatePlan<T> byPrimaryKey(EntityMetadataContext meta, T entity, boolean ignoreNull, String pk) {
-        return byPrimaryKey(meta, entity, ignoreNull, pk, EntityLifecycle.EMPTY);
-    }
-
     static <T> UpdatePlan<T> byPrimaryKey(EntityMetadataContext meta, T entity, boolean ignoreNull,
                                           String pk, EntityLifecycle lifecycle) {
         Objects.requireNonNull(entity, "entity must not be null");
@@ -92,14 +87,14 @@ final class UpdatePlan<T> {
                 false, allowAll, null, EntityLifecycle.EMPTY);
     }
 
-    SqlStatement toSqlStatement(ExecutionKernel template) {
+    SqlStatement toSqlStatement(ExecutionKernel kernel) {
         MutationContext ctx = new MutationContext(meta, values, where, declared, ignoreNull, allowAll,
-                template.namingPolicy());
+                kernel.namingPolicy());
         return UpdateStatementFactory.create(ctx);
     }
 
-    MutationResult execute(ExecutionKernel template) {
-        long affected = template.update(toSqlStatement(template));
+    MutationResult execute(ExecutionKernel kernel) {
+        long affected = kernel.update(toSqlStatement(kernel));
         if (sourceEntity != null) {
             lifecycle.postUpdate(sourceEntity);
         }
@@ -112,7 +107,7 @@ final class UpdatePlan<T> {
     private record UpdateRowPlan<E>(E entity, Map<String, Object> values, Object pkValue) {
     }
 
-    static <T> MutationResult executeUpdateAll(ExecutionKernel template,
+    static <T> MutationResult executeUpdateAll(ExecutionKernel kernel,
                                                EntityMetadataContext meta,
                                                Collection<T> entities,
                                                List<String> setColumns,
@@ -126,14 +121,14 @@ final class UpdatePlan<T> {
         for (T row : entities) {
             plans.add(prepareUpdateRow(meta, row, pk, effectiveLifecycle));
         }
-        MutationResult result = executeBatch(template, buildUpdateBatch(template, meta, plans, setColumns, pk));
+        MutationResult result = executeBatch(kernel, buildUpdateBatch(kernel, meta, plans, setColumns, pk));
         for (UpdateRowPlan<T> plan : plans) {
             effectiveLifecycle.postUpdate(plan.entity());
         }
         return result;
     }
 
-    static <T> MutationResult executeUpdateAllByColumns(ExecutionKernel template,
+    static <T> MutationResult executeUpdateAllByColumns(ExecutionKernel kernel,
                                                         EntityMetadataContext meta,
                                                         Collection<T> entities,
                                                         Collection<String> columns,
@@ -157,10 +152,10 @@ final class UpdatePlan<T> {
         if (uniqueCols.isEmpty()) {
             throw new IllegalArgumentException("Update columns must contain at least one non-primary-key column");
         }
-        return executeUpdateAll(template, meta, entities, new ArrayList<>(uniqueCols), pk, lifecycle);
+        return executeUpdateAll(kernel, meta, entities, new ArrayList<>(uniqueCols), pk, lifecycle);
     }
 
-    static <T> MutationResult executePatchAll(ExecutionKernel template,
+    static <T> MutationResult executePatchAll(ExecutionKernel kernel,
                                               EntityMetadataContext meta,
                                               Collection<T> entities,
                                               String pk,
@@ -197,7 +192,7 @@ final class UpdatePlan<T> {
         MutationResult result = MutationResult.EMPTY;
         for (UpdateRun<T> run : runs) {
             result = result.merge(executeBatch(
-                    template, buildUpdateBatch(template, meta, run.rows(), run.cols(), pk)));
+                    kernel, buildUpdateBatch(kernel, meta, run.rows(), run.cols(), pk)));
             for (UpdateRowPlan<T> plan : run.rows()) {
                 effectiveLifecycle.postUpdate(plan.entity());
             }
@@ -205,7 +200,7 @@ final class UpdatePlan<T> {
         return result;
     }
 
-    private static <T> BatchSqlStatement buildUpdateBatch(ExecutionKernel template,
+    private static <T> BatchSqlStatement buildUpdateBatch(ExecutionKernel kernel,
                                                           EntityMetadataContext meta,
                                                           List<UpdateRowPlan<T>> plans,
                                                           List<String> setColumns,
@@ -230,15 +225,15 @@ final class UpdatePlan<T> {
                 setColumns,
                 pk,
                 rows,
-                template.namingPolicy(),
-                effectiveBatchSize(template));
+                kernel.namingPolicy(),
+                effectiveBatchSize(kernel));
     }
 
-    private static MutationResult executeBatch(ExecutionKernel template, BatchSqlStatement batch) {
+    private static MutationResult executeBatch(ExecutionKernel kernel, BatchSqlStatement batch) {
         if (batch == null || batch.rowCount() == 0) {
             return MutationResult.EMPTY;
         }
-        BatchSlice slice = template.batchExecute(batch);
+        BatchSlice slice = kernel.batchExecute(batch);
         return slice.isEmpty()
                 ? MutationResult.EMPTY
                 : MutationResult.ofBatch(slice.batchCounts(), slice.generatedKeys());
@@ -257,8 +252,8 @@ final class UpdatePlan<T> {
         return new UpdateRowPlan<>(row, values, pkVal);
     }
 
-    private static int effectiveBatchSize(ExecutionKernel template) {
-        int configured = template.executionOptions().batchSize();
+    private static int effectiveBatchSize(ExecutionKernel kernel) {
+        int configured = kernel.executionOptions().batchSize();
         return configured > 0 ? configured : ExecutionOptions.DEFAULT_BATCH_SIZE;
     }
 }

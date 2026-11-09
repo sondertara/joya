@@ -1,7 +1,8 @@
 package com.sondertara.joya.spring;
 
 import com.sondertara.joya.core.JoyaClient;
-import com.sondertara.joya.core.kernel.interceptor.SqlInterceptor;
+import com.sondertara.joya.core.kernel.observe.SqlExecutionContext;
+import com.sondertara.joya.core.kernel.observe.SqlExecutionListener;
 import com.sondertara.joya.spring.autoconfigure.JoyaClientCustomizer;
 import com.sondertara.joya.spring.autoconfigure.JoyaClientRegistry;
 import com.sondertara.joya.spring.test.order.OrderRecord;
@@ -78,19 +79,23 @@ class JoyaSpringSidecarIntegrationTest {
         static final List<String> CUSTOMIZER_INVOKED_FOR = new CopyOnWriteArrayList<>();
 
         @Bean
-        public SqlInterceptor globalSqlInterceptor() {
-            return (ctx, chain) -> {
-                GLOBAL_SQL_LOG.add(ctx.statement().sql());
-                return chain.proceed(ctx);
+        public SqlExecutionListener globalSqlListener() {
+            return new SqlExecutionListener() {
+                @Override
+                public void beforeExecute(SqlExecutionContext ctx) {
+                    GLOBAL_SQL_LOG.add(ctx.statement().sql());
+                }
             };
         }
 
         @Bean
         @Qualifier("order")
-        public SqlInterceptor orderOnlySqlInterceptor() {
-            return (ctx, chain) -> {
-                ORDER_ONLY_SQL_LOG.add(ctx.statement().sql());
-                return chain.proceed(ctx);
+        public SqlExecutionListener orderOnlySqlListener() {
+            return new SqlExecutionListener() {
+                @Override
+                public void beforeExecute(SqlExecutionContext ctx) {
+                    ORDER_ONLY_SQL_LOG.add(ctx.statement().sql());
+                }
             };
         }
 
@@ -600,6 +605,11 @@ class JoyaSpringSidecarIntegrationTest {
                     () -> joinedTx.of(UserAccount.class));
             assertThrows(com.sondertara.joya.core.tx.IllegalTxStateException.class,
                     () -> joinedTx.sql("SELECT 1").value(Integer.class));
+            com.sondertara.joya.core.tx.IllegalTxStateException rollbackAfterOuterCommit = assertThrows(
+                    com.sondertara.joya.core.tx.IllegalTxStateException.class,
+                    joinedTx::rollback);
+            assertEquals(com.sondertara.joya.core.tx.TxState.COMMITTED, rollbackAfterOuterCommit.current(),
+                    "外层已提交的事务上调用 rollback() 必须抛 IllegalTxStateException 且报告当前终态为 COMMITTED");
         } finally {
             joinedTx.close();
         }
@@ -636,7 +646,7 @@ class JoyaSpringSidecarIntegrationTest {
     }
 
     @Test
-    void nonResourceTransactionManager_isNotSilentlyAcceptedAndFallsBackToDataSourceTransactionManager() {
+    void nonResourceTransactionManager_isNotSilentlyAcceptedAndFallsBackToPlainJdbcEngine() {
         NonResourceTxManagerConfig.GET_TX_CALLS.set(0);
         autoDiscoveryRunner()
                 .withUserConfiguration(NonResourceTxManagerConfig.class)
@@ -650,7 +660,7 @@ class JoyaSpringSidecarIntegrationTest {
                     JoyaClient client = context.getBean(JoyaClient.class);
                     client.tx(tx -> tx.sql("SELECT 1").value(Integer.class));
                     assertEquals(0, NonResourceTxManagerConfig.GET_TX_CALLS.get(),
-                            "非 ResourceTransactionManager 不应被静默复用，应回退为独立的 DataSourceTransactionManager");
+                            "非 ResourceTransactionManager 不应被静默复用，应回退为纯 JDBC 事务引擎");
                 });
     }
 
@@ -696,7 +706,7 @@ class JoyaSpringSidecarIntegrationTest {
     }
 
     @Test
-    void nonDataSourceResourceTransactionManager_isNotFalselyReusedAndFallsBackToDataSourceTransactionManager() {
+    void nonDataSourceResourceTransactionManager_isNotFalselyReusedAndFallsBackToPlainJdbcEngine() {
         JpaStyleTxManagerConfig.GET_TX_CALLS.set(0);
         autoDiscoveryRunner()
                 .withUserConfiguration(JpaStyleTxManagerConfig.class)
@@ -710,7 +720,100 @@ class JoyaSpringSidecarIntegrationTest {
                     JoyaClient client = context.getBean(JoyaClient.class);
                     client.tx(tx -> tx.sql("SELECT 1").value(Integer.class));
                     assertEquals(0, JpaStyleTxManagerConfig.GET_TX_CALLS.get(),
-                            "非 DataSource 资源工厂的 ResourceTransactionManager（如 JPA）不应被误当成 DataSourceTransactionManager 复用");
+                            "非 DataSource 资源工厂且非 JpaTransactionManager 的管理器不应被复用，应回退为纯 JDBC 事务引擎");
+                });
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class BoundJpaTxManagerConfig {
+        @Bean
+        org.springframework.orm.jpa.JpaTransactionManager jpaTransactionManager(DataSource dataSource) {
+            return new org.springframework.orm.jpa.JpaTransactionManager(dataSource);
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class UnboundJpaTxManagerConfig {
+        @Bean
+        org.springframework.orm.jpa.JpaTransactionManager jpaTransactionManager() {
+            return new org.springframework.orm.jpa.JpaTransactionManager();
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class WrappedDataSourceWithInnerBoundJpaConfig {
+        static final org.h2.jdbcx.JdbcDataSource RAW_DS = new org.h2.jdbcx.JdbcDataSource();
+        static {
+            RAW_DS.setURL("jdbc:h2:mem:wrapped_jpa_mismatch_db;MODE=MYSQL;DB_CLOSE_DELAY=-1");
+            RAW_DS.setUser("sa");
+        }
+
+        @Bean
+        DataSource dataSource() {
+            return new org.springframework.jdbc.datasource.LazyConnectionDataSourceProxy(RAW_DS);
+        }
+
+        @Bean
+        org.springframework.orm.jpa.JpaTransactionManager jpaTransactionManager() {
+            // 故意绑定在内层 RAW_DS 而非主 Bean (LazyConnectionDataSourceProxy)
+            return new org.springframework.orm.jpa.JpaTransactionManager(RAW_DS);
+        }
+    }
+
+    @Test
+    void jpaTransactionManager_sharesConnectionWhenBoundToExactPrimaryDataSource_andRejectsWrappedMismatch() {
+        // 1. JpaTransactionManager 显式绑定主 DataSource：被自动选中并与 Joya 共享连接
+        autoDiscoveryRunner()
+                .withUserConfiguration(BoundJpaTxManagerConfig.class)
+                .withPropertyValues(
+                        "spring.datasource.url=jdbc:h2:mem:jpa_bound_ok_db;MODE=MYSQL;DB_CLOSE_DELAY=-1",
+                        "spring.datasource.username=sa",
+                        "spring.datasource.password=",
+                        "spring.datasource.type=org.h2.jdbcx.JdbcDataSource")
+                .run(context -> {
+                    assertNull(context.getStartupFailure());
+                    JoyaClient client = context.getBean(JoyaClient.class);
+                    org.springframework.orm.jpa.JpaTransactionManager jpaTm =
+                            context.getBean(org.springframework.orm.jpa.JpaTransactionManager.class);
+                    client.tx(tx -> tx.sql("SELECT 1").value(Integer.class));
+                    assertEquals(1, jpaTm.getTransactionCalls(),
+                            "已绑定主 DataSource 的 JpaTransactionManager 应被选中并接管 joya.tx");
+                });
+
+        // 2. JpaTransactionManager 未绑定 DataSource：回退纯 JDBC 事务引擎
+        autoDiscoveryRunner()
+                .withUserConfiguration(UnboundJpaTxManagerConfig.class)
+                .withPropertyValues(
+                        "spring.datasource.url=jdbc:h2:mem:jpa_unbound_db;MODE=MYSQL;DB_CLOSE_DELAY=-1",
+                        "spring.datasource.username=sa",
+                        "spring.datasource.password=",
+                        "spring.datasource.type=org.h2.jdbcx.JdbcDataSource")
+                .run(context -> {
+                    assertNull(context.getStartupFailure());
+                    JoyaClient client = context.getBean(JoyaClient.class);
+                    org.springframework.orm.jpa.JpaTransactionManager jpaTm =
+                            context.getBean(org.springframework.orm.jpa.JpaTransactionManager.class);
+                    client.tx(tx -> tx.sql("SELECT 1").value(Integer.class));
+                    assertEquals(0, jpaTm.getTransactionCalls(),
+                            "未绑定 DataSource 的 JpaTransactionManager 不应被选用");
+                });
+
+        // 3. P1-5：主 DataSource 为 LazyConnectionDataSourceProxy(RAW_DS)，而事务管理器绑定在 RAW_DS 上时，
+        // 资源键不一致，绝不能当作匹配（否则 DataSourceUtils 按代理实例查不到绑定在 RAW_DS 上的连接）
+        assertFalse(com.sondertara.joya.spring.support.SpringTxEngine.matchesDataSource(
+                WrappedDataSourceWithInnerBoundJpaConfig.RAW_DS,
+                new org.springframework.jdbc.datasource.LazyConnectionDataSourceProxy(
+                        WrappedDataSourceWithInnerBoundJpaConfig.RAW_DS)));
+        autoDiscoveryRunner()
+                .withUserConfiguration(WrappedDataSourceWithInnerBoundJpaConfig.class)
+                .run(context -> {
+                    assertNull(context.getStartupFailure());
+                    JoyaClient client = context.getBean(JoyaClient.class);
+                    org.springframework.orm.jpa.JpaTransactionManager jpaTm =
+                            context.getBean(org.springframework.orm.jpa.JpaTransactionManager.class);
+                    client.tx(tx -> tx.sql("SELECT 1").value(Integer.class));
+                    assertEquals(0, jpaTm.getTransactionCalls(),
+                            "绑定内层 target 而非 LazyConnectionDataSourceProxy 主 Bean 的管理器不得被误判为匹配");
                 });
     }
 }

@@ -3,9 +3,6 @@ package com.sondertara.joya.core.kernel;
 import com.sondertara.joya.core.kernel.connection.ConnectionProvider;
 import com.sondertara.joya.core.kernel.dialect.Dialect;
 import com.sondertara.joya.core.kernel.dialect.DialectStrategy;
-import com.sondertara.joya.core.kernel.interceptor.DefaultChain;
-import com.sondertara.joya.core.kernel.interceptor.RewriteContext;
-import com.sondertara.joya.core.kernel.interceptor.SqlInterceptor;
 import com.sondertara.joya.core.kernel.interceptor.SqlRewriteContext;
 import com.sondertara.joya.core.kernel.interceptor.SqlRewriteException;
 import com.sondertara.joya.core.kernel.interceptor.SqlRewriter;
@@ -22,7 +19,6 @@ import com.sondertara.joya.core.kernel.statement.TableRef;
 
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -30,30 +26,25 @@ import java.util.Objects;
 import java.util.Set;
 
 /**
- * 语句准备管线（单条与批量共用的唯一入口）：注入方言类型 → AST 结构改写（{@link SqlRewriter}）→ 文本拦截（{@link SqlInterceptor}）。
+ * 语句准备管线（单条与批量共用的唯一入口）：注入方言类型 → AST 结构改写（{@link SqlRewriter}）→ 单一渲染。
  *
- * <p>{@link ExecutionKernel} 只负责"准备好之后怎么执行"，所有改写 / 拦截语义都收敛在这里，
- * 因此查询、变更、原生 SQL 与批处理没有任何旁路。拦截器、改写器在构造时按 {@code order()} 排序一次。
+ * <p>{@link ExecutionKernel} 只负责"准备好之后怎么执行"，所有结构改写语义都收敛在这里，
+ * 因此查询、变更、原生 SQL 与批处理没有任何旁路。改写器按 {@code order()} 在首次执行时排序一次
+ * （扩展点可能是容器启动期的循环依赖代理，构造期读取 {@code order()} 不可靠）。
  */
 final class StatementPreparer {
 
-    private final List<SqlInterceptor> interceptors;
     private final List<SqlRewriter> rewriters;
     private final DialectStrategy dialectStrategy;
     private final ConnectionProvider connections;
+    private volatile List<SqlRewriter> orderedRewriters;
 
-    StatementPreparer(List<SqlInterceptor> interceptors,
-                      List<SqlRewriter> rewriters,
+    StatementPreparer(List<SqlRewriter> rewriters,
                       DialectStrategy dialectStrategy,
                       ConnectionProvider connections) {
-        this.interceptors = sortInterceptors(interceptors);
-        this.rewriters = sortRewriters(rewriters);
+        this.rewriters = rewriters == null ? List.of() : List.copyOf(rewriters);
         this.dialectStrategy = Objects.requireNonNull(dialectStrategy, "dialectStrategy must not be null");
         this.connections = Objects.requireNonNull(connections, "connections must not be null");
-    }
-
-    List<SqlInterceptor> interceptors() {
-        return interceptors;
     }
 
     List<SqlRewriter> rewriters() {
@@ -64,14 +55,25 @@ final class StatementPreparer {
         return !rewriters.isEmpty();
     }
 
-    private static List<SqlInterceptor> sortInterceptors(List<SqlInterceptor> interceptors) {
-        if (interceptors == null || interceptors.isEmpty()) {
-            return List.of();
+    /**
+     * 单条语句准备产物：包含完成方言注入、AST 改写与占位符校验后的最终 {@link SqlStatement}，
+     * 以及准备阶段已解析出的 {@link Dialect}（供 {@link ExecutionKernel} 直接复用，避免自定义方言丢失或二次探测）。
+     */
+    record Prepared(SqlStatement statement, @org.jspecify.annotations.Nullable Dialect dialect) {
+    }
+
+    private List<SqlRewriter> orderedRewriters() {
+        List<SqlRewriter> local = orderedRewriters;
+        if (local == null) {
+            synchronized (this) {
+                local = orderedRewriters;
+                if (local == null) {
+                    local = sortRewriters(rewriters);
+                    orderedRewriters = local;
+                }
+            }
         }
-        List<SqlInterceptor> sorted = new ArrayList<>(interceptors);
-        sorted.sort(Comparator.comparingInt(SqlInterceptor::order)
-                .thenComparing(i -> i.getClass().getName()));
-        return List.copyOf(sorted);
+        return local;
     }
 
     private static List<SqlRewriter> sortRewriters(List<SqlRewriter> rewriters) {
@@ -82,49 +84,6 @@ final class StatementPreparer {
         sorted.sort(Comparator.comparingInt(SqlRewriter::order)
                 .thenComparing(r -> r.getClass().getName()));
         return List.copyOf(sorted);
-    }
-
-    private SqlStatement rewrite(SqlStatement statement, Map<String, Object> attributes) {
-        Objects.requireNonNull(statement, "statement must not be null");
-        SqlStatement withDbType = statement.metadata().dbType() == null
-                ? injectDbType(statement, dialectStrategy.resolve(connections).dbType())
-                : statement;
-        SqlStatement normalized = normalizeNumberedParameters(withDbType);
-        return applyInterceptors(applyRewriters(normalized, attributes), attributes);
-    }
-
-    /** 文本拦截链（单条与批量共用）：拦截器为空时零开销直接返回。 */
-    private SqlStatement applyInterceptors(SqlStatement statement, Map<String, Object> attributes) {
-        if (interceptors.isEmpty()) {
-            return statement;
-        }
-        Map<String, Object> mutableAttrs = attributes == null
-                ? new HashMap<>()
-                : new HashMap<>(attributes);
-        SqlStatement result = new DefaultChain(interceptors).proceed(new RewriteContext(statement, mutableAttrs));
-        if (attributes != null) {
-            try {
-                attributes.putAll(mutableAttrs);
-            } catch (UnsupportedOperationException ignored) {
-                // 调用方传入了只读 Map，保持向后兼容
-            }
-        }
-        if (result == null) {
-            throw new IllegalStateException("SqlInterceptor chain returned null");
-        }
-        boolean isBatch = attributes != null && Boolean.TRUE.equals(attributes.get(RewriteContext.ATTR_BATCH));
-        if (!isBatch && (!result.sql().equals(statement.sql())
-                || result.parameters().size() != statement.parameters().size())) {
-            DbType dbType = result.metadata().dbType();
-            int placeholders = SqlFormatUtils.countPlaceholders(result.sql(), dbType);
-            if (placeholders != result.parameters().size()) {
-                throw new IllegalStateException(
-                        "A SqlInterceptor left placeholder count (" + placeholders
-                                + ") out of sync with parameter count (" + result.parameters().size()
-                                + "); use a SqlRewriter for structural parameter changes");
-            }
-        }
-        return result;
     }
 
     /**
@@ -141,14 +100,99 @@ final class StatementPreparer {
                 statement.metadata().operation(),
                 statement.metadata().entityType(),
                 statement.metadata().dbType(),
+                statement.metadata().tables(),
+                rootAlias(originalNode),
+                false,
                 attributes);
-        for (SqlRewriter rewriter : rewriters) {
+        for (SqlRewriter rewriter : orderedRewriters()) {
             if (rewriter.supports(ctx)) {
                 node = applySingleRewriter(node, rewriter, ctx);
             }
         }
+        validateRewrittenShape(originalNode, node);
         StatementMetadata metadata = resolveRewrittenMetadata(statement.metadata(), originalNode, node);
         return SqlRenderer.render(node, metadata);
+    }
+
+    private static @org.jspecify.annotations.Nullable String rootAlias(SqlNode node) {
+        if (node instanceof SqlNode.Select select && select.from() instanceof SqlNode.From from) {
+            return from.root().alias().isBlank() ? null : from.root().alias();
+        }
+        if (node instanceof SqlNode.Count count) {
+            return rootAlias(count.select());
+        }
+        return null;
+    }
+
+    /**
+     * 结构改写边界：只允许改行过滤/连接/排序列，不允许换语句类型或改 SELECT 投影。
+     * SELECT 投影已经绑定了行映射器，改写列集合会让位置映射错位。
+     */
+    private static void validateRewrittenShape(SqlNode original, SqlNode rewritten) {
+        if (original instanceof SqlNode.Select originalSelect) {
+            if (!(rewritten instanceof SqlNode.Select rewrittenSelect)) {
+                throw new SqlRewriteException("A SqlRewriter must not change SELECT into "
+                        + rewritten.getClass().getSimpleName());
+            }
+            if (!originalSelect.projections().equals(rewrittenSelect.projections())) {
+                throw new SqlRewriteException(
+                        "A SqlRewriter must not add, remove, or reorder SELECT projections; "
+                                + "use Query.select(...) for explicit projections");
+            }
+            return;
+        }
+        if (original instanceof SqlNode.Count) {
+            if (!(rewritten instanceof SqlNode.Count)) {
+                throw new SqlRewriteException("A SqlRewriter must keep the COUNT wrapper");
+            }
+            return;
+        }
+        if (original instanceof SqlNode.Insert) {
+            if (!(rewritten instanceof SqlNode.Insert rewrittenInsert)) {
+                throw new SqlRewriteException("A SqlRewriter must not change INSERT into "
+                        + rewritten.getClass().getSimpleName());
+            }
+            requireDistinctColumns(rewrittenInsert.columns(), "INSERT");
+            return;
+        }
+        if (original instanceof SqlNode.Upsert originalUpsert) {
+            if (!(rewritten instanceof SqlNode.Upsert rewrittenUpsert)) {
+                throw new SqlRewriteException("A SqlRewriter must keep the UPSERT wrapper");
+            }
+            requireDistinctColumns(rewrittenUpsert.insert().columns(), "UPSERT");
+            return;
+        }
+        if (original instanceof SqlNode.Update) {
+            if (!(rewritten instanceof SqlNode.Update rewrittenUpdate)) {
+                throw new SqlRewriteException("A SqlRewriter must not change UPDATE into "
+                        + rewritten.getClass().getSimpleName());
+            }
+            Set<String> columns = new LinkedHashSet<>();
+            for (SqlNode.Assignment assignment : rewrittenUpdate.assignments()) {
+                if (!columns.add(assignment.column())) {
+                    throw new SqlRewriteException("Duplicate UPDATE assignment for column '"
+                            + assignment.column() + "'");
+                }
+            }
+            return;
+        }
+        if (original instanceof SqlNode.Delete && !(rewritten instanceof SqlNode.Delete)) {
+            throw new SqlRewriteException("A SqlRewriter must not change DELETE into "
+                    + rewritten.getClass().getSimpleName());
+        }
+        if (original instanceof SqlNode.Truncate && !(rewritten instanceof SqlNode.Truncate)) {
+            throw new SqlRewriteException("A SqlRewriter must not change TRUNCATE into "
+                    + rewritten.getClass().getSimpleName());
+        }
+    }
+
+    private static void requireDistinctColumns(List<String> columns, String kind) {
+        Set<String> seen = new LinkedHashSet<>();
+        for (String column : columns) {
+            if (!seen.add(column)) {
+                throw new SqlRewriteException("Duplicate " + kind + " column '" + column + "'");
+            }
+        }
     }
 
     /**
@@ -265,17 +309,15 @@ final class StatementPreparer {
         SqlNode node = originalNode;
         SqlRewriteContext ctx = new SqlRewriteContext(
                 batch.metadata().operation(), batch.metadata().entityType(),
-                batch.metadata().dbType(), attributes);
-        for (SqlRewriter rewriter : rewriters) {
+                batch.metadata().dbType(), batch.metadata().tables(), rootAlias(originalNode), true, attributes);
+        for (SqlRewriter rewriter : orderedRewriters()) {
             if (rewriter.supports(ctx)) {
                 node = applySingleRewriter(node, rewriter, ctx);
             }
         }
+        validateRewrittenShape(originalNode, node);
         StatementMetadata metadata = resolveRewrittenMetadata(batch.metadata(), originalNode, node);
         if (node instanceof SqlNode.Insert || node instanceof SqlNode.Upsert) {
-            if (!(originalNode instanceof SqlNode.Insert || originalNode instanceof SqlNode.Upsert)) {
-                throw new SqlRewriteException("Batch rewrite must not change non-INSERT statement into INSERT/UPSERT");
-            }
             SqlNode.Insert originalInsert = originalNode instanceof SqlNode.Upsert origUpsert
                     ? origUpsert.insert()
                     : (SqlNode.Insert) originalNode;
@@ -370,95 +412,74 @@ final class StatementPreparer {
     }
 
     /**
-     * 批量语句的唯一准备入口，与 {@link #prepare(SqlStatement)} 对称：注入方言类型 → AST 改写 → 文本拦截。
+     * 批量语句的唯一准备入口，与 {@link #prepare(SqlStatement, Map)} 对称：注入方言类型 → AST 改写。
      *
-     * <p>文本拦截器看到的是整批共用的 SQL 模板探针（参数为空，整批只触发一次，
-     * {@link RewriteContext#isBatch()} 为 {@code true}）。拦截器只可改写文本（hint / 注释）；
-     * 追加参数或改变占位符个数会让逐行绑定静默错位，因此显式拒绝并提示改用 {@link SqlRewriter}。
+     * <p>批量 rewriter 只允许在列尾/参数尾追加；重排、删除或替换既有列与参数会被拒绝，
+     * 避免逐行绑定静默错位。
      */
-    BatchSqlStatement prepareBatch(BatchSqlStatement batch) {
-        return prepareBatch(batch, null);
-    }
-
     BatchSqlStatement prepareBatch(BatchSqlStatement batch, Map<String, Object> attributes) {
         BatchSqlStatement withDbType = batch;
         if (batch.metadata().dbType() == null) {
-            Dialect dialect = (interceptors.isEmpty() && rewriters.isEmpty())
-                    ? dialectStrategy.peek()
-                    : dialectStrategy.resolve(connections);
+            Dialect dialect = dialectStrategy.resolve(connections);
             if (dialect != null) {
-                withDbType = batch.withMetadata(batch.metadata().withDbType(dialect.dbType()));
+                withDbType = injectBatchDbType(batch, dialect.dbType());
             }
         }
         BatchSqlStatement normalized = normalizeBatchPlaceholders(withDbType);
-        return applyBatchInterceptors(applyBatchRewriters(normalized, attributes), attributes);
+        return applyBatchRewriters(normalized, attributes);
     }
 
-    private BatchSqlStatement applyBatchInterceptors(BatchSqlStatement batch, Map<String, Object> attributes) {
-        if (interceptors.isEmpty()) {
-            if (attributes != null) {
-                try {
-                    attributes.put(RewriteContext.ATTR_BATCH, Boolean.TRUE);
-                    attributes.put(RewriteContext.ATTR_BATCH_ROWS, batch.rowCount());
-                } catch (UnsupportedOperationException ignored) {
-                }
-            }
-            return batch;
-        }
-        Map<String, Object> attrs = attributes == null ? new HashMap<>() : new HashMap<>(attributes);
-        attrs.put(RewriteContext.ATTR_BATCH, Boolean.TRUE);
-        attrs.put(RewriteContext.ATTR_BATCH_ROWS, batch.rowCount());
-        SqlStatement probe = SqlStatement.of(batch.sql(), List.of(), batch.metadata(), batch.ast());
-        SqlStatement result = applyInterceptors(probe, attrs);
-        if (attributes != null) {
-            try {
-                attributes.putAll(attrs);
-            } catch (UnsupportedOperationException ignored) {
-            }
-        }
-        if (result == null) {
-            throw new IllegalStateException("SqlInterceptor chain returned null for a batch statement");
-        }
-        if (!result.parameters().isEmpty()) {
-            throw new UnsupportedOperationException(
-                    "A SqlInterceptor must not append parameters to a batch statement; "
-                            + "use a SqlRewriter for structural changes such as tenant or audit columns");
-        }
-        if (result.sql().equals(batch.sql())) {
-            return batch;
-        }
-        DbType dbType = batch.metadata().dbType();
-        if (SqlFormatUtils.countPlaceholders(result.sql(), dbType)
-                != SqlFormatUtils.countPlaceholders(batch.sql(), dbType)) {
-            throw new UnsupportedOperationException(
-                    "A SqlInterceptor must not change the placeholder count of a batch statement; "
-                            + "use a SqlRewriter for structural changes");
-        }
-        return batch.withSql(result.sql());
+    /** 执行前的唯一准备入口：注入方言类型 → AST 改写 → 单一渲染。 */
+    Prepared prepare(SqlStatement statement, Map<String, Object> attributes) {
+        Objects.requireNonNull(statement, "statement must not be null");
+        Dialect resolvedDialect = statement.metadata().dbType() == null
+                ? dialectStrategy.resolve(connections)
+                : dialectStrategy.peek();
+        SqlStatement withDbType = statement.metadata().dbType() == null && resolvedDialect != null
+                ? injectDbType(statement, resolvedDialect.dbType())
+                : statement;
+        SqlStatement normalized = normalizeNumberedParameters(withDbType);
+        SqlStatement prepared = rewriters.isEmpty() ? normalized : applyRewriters(normalized, attributes);
+        validateParameterContract(prepared);
+        return new Prepared(prepared, resolvedDialect);
     }
 
-    /** 执行前的唯一准备入口：注入方言类型 → AST 改写 → 文本拦截。 */
-    SqlStatement prepare(SqlStatement statement) {
-        return prepare(statement, null);
-    }
-
-    SqlStatement prepare(SqlStatement statement, Map<String, Object> attributes) {
-        if (interceptors.isEmpty() && rewriters.isEmpty()) {
-            Dialect cached = dialectStrategy.peek();
-            SqlStatement withDbType = (cached != null && statement.metadata().dbType() == null)
-                    ? injectDbType(statement, cached.dbType())
-                    : statement;
-            return normalizeNumberedParameters(withDbType);
+    /**
+     * 最终参数契约：SQL 中有效占位符数量必须与有序参数数量一致。
+     * 这里覆盖原生 SQL、AST 渲染与重写器的最终产物。
+     */
+    private static void validateParameterContract(SqlStatement statement) {
+        int placeholders = SqlFormatUtils.countPlaceholders(statement.sql(), statement.metadata().dbType());
+        int parameters = statement.parameters().size();
+        if (placeholders != parameters) {
+            throw new IllegalArgumentException(
+                    "SQL placeholder count (" + placeholders + ") does not match parameter count ("
+                            + parameters + "): " + statement.sql());
         }
-        return rewrite(statement, attributes);
     }
 
+    /**
+     * 注入方言类型：AST 语句在方言确定后统一重渲一次，保证所有方言相关文本（如 LIKE 的 ESCAPE 子句）
+     * 都来自同一条渲染管线，不需要按方言做字符串探测或二次补丁。
+     */
     private static SqlStatement injectDbType(SqlStatement statement, DbType dbType) {
         SqlStatement updated = statement.withDbType(dbType);
-        if (dbType != null && dbType.isLikeMysql() && updated.ast() != null && updated.sql().contains(" ESCAPE '\\'")) {
+        if (dbType != null && updated.ast() != null) {
             return SqlRenderer.render(updated.ast(), updated.metadata());
         }
         return updated;
+    }
+
+    private static BatchSqlStatement injectBatchDbType(BatchSqlStatement batch, DbType dbType) {
+        if (dbType == null) {
+            return batch;
+        }
+        StatementMetadata updatedMeta = batch.metadata().withDbType(dbType);
+        if (batch.ast() != null) {
+            SqlStatement rendered = SqlRenderer.render(batch.ast(), updatedMeta);
+            return batch.withMetadata(updatedMeta).withSql(rendered.sql());
+        }
+        return batch.withMetadata(updatedMeta);
     }
 
     /**

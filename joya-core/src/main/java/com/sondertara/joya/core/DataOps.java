@@ -43,7 +43,7 @@ public interface DataOps {
     <M> M mapper(Class<M> mapperType);
 
     /**
-     * 连接级逃生舱：在<b>当前数据操作上下文所用的连接</b>上执行底层 JDBC 回调（不经过拦截器链，调用方自负其责）。
+     * 连接级逃生舱：在<b>当前数据操作上下文所用的连接</b>上执行底层 JDBC 回调（不经过改写/观测管线，调用方自负其责）。
      *
      * <p>在 {@code JoyaClient} 上每次借还一条自动提交连接；在 {@link com.sondertara.joya.core.tx.Tx} 上则运行于
      * 该事务的连接，随事务一同提交 / 回滚——事务内不会静默落到事务之外。
@@ -51,7 +51,7 @@ public interface DataOps {
     <T> T withConnection(ConnectionCallback<T> action);
 
     /**
-     * 执行 SQL 脚本流（DDL / 初始化数据，不经过拦截器链）。与 {@link #withConnection} 一样，
+     * 执行 SQL 脚本流（DDL / 初始化数据，不经过改写/观测管线）。与 {@link #withConnection} 一样，
      * 在 {@code Tx} 上运行于事务连接。
      */
     void script(Reader reader);

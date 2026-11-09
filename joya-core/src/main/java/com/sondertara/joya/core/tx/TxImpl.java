@@ -36,7 +36,7 @@ public final class TxImpl implements Tx {
     private static final Logger log = LoggerFactory.getLogger(TxImpl.class);
 
     private final TxSession session;
-    private final ExecutionKernel template;
+    private final ExecutionKernel kernel;
     private final Thread ownerThread;
     private final DataOpsSupport dataOps;
     private final List<Runnable> afterCommit = new ArrayList<>();
@@ -48,16 +48,16 @@ public final class TxImpl implements Tx {
     private boolean deferCompletionCallbacks;
     private boolean completionCallbacksFired;
 
-    public TxImpl(ExecutionKernel rootTemplate, TxSession session) {
-        this(rootTemplate, session, EntityLifecycle.EMPTY);
+    public TxImpl(ExecutionKernel rootKernel, TxSession session) {
+        this(rootKernel, session, EntityLifecycle.EMPTY);
     }
 
-    public TxImpl(ExecutionKernel rootTemplate, TxSession session, EntityLifecycle entityLifecycle) {
+    public TxImpl(ExecutionKernel rootKernel, TxSession session, EntityLifecycle entityLifecycle) {
         this.session = Objects.requireNonNull(session, "session must not be null");
         this.ownerThread = Thread.currentThread();
-        this.template = Objects.requireNonNull(rootTemplate, "rootTemplate must not be null")
+        this.kernel = Objects.requireNonNull(rootKernel, "rootKernel must not be null")
                 .bind(new TransactionalConnectionProvider(session));
-        this.dataOps = DataOpsSupport.singleThread(this, template, entityLifecycle, this::checkActive);
+        this.dataOps = DataOpsSupport.singleThread(this, kernel, entityLifecycle, this::checkActive);
     }
 
     public boolean isCompleted() {
@@ -138,16 +138,17 @@ public final class TxImpl implements Tx {
     public <R> R savepointCall(TxCallback<R> body) {
         checkOwner();
         Objects.requireNonNull(body, "savepointCall body must not be null");
+        List<Runnable> frame = new ArrayList<>();
         try {
             session.enterSavepoint();
         } catch (SQLException e) {
             throw new TxException("Failed to create savepoint", e);
         }
-        savepointAfterCommitStack.push(new ArrayList<>());
+        savepointAfterCommitStack.push(frame);
         R result;
         try {
             result = body.apply(this);
-            if (!savepointAfterCommitStack.peek().isEmpty()) {
+            if (!frame.isEmpty()) {
                 session.validateAfterCommitRegistration();
             }
         } catch (Throwable t) {
@@ -159,19 +160,17 @@ public final class TxImpl implements Tx {
             }
             throw rethrow(t);
         }
+        savepointAfterCommitStack.pop();
         try {
             session.exitSavepointCommit();
         } catch (SQLException e) {
-            savepointAfterCommitStack.pop();
             session.markRollbackOnly();
             throw new TxException("Failed to release savepoint", e);
         } catch (RuntimeException | Error e) {
-            savepointAfterCommitStack.pop();
             session.markRollbackOnly();
             throw e;
         }
-        List<Runnable> spCallbacks = savepointAfterCommitStack.pop();
-        for (Runnable cb : spCallbacks) {
+        for (Runnable cb : frame) {
             afterCommit(cb);
         }
         return result;
@@ -244,6 +243,10 @@ public final class TxImpl implements Tx {
             throw completedFailure(TxState.ROLLED_BACK);
         }
         closeStreams();
+        if (!session.isClosed() && !session.isActive() && session.terminalOutcome() == TxOutcome.COMMITTED) {
+            complete(TxOutcome.COMMITTED);
+            throw completedFailure(TxState.ROLLED_BACK);
+        }
         try {
             if (!session.isClosed() && session.isActive()) {
                 session.exitRollback();
@@ -386,8 +389,19 @@ public final class TxImpl implements Tx {
         }
 
         @Override
+        public void discard(Connection connection) throws SQLException {
+            // 事务连接由 TxSession 生命周期管理，不在此处直接关闭物理连接
+            delegate.release(connection);
+        }
+
+        @Override
         public OptionalInt queryTimeoutSeconds() {
             return delegate.queryTimeoutSeconds();
+        }
+
+        @Override
+        public boolean allowsTransactionControl() {
+            return false;
         }
 
         @Override

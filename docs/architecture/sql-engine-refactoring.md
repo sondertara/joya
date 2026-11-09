@@ -3,6 +3,9 @@
 > **历史方案说明（2026-10）**：文中的 `SqlCreator` / `TableMetaContext` 等结构已在重构中移除，执行期 `withTable` 改写亦不再支持；动态表名改由 `NamingPolicy.tableNameResolver` 在渲染期完成。
 >
 > **命名更新**：执行入口 `JoyaTemplate` 已重命名为 `ExecutionKernel`；下文旧名仅用于历史对照。
+>
+> **已删除 API**：`SqlStatement.appendParameter` / `replaceParameter` 与文本级 `SqlInterceptor` 链已移除；
+> 参数改写现由 AST 级 `SqlRewriter` 完成，本文相关章节仅作历史记录。
 
 
 ## 1. 背景与目标

@@ -6,8 +6,15 @@ import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.lang.reflect.TypeVariable;
 import java.lang.reflect.WildcardType;
+import java.net.URI;
+import java.net.URL;
+import java.sql.Blob;
+import java.sql.Clob;
+import java.time.temporal.Temporal;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.UUID;
 
 /**
  * 类型工具，负责 {@link Type} 的泛型基类实参解析、原始/包装类型转换与数值类型判定。
@@ -169,11 +176,59 @@ public final class TypeUtils {
         return wrapper != null ? wrapper : clazz;
     }
 
+    /** 原始类型的 JVM 默认值；非原始类型返回 {@code null}。 */
+    public static Object defaultValue(Class<?> type) {
+        if (type == null || !type.isPrimitive()) {
+            return null;
+        }
+        if (type == int.class) return 0;
+        if (type == long.class) return 0L;
+        if (type == boolean.class) return false;
+        if (type == double.class) return 0.0d;
+        if (type == float.class) return 0.0f;
+        if (type == short.class) return (short) 0;
+        if (type == byte.class) return (byte) 0;
+        if (type == char.class) return '\0';
+        return null;
+    }
+
     /** 是否为原始类型、数值类型或原始包装类型（单值映射判断）。 */
     public static boolean isPrimitiveOrNumber(Class<?> propertyType) {
         return propertyType != null
                 && (propertyType.isPrimitive()
                 || isNumber(propertyType)
                 || ClassUtils.isPrimitiveWrapper(propertyType));
+    }
+
+    /**
+     * 是否可以直接映射为单个 JDBC 列。
+     *
+     * <p>只做类型判断，不读取任何 JPA 关联注解：关联字段、集合、嵌套 DTO 一律返回 {@code false}，
+     * 由元数据层忽略，而不是猜测它应该 join 哪张表。
+     */
+    public static boolean isColumnType(@org.jspecify.annotations.Nullable Class<?> type) {
+        if (type == null || type == void.class) {
+            return false;
+        }
+        if (type.isPrimitive()) {
+            return true;
+        }
+        if (type.isEnum()) {
+            return true;
+        }
+        if (type.isArray()) {
+            return type == byte[].class;
+        }
+        return CharSequence.class.isAssignableFrom(type)
+                || Number.class.isAssignableFrom(type)
+                || Boolean.class == type
+                || Character.class == type
+                || Date.class.isAssignableFrom(type)
+                || Temporal.class.isAssignableFrom(type)
+                || UUID.class == type
+                || Blob.class.isAssignableFrom(type)
+                || Clob.class.isAssignableFrom(type)
+                || URI.class == type
+                || URL.class == type;
     }
 }

@@ -245,15 +245,35 @@ class JoyaSpringExtensionPointsTest {
     @Configuration(proxyBeanMethods = false)
     @EnableAutoConfiguration
     static class CircularListenerConfig {
-        static final AtomicInteger SELF_INJECTED_PERSIST_CALLS = new AtomicInteger();
+        static final List<String> ORDER_LOG = new CopyOnWriteArrayList<>();
 
         @Bean
         EntityListener clientInjectingEntityListener(JoyaClient joyaClient) {
             return new EntityListener() {
                 @Override
+                public int order() {
+                    return 20;
+                }
+
+                @Override
                 public void prePersist(Object entity) {
                     assertNotNull(joyaClient.settings());
-                    SELF_INJECTED_PERSIST_CALLS.incrementAndGet();
+                    ORDER_LOG.add("lazy-20");
+                }
+            };
+        }
+
+        @Bean
+        EntityListener plainEntityListener() {
+            return new EntityListener() {
+                @Override
+                public int order() {
+                    return 10;
+                }
+
+                @Override
+                public void prePersist(Object entity) {
+                    ORDER_LOG.add("eager-10");
                 }
             };
         }
@@ -261,10 +281,10 @@ class JoyaSpringExtensionPointsTest {
 
     @Test
     void extensionBeanInjectingJoyaClient_resolvesLazilyWithoutCircularDependencyFailure() {
-        CircularListenerConfig.SELF_INJECTED_PERSIST_CALLS.set(0);
+        CircularListenerConfig.ORDER_LOG.clear();
         runner(CircularListenerConfig.class).run(context -> {
             assertEquals(null, context.getStartupFailure(),
-                    "EntityListener 注入 JoyaClient 时不应触发 BeanCurrentlyInCreationException");
+                    "多个 EntityListener 且其一注入 JoyaClient 时不应在构造期触发 BeanCurrentlyInCreationException");
             JoyaClient primary = context.getBean(JoyaClient.class);
             primary.sql("CREATE TABLE IF NOT EXISTS t_user_account "
                     + "(id BIGINT PRIMARY KEY, user_name VARCHAR(64) NOT NULL, age INT NOT NULL)").update();
@@ -273,7 +293,7 @@ class JoyaSpringExtensionPointsTest {
             user.setUserName("lazy-ext");
             user.setAge(18);
             primary.of(UserAccount.class).insert(user);
-            assertEquals(1, CircularListenerConfig.SELF_INJECTED_PERSIST_CALLS.get());
+            assertEquals(List.of("eager-10", "lazy-20"), CircularListenerConfig.ORDER_LOG);
         });
     }
 }

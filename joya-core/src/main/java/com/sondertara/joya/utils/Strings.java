@@ -1,18 +1,11 @@
 package com.sondertara.joya.utils;
 
-import java.util.StringJoiner;
-
 /**
- * 字符串工具，提供 joya-core 所需的全部字符串操作。
+ * 字符串工具，提供 joya-core 所需的字符串判空、切分、命名风格转换与格式化操作。
  *
  * @author huangxiaohu
  */
 public final class Strings {
-
-    public static final String EMPTY = "";
-    public static final String DOT = ".";
-    public static final String COMMA = ",";
-    public static final String SPACE = " ";
 
     private Strings() {
     }
@@ -34,50 +27,8 @@ public final class Strings {
         return !isBlank(cs);
     }
 
-    public static boolean isEmpty(CharSequence cs) {
-        return cs == null || cs.length() == 0;
-    }
-
-    public static boolean hasText(CharSequence cs) {
-        return isNotBlank(cs);
-    }
-
     public static boolean hasLength(CharSequence cs) {
         return cs != null && cs.length() > 0;
-    }
-
-    public static String trim(String str) {
-        return str == null ? null : str.trim();
-    }
-
-    public static String defaultString(String str) {
-        return str == null ? EMPTY : str;
-    }
-
-    public static String defaultString(String str, String defaultStr) {
-        return str == null ? defaultStr : str;
-    }
-
-    public static String join(CharSequence delimiter, Iterable<?> elements) {
-        StringJoiner joiner = new StringJoiner(delimiter);
-        for (Object element : elements) {
-            joiner.add(String.valueOf(element));
-        }
-        return joiner.toString();
-    }
-
-    public static String substringAfter(String str, String separator) {
-        if (str == null || str.isEmpty()) {
-            return str;
-        }
-        if (separator == null) {
-            return EMPTY;
-        }
-        int pos = str.indexOf(separator);
-        if (pos < 0) {
-            return EMPTY;
-        }
-        return str.substring(pos + separator.length());
     }
 
     public static String subAfter(String str, char separator, boolean last) {
@@ -104,13 +55,6 @@ public final class Strings {
             return str;
         }
         return str.substring(pos + separator.length());
-    }
-
-    public static boolean containsIgnoreCase(CharSequence str, CharSequence searchStr) {
-        if (str == null || searchStr == null) {
-            return false;
-        }
-        return str.toString().toLowerCase().contains(searchStr.toString().toLowerCase());
     }
 
     public static String toUnderlineCase(String str) {
@@ -162,30 +106,6 @@ public final class Strings {
         return sb.toString();
     }
 
-    public static String lowerFirst(String str) {
-        if (str == null || str.isEmpty()) {
-            return str;
-        }
-        char first = str.charAt(0);
-        if (Character.isUpperCase(first)) {
-            return Character.toLowerCase(first) + str.substring(1);
-        }
-        return str;
-    }
-
-    public static int countMatches(CharSequence str, CharSequence sub) {
-        if (str == null || sub == null || str.length() == 0 || sub.length() == 0) {
-            return 0;
-        }
-        int count = 0;
-        int idx = 0;
-        while ((idx = str.toString().indexOf(sub.toString(), idx)) != -1) {
-            count++;
-            idx += sub.length();
-        }
-        return count;
-    }
-
     public static String format(String template, Object... args) {
         if (template == null) {
             return null;
@@ -209,19 +129,5 @@ public final class Strings {
             }
         }
         return sb.toString();
-    }
-
-    public static boolean isNotEmpty(CharSequence cs) {
-        return !isEmpty(cs);
-    }
-
-    public static String[] split(String str, String separator) {
-        if (str == null || str.isEmpty()) {
-            return new String[0];
-        }
-        if (separator == null || separator.isEmpty()) {
-            return new String[]{str};
-        }
-        return str.split(java.util.regex.Pattern.quote(separator));
     }
 }

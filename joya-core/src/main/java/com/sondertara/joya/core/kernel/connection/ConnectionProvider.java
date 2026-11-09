@@ -24,6 +24,20 @@ public interface ConnectionProvider {
     /** 归还由 {@link #acquire()} 借出的连接。 */
     void release(Connection connection) throws SQLException;
 
+    /**
+     * 归还或销毁处于异常/未决状态的连接（如事务 rollback/commit/restore 失败）。
+     *
+     * <p>实现者在清理内部借出状态时，<b>严禁</b>将该连接切换为 {@code setAutoCommit(true)}，
+     * 以免触发 JDBC 规范的隐式提交导致未决事务脏数据落盘。默认实现直接调用 null-safe 的
+     * {@code connection.close()}，不经过 {@link #release(Connection)} 的正常归还路径；
+     * 该默认实现仅适用于 {@code close()} 即销毁/归还物理连接的简单提供者，凡具备自定义归还或事务托管语义的提供者必须覆写。
+     */
+    default void discard(Connection connection) throws SQLException {
+        if (connection != null) {
+            connection.close();
+        }
+    }
+
     /** 语句级超时（秒）；未设置时为空。事务超时通过此处下沉到每条语句。 */
     default OptionalInt queryTimeoutSeconds() {
         return OptionalInt.empty();
@@ -37,6 +51,33 @@ public interface ConnectionProvider {
      */
     default boolean isExternallyManaged() {
         return false;
+    }
+
+    /**
+     * 该连接提供者的连接是否允许调用方直接控制事务（{@code commit / rollback / setAutoCommit / setSavepoint ...}）。
+     *
+     * <p>事务视图与外部受管连接（Spring {@code DataSourceUtils} / JPA）必须返回 {@code false}：
+     * 底层连接可能在任意时刻被外层事务绑定，直接提交会破坏外层事务边界。
+     */
+    default boolean allowsTransactionControl() {
+        return true;
+    }
+
+    /**
+     * 该提供者固定绑定的 {@link javax.sql.DataSource} 标识；自定义/动态提供者返回 {@code null}。
+     * 用于构造期校验客户端 {@code DataSource} 与连接来源同源。
+     */
+    default javax.sql.DataSource originDataSource() {
+        return null;
+    }
+
+    /**
+     * 判断本提供者绑定的数据源是否与客户端目标 {@link javax.sql.DataSource} 同源
+     * （未绑定固定数据源的自定义提供者返回 {@code true}；外部容器适配器可覆写以统一代理剥离语义）。
+     */
+    default boolean matchesDataSource(javax.sql.DataSource targetDataSource) {
+        javax.sql.DataSource origin = originDataSource();
+        return origin == null || (targetDataSource != null && (origin == targetDataSource || origin.equals(targetDataSource)));
     }
 
     /**
@@ -74,6 +115,11 @@ record FallbackTimeoutConnectionProvider(ConnectionProvider delegate, int fallba
     }
 
     @Override
+    public void discard(Connection connection) throws SQLException {
+        delegate.discard(connection);
+    }
+
+    @Override
     public OptionalInt queryTimeoutSeconds() {
         OptionalInt primary = delegate.queryTimeoutSeconds();
         return (primary != null && primary.isPresent()) ? primary : OptionalInt.of(fallbackSeconds);
@@ -82,6 +128,21 @@ record FallbackTimeoutConnectionProvider(ConnectionProvider delegate, int fallba
     @Override
     public boolean isExternallyManaged() {
         return delegate.isExternallyManaged();
+    }
+
+    @Override
+    public boolean allowsTransactionControl() {
+        return delegate.allowsTransactionControl();
+    }
+
+    @Override
+    public javax.sql.DataSource originDataSource() {
+        return delegate.originDataSource();
+    }
+
+    @Override
+    public boolean matchesDataSource(javax.sql.DataSource targetDataSource) {
+        return delegate.matchesDataSource(targetDataSource);
     }
 
     @Override

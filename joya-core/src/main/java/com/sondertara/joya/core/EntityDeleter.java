@@ -1,9 +1,7 @@
 package com.sondertara.joya.core;
 
 import com.sondertara.joya.core.listener.EntityLifecycle;
-import com.sondertara.joya.core.listener.EntityListener;
 import com.sondertara.joya.core.kernel.ExecutionKernel;
-import com.sondertara.joya.core.kernel.statement.SqlStatement;
 import com.sondertara.joya.core.metadata.EntityMetadataContext;
 import com.sondertara.joya.core.result.MutationResult;
 import com.sondertara.joya.core.statement.factory.DeleteStatementFactory;
@@ -22,19 +20,15 @@ import java.util.Objects;
  */
 final class EntityDeleter<T> {
 
-    private final ExecutionKernel template;
+    private final ExecutionKernel kernel;
     private final Class<T> entityType;
     private final EntityMetadataContext meta;
     private final String primaryKey;
     private final EntityLifecycle lifecycle;
 
-    EntityDeleter(ExecutionKernel template, Class<T> entityType, EntityMetadataContext meta, String primaryKey) {
-        this(template, entityType, meta, primaryKey, EntityLifecycle.EMPTY);
-    }
-
-    EntityDeleter(ExecutionKernel template, Class<T> entityType, EntityMetadataContext meta, String primaryKey,
+    EntityDeleter(ExecutionKernel kernel, Class<T> entityType, EntityMetadataContext meta, String primaryKey,
                   EntityLifecycle lifecycle) {
-        this.template = Objects.requireNonNull(template, "template must not be null");
+        this.kernel = Objects.requireNonNull(kernel, "kernel must not be null");
         this.entityType = Objects.requireNonNull(entityType, "entityType must not be null");
         this.meta = Objects.requireNonNull(meta, "meta must not be null");
         this.primaryKey = primaryKey;
@@ -44,7 +38,7 @@ final class EntityDeleter<T> {
     MutationResult deleteById(Serializable id) {
         Objects.requireNonNull(id, "id must not be null");
         requirePrimaryKey();
-        return new EntityDelete<T>(template, meta).where(w -> w.eq(primaryKey, id)).execute();
+        return new EntityDelete<T>(kernel, meta).where(w -> w.eq(primaryKey, id)).execute();
     }
 
     MutationResult deleteByIds(Collection<? extends Serializable> ids) {
@@ -53,12 +47,12 @@ final class EntityDeleter<T> {
             return MutationResult.EMPTY;
         }
         if (ids.size() <= Partitions.MAX_IN_CLAUSE_SIZE) {
-            return new EntityDelete<T>(template, meta).where(w -> w.in(primaryKey, ids)).execute();
+            return new EntityDelete<T>(kernel, meta).where(w -> w.in(primaryKey, ids)).execute();
         }
         long total = 0L;
         List<Serializable> idList = new ArrayList<>(ids);
         for (List<Serializable> chunk : Partitions.of(idList, Partitions.MAX_IN_CLAUSE_SIZE)) {
-            total += new EntityDelete<T>(template, meta)
+            total += new EntityDelete<T>(kernel, meta)
                     .where(w -> w.in(primaryKey, chunk))
                     .execute()
                     .affectedRows();
@@ -75,7 +69,7 @@ final class EntityDeleter<T> {
                     "Entity primary key must not be null for delete: " + entityType.getName());
         }
         lifecycle.preRemove(entity);
-        MutationResult result = new EntityDelete<T>(template, meta).where(w -> w.eq(primaryKey, pkValue)).execute();
+        MutationResult result = new EntityDelete<T>(kernel, meta).where(w -> w.eq(primaryKey, pkValue)).execute();
         lifecycle.postRemove(entity);
         return result;
     }
@@ -114,6 +108,6 @@ final class EntityDeleter<T> {
     }
 
     void truncate() {
-        template.update(DeleteStatementFactory.createTruncate(meta, template.namingPolicy()));
+        kernel.update(DeleteStatementFactory.createTruncate(meta, kernel.namingPolicy()));
     }
 }

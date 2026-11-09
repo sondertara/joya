@@ -15,18 +15,6 @@ import java.util.regex.Pattern;
  */
 public final class SqlFormatUtils {
 
-    public static final String POSITIONAL_OR_INDEXED_PARAMETER = "\\?(\\d+(?![#\\w]))";
-
-    /**
-     * ?[digit]
-     */
-    public static final Pattern NUMBERED_STYLE_PARAM = Pattern.compile(POSITIONAL_OR_INDEXED_PARAMETER);
-
-    /**
-     * ?[no digit]
-     */
-    public static final Pattern JDBC_STYLE_PARAM = Pattern.compile("\\?(?!\\d)");
-
     /**
      * 带表别名的列（如 t0.user_name）
      */
@@ -102,7 +90,7 @@ public final class SqlFormatUtils {
             }
             if (current == '\'' || current == '"' || current == '`') {
                 boolean backslashEscaped = usesBackslashEscape(sql, i, current, dbType);
-                i = skipQuoted(sql, i, current, backslashEscaped, genericMode);
+                i = skipQuoted(sql, i, current, backslashEscaped);
                 continue;
             }
             if (current == '$' && allowDollarQuote) {
@@ -212,7 +200,7 @@ public final class SqlFormatUtils {
         return len;
     }
 
-    private static int skipQuoted(String sql, int start, char quote, boolean backslashEscaped, boolean genericMode) {
+    private static int skipQuoted(String sql, int start, char quote, boolean backslashEscaped) {
         int len = sql.length();
         int i = start + 1;
         while (i < len) {
@@ -332,13 +320,13 @@ public final class SqlFormatUtils {
             int literalEnd = -1;
             if (current == '-' && i + 1 < len && sql.charAt(i + 1) == '-') {
                 literalEnd = skipLineComment(sql, i + 2);
-            } else if (current == '#') {
+            } else if (current == '#' && isHashCommentStart(sql, i, null)) {
                 literalEnd = skipLineComment(sql, i + 1);
             } else if (current == '/' && i + 1 < len && sql.charAt(i + 1) == '*') {
                 literalEnd = skipBlockComment(sql, i, null);
             } else if (current == '\'' || current == '"' || current == '`') {
                 boolean backslashEscaped = usesBackslashEscape(sql, i, current, null);
-                literalEnd = skipQuoted(sql, i, current, backslashEscaped, true);
+                literalEnd = skipQuoted(sql, i, current, backslashEscaped);
             } else if (current == '$') {
                 String delimiter = dollarQuoteDelimiter(sql, i);
                 if (delimiter != null) {
@@ -499,7 +487,7 @@ public final class SqlFormatUtils {
             }
             if (c == '\'' || c == '"' || c == '`') {
                 boolean backslashEscaped = usesBackslashEscape(sql, i, c, dbType);
-                i = skipQuoted(sql, i, c, backslashEscaped, genericMode);
+                i = skipQuoted(sql, i, c, backslashEscaped);
                 continue;
             }
             if (c == '$' && allowDollarQuote) {
@@ -578,7 +566,7 @@ public final class SqlFormatUtils {
             }
             if (c == '\'' || c == '"' || c == '`') {
                 boolean backslashEscaped = usesBackslashEscape(sql, i, c, dbType);
-                i = skipQuoted(sql, i, c, backslashEscaped, genericMode);
+                i = skipQuoted(sql, i, c, backslashEscaped);
                 continue;
             }
             if (c == '$' && allowDollarQuote) {
@@ -657,7 +645,10 @@ public final class SqlFormatUtils {
     private static Operation mapKeywordToOperation(String keyword) {
         return switch (keyword) {
             case "INSERT", "REPLACE", "MERGE", "UPSERT" -> Operation.INSERT;
-            case "DELETE", "TRUNCATE" -> Operation.DELETE;
+            case "DELETE" -> Operation.DELETE;
+            case "TRUNCATE" -> Operation.TRUNCATE;
+            case "CREATE", "ALTER", "DROP", "RENAME", "COMMENT", "GRANT", "REVOKE",
+                    "VACUUM", "ANALYZE", "REINDEX", "CLUSTER" -> Operation.DDL;
             case "SELECT" -> Operation.SELECT;
             default -> Operation.UPDATE;
         };

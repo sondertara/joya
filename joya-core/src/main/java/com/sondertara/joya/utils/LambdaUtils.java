@@ -41,14 +41,6 @@ public final class LambdaUtils {
     }
 
     /**
-     * 解析 Lambda 表达式获取 {@link SerializedLambda}。
-     */
-    public static <T> SerializedLambda resolve(IGetter<T, ?> function) {
-        Objects.requireNonNull(function, "Lambda function must not be null");
-        return extractSerializedLambda(function);
-    }
-
-    /**
      * 获取方法引用的底层方法名（如 {@code getUserName}）。
      */
     public static <T> String getImplMethodName(IGetter<T, ?> function) {
@@ -144,18 +136,7 @@ public final class LambdaUtils {
 
     /** 基本类型装箱；非基本类型原样返回。 */
     public static Class<?> boxed(Class<?> type) {
-        if (type == null || !type.isPrimitive()) {
-            return type;
-        }
-        if (type == int.class) return Integer.class;
-        if (type == long.class) return Long.class;
-        if (type == boolean.class) return Boolean.class;
-        if (type == double.class) return Double.class;
-        if (type == float.class) return Float.class;
-        if (type == short.class) return Short.class;
-        if (type == byte.class) return Byte.class;
-        if (type == char.class) return Character.class;
-        return Void.class;
+        return com.sondertara.joya.utils.TypeUtils.getWrapClass(type);
     }
 
     private static Class<?> descriptorToClass(String descriptor, ClassLoader preferredLoader) {

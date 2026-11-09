@@ -4,6 +4,7 @@ import com.sondertara.joya.utils.ConvertUtils;
 import com.sondertara.joya.exceptions.DbException;
 import com.sondertara.joya.utils.LambdaUtils;
 import com.sondertara.joya.utils.SqlDataUtils;
+import com.sondertara.joya.utils.TypeUtils;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -52,20 +53,6 @@ final class ColumnValues {
         }
     }
 
-    static Object primitiveDefault(Class<?> type) {
-        if (type == null || !type.isPrimitive()) {
-            return null;
-        }
-        if (type == int.class) return 0;
-        if (type == long.class) return 0L;
-        if (type == boolean.class) return false;
-        if (type == double.class) return 0.0d;
-        if (type == float.class) return 0.0f;
-        if (type == short.class) return (short) 0;
-        if (type == byte.class) return (byte) 0;
-        if (type == char.class) return '\0';
-        return null;
-    }
 
     private static final java.math.BigInteger LONG_MAX = java.math.BigInteger.valueOf(Long.MAX_VALUE);
     private static final java.math.BigInteger LONG_MIN = java.math.BigInteger.valueOf(Long.MIN_VALUE);

@@ -63,7 +63,7 @@ public final class DeleteStatementFactory {
     /** 构建 TRUNCATE 语句（表名仍由 NamingPolicy/TableNameResolver 决定）。 */
     public static SqlStatement createTruncate(EntityMetadataContext meta, NamingPolicy namingPolicy) {
         String tableName = meta.qualifiedTableName(namingPolicy);
-        StatementMetadata metadata = StatementMetadata.builder(Operation.DELETE)
+        StatementMetadata metadata = StatementMetadata.builder(Operation.TRUNCATE)
                 .table(TableRef.ofQualified(tableName, ""))
                 .entityType(meta.entityType())
                 .build();

@@ -1,13 +1,16 @@
 package com.sondertara.joya.core.statement.factory;
 
 import com.sondertara.joya.core.kernel.statement.BatchSqlStatement;
+import com.sondertara.joya.core.kernel.statement.DbType;
 import com.sondertara.joya.core.kernel.statement.SqlNode;
 import com.sondertara.joya.core.kernel.statement.SqlRenderer;
 import com.sondertara.joya.core.kernel.statement.SqlStatement;
+import com.sondertara.joya.core.kernel.statement.StatementMetadata;
 import com.sondertara.joya.core.kernel.statement.UpsertStyle;
 import com.sondertara.joya.core.metadata.EntityMetadataContext;
 import com.sondertara.joya.core.naming.NamingPolicy;
 import com.sondertara.joya.core.statement.MutationContext;
+import org.jspecify.annotations.Nullable;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -30,10 +33,22 @@ public final class UpsertStatementFactory {
      * @param style   方言 upsert 风格（不得为 {@link UpsertStyle#NONE}）
      */
     public static SqlStatement create(MutationContext ctx, List<String> columns, String pk, UpsertStyle style) {
+        return create(ctx, columns, pk, style, null);
+    }
+
+    /**
+     * 构造单条 UPSERT 语句并预置已解析的 {@link DbType}（避免准备阶段重复探测方言）。
+     */
+    public static SqlStatement create(MutationContext ctx,
+                                      List<String> columns,
+                                      String pk,
+                                      UpsertStyle style,
+                                      @Nullable DbType dbType) {
         SqlStatement insert = InsertStatementFactory.create(ctx);
         SqlNode.Upsert upsert = wrap(insertNode(insert.ast()), ctx.metadata(), columns, pk,
                 ctx.namingPolicy(), style);
-        return SqlRenderer.render(upsert, insert.metadata());
+        StatementMetadata metadata = dbType != null ? insert.metadata().withDbType(dbType) : insert.metadata();
+        return SqlRenderer.render(upsert, metadata);
     }
 
     /**
@@ -46,11 +61,26 @@ public final class UpsertStatementFactory {
                                                 int batchSize,
                                                 String pk,
                                                 UpsertStyle style) {
+        return createBatch(meta, columns, rows, namingPolicy, batchSize, pk, style, null);
+    }
+
+    /**
+     * 构造批量 UPSERT 语句并预置已解析的 {@link DbType}（避免批量准备阶段重复探测方言）。
+     */
+    public static BatchSqlStatement createBatch(EntityMetadataContext meta,
+                                                List<String> columns,
+                                                List<Object[]> rows,
+                                                NamingPolicy namingPolicy,
+                                                int batchSize,
+                                                String pk,
+                                                UpsertStyle style,
+                                                @Nullable DbType dbType) {
         BatchSqlStatement insertBatch = InsertStatementFactory.createBatch(
                 meta, columns, rows, namingPolicy, batchSize, false);
         SqlNode.Upsert upsert = wrap(insertNode(insertBatch.ast()), meta, columns, pk, namingPolicy, style);
-        SqlStatement rendered = SqlRenderer.render(upsert, insertBatch.metadata());
-        return insertBatch.withSql(rendered.sql()).withAst(upsert);
+        StatementMetadata metadata = dbType != null ? insertBatch.metadata().withDbType(dbType) : insertBatch.metadata();
+        SqlStatement rendered = SqlRenderer.render(upsert, metadata);
+        return insertBatch.withMetadata(metadata).withSql(rendered.sql()).withAst(upsert);
     }
 
     private static SqlNode.Insert insertNode(SqlNode ast) {

@@ -119,6 +119,15 @@ class ArchitectureGuardTest {
     }
 
     @Test
+    void resultPackageMayOnlyDependOnUtilsAndExceptions() throws IOException {
+        assertOnlyAllowedImports(corePackage("result"), Set.of(
+                "com.sondertara.joya.core.result",
+                "com.sondertara.joya.utils",
+                "com.sondertara.joya.exceptions"
+        ));
+    }
+
+    @Test
     void metadataMayNotDependOnQueryOrKernel() throws IOException {
         assertOnlyAllowedImports(corePackage("metadata"), Set.of(
                 "com.sondertara.joya.core.metadata",
@@ -197,6 +206,44 @@ class ArchitectureGuardTest {
         }
         assertEquals(List.of(), violations,
                 "core/mapper facade must not depend on core.jdbc implementations: " + violations);
+    }
+
+    @Test
+    void coreRootMustNotDependOnJdbcImplementationsExceptJoyaClientDefaultWiring() throws IOException {
+        Path coreDir = corePackage("");
+        List<String> violations = new ArrayList<>();
+        try (Stream<Path> files = Files.list(coreDir)) {
+            for (Path file : files.filter(p -> p.toString().endsWith(".java")).toList()) {
+                String name = file.getFileName().toString();
+                if (name.equals("JoyaClient.java")) {
+                    continue;
+                }
+                String content = stripComments(Files.readString(file));
+                if (content.contains("com.sondertara.joya.core.jdbc")) {
+                    violations.add(name);
+                }
+            }
+        }
+        assertEquals(List.of(), violations,
+                "core root classes (except JoyaClient default factory wiring) must not depend on core.jdbc: "
+                        + violations);
+    }
+
+    @Test
+    void txLayerMayOnlyDependOnFacadeAndKernel() throws IOException {
+        assertOnlyAllowedImports(corePackage("tx"), Set.of(
+                "com.sondertara.joya.core.tx",
+                "com.sondertara.joya.core.DataOps",
+                "com.sondertara.joya.core.DataOpsSupport",
+                "com.sondertara.joya.core.EntityOps",
+                "com.sondertara.joya.core.JoyaSettings",
+                "com.sondertara.joya.core.SqlOps",
+                "com.sondertara.joya.core.kernel",
+                "com.sondertara.joya.core.listener",
+                "com.sondertara.joya.core.query.dsl.Query",
+                "com.sondertara.joya.utils",
+                "com.sondertara.joya.exceptions"
+        ));
     }
 
     @Test
@@ -288,7 +335,7 @@ class ArchitectureGuardTest {
         java.util.Map<String, Set<String>> graph = new java.util.TreeMap<>();
         try (Stream<Path> paths = Files.walk(resolveMainJavaRoot())) {
             for (Path file : paths.filter(p -> p.toString().endsWith(".java")).toList()) {
-                String content = stripComments(Files.readString(file));
+                String content = stripLiterals(stripComments(Files.readString(file)));
                 java.util.regex.Matcher pkgMatcher = java.util.regex.Pattern
                         .compile("(?m)^package\\s+([\\w.]+);").matcher(content);
                 assertTrue(pkgMatcher.find(), "missing package declaration: " + file);
@@ -353,7 +400,6 @@ class ArchitectureGuardTest {
         assertNoClassCycles(corePackage("kernel/observe"));
         assertNoClassCycles(corePackage("kernel/support"));
         assertNoClassCycles(corePackage("mapper"));
-        assertNoClassCycles(corePackage("jdbc/resultset"));
         assertNoClassCycles(corePackage("jdbc/resultset/mapper"));
         assertNoClassCycles(corePackage("kernel/statement"),
                 Set.of(Set.of("ParameterBinder", "SqlParameter")));
@@ -363,8 +409,8 @@ class ArchitectureGuardTest {
         assertNoClassCycles(corePackage("query"),
                 Set.of(Set.of("ColumnMetaProvider", "Expr", "JoinPart", "OnPredicate", "RenderContext", "SqlPredicate")));
         assertNoClassCycles(corePackage("query/dsl"),
-                Set.of(Set.of("Query", "QueryExecutor", "Select1", "Select2", "Select3",
-                        "Select4", "Select5", "Select6", "Select7", "Select8", "SelectN")));
+                Set.of(Set.of("Query", "Select1", "Select2", "Select3", "Select4", "Select5",
+                        "Select6", "Select7", "Select8", "SelectN")));
     }
 
     @Test
@@ -409,9 +455,10 @@ class ArchitectureGuardTest {
         try (Stream<Path> files = Files.list(dir)) {
             for (Path file : files.filter(p -> p.toString().endsWith(".java")).toList()) {
                 String name = file.getFileName().toString().replace(".java", "");
-                sources.put(name, stripComments(Files.readString(file)));
+                sources.put(name, stripLiterals(stripComments(Files.readString(file))));
             }
         }
+        assertTrue(!sources.isEmpty(), "class-cycle guard target has no .java files: " + dir);
         java.util.Map<String, Set<String>> graph = new java.util.TreeMap<>();
         for (java.util.Map.Entry<String, String> entry : sources.entrySet()) {
             Set<String> deps = graph.computeIfAbsent(entry.getKey(), k -> new java.util.TreeSet<>());
@@ -527,7 +574,49 @@ class ArchitectureGuardTest {
                 "Layer must not depend on packages outside its allow-list. Violations: " + violations);
     }
 
-    /** 去除块注释与行注释，避免 Javadoc 中的 {@code {@link ...}} 造成误判。 */
+    /**
+     * 去掉 Java 字符串/字符字面量内容：类级循环守卫按词边界匹配类型名，
+     * 字面量中的 SQL/日志文本不应产生虚假依赖边。
+     *
+     * <p>使用线性扫描而不是正则：正则的重复分组会在长字面量上递归导致 StackOverflow。
+     */
+    private static String stripLiterals(String source) {
+        if (source == null || source.isEmpty()) {
+            return source;
+        }
+        int len = source.length();
+        StringBuilder out = new StringBuilder(len);
+        int i = 0;
+        while (i < len) {
+            char c = source.charAt(i);
+            if (c == '"' && i + 2 < len && source.charAt(i + 1) == '"' && source.charAt(i + 2) == '"') {
+                int end = source.indexOf("\"\"\"", i + 3);
+                i = end < 0 ? len : end + 3;
+                out.append("\"\"\"");
+            } else if (c == '"' || c == '\'') {
+                char quote = c;
+                i++;
+                while (i < len) {
+                    char current = source.charAt(i);
+                    if (current == '\\' && i + 1 < len) {
+                        i += 2;
+                        continue;
+                    }
+                    if (current == quote) {
+                        i++;
+                        break;
+                    }
+                    i++;
+                }
+                out.append(quote).append(quote);
+            } else {
+                out.append(c);
+                i++;
+            }
+        }
+        return out.toString();
+    }
+
     private static String stripComments(String source) {
         StringBuilder out = new StringBuilder(source.length());
         boolean inBlock = false;

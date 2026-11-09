@@ -2,7 +2,6 @@ package com.sondertara.joya.core.query.criterion;
 
 import com.sondertara.joya.core.kernel.statement.ParameterSource;
 import com.sondertara.joya.core.kernel.statement.SqlNode;
-import com.sondertara.joya.core.kernel.statement.SqlParameterList;
 import com.sondertara.joya.core.query.LinkType;
 import com.sondertara.joya.core.query.RenderContext;
 import com.sondertara.joya.core.query.SqlPredicate;
@@ -44,39 +43,5 @@ final class GroupPredicate implements SqlPredicate {
         return alwaysWrap ? new SqlNode.Group(result) : result;
     }
 
-    @Override
-    public void render(RenderContext ctx, StringBuilder sql, SqlParameterList params, ParameterSource source) {
-        StringBuilder body = new StringBuilder();
-        int rendered = renderChildren(linkType, children, ctx, body, params, source);
-        if (rendered == 0) {
-            return;
-        }
-        if (alwaysWrap || rendered > 1) {
-            sql.append('(').append(body).append(')');
-        } else {
-            sql.append(body);
-        }
-    }
 
-    /**
-     * 把一组谓词按 {@code linkType} 连接渲染到 {@code sql}，返回实际渲染出的谓词数量。
-     * 空谓词（例如条件值全部为空）会被跳过，不会留下多余的分隔符。
-     */
-    static int renderChildren(LinkType linkType, List<SqlPredicate> children, RenderContext ctx,
-                              StringBuilder sql, SqlParameterList params, ParameterSource source) {
-        int rendered = 0;
-        for (SqlPredicate child : children) {
-            StringBuilder item = new StringBuilder();
-            child.render(ctx, item, params, source);
-            if (item.isEmpty()) {
-                continue;
-            }
-            if (rendered > 0) {
-                sql.append(' ').append(linkType.name()).append(' ');
-            }
-            sql.append(item);
-            rendered++;
-        }
-        return rendered;
-    }
 }

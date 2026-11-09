@@ -4,16 +4,13 @@ import com.sondertara.joya.core.kernel.support.Ordered;
 import com.sondertara.joya.core.kernel.statement.SqlNode;
 
 /**
- * SQL 结构改写扩展点（AST 级）。
+ * SQL 结构改写扩展点（AST 级），也是 Joya 唯一的 SQL 改写入口。
  *
- * <p>与 {@link SqlInterceptor} 的分工：
- * <ul>
- *   <li>{@code SqlRewriter} 在<b>渲染前</b>运行，拿到的是一棵 {@link SqlNode} 树，可以安全地加条件、追加列
- *       （物理表名由 {@code NamingPolicy.tableNameResolver} 在渲染期唯一决定，改写器不得篡改表名）；</li>
- *   <li>{@link SqlInterceptor} 在<b>渲染后</b>运行，只拿到 SQL 文本，仅用于 hint/注释等最后一段微调。</li>
- * </ul>
+ * <p>在<b>渲染前</b>运行，拿到的是一棵 {@link SqlNode} 树，可以安全地加条件、追加列
+ * （物理表名由 {@code NamingPolicy.tableNameResolver} 在渲染期唯一决定，改写器不得篡改表名）。
+ * 观测/日志请使用 {@code SqlExecutionListener}；不要在这里拼接 SQL 文本。
  *
- * <p>实现应为无状态纯函数：返回新节点，不修改输入节点。
+ * <p>实现应为无状态纯函数：返回新节点，不修改输入节点；不得改 SELECT 投影或语句类型。
  */
 @FunctionalInterface
 public interface SqlRewriter extends Ordered {

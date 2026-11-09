@@ -37,7 +37,7 @@ public final class EntityLifecycle {
     };
 
     public EntityLifecycle(List<EntityListener> globalListeners) {
-        this.globalListeners = sort(globalListeners);
+        this.globalListeners = globalListeners == null ? List.of() : List.copyOf(globalListeners);
     }
 
     public void prePersist(Object entity) {

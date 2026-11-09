@@ -63,10 +63,6 @@ public interface Dialect {
         return true;
     }
 
-    /** 对表名、列名或 {@code schema.table} 标识符按当前方言风格进行安全转义。 */
-    default String quoteIdentifier(String identifier) {
-        return quoteStyle().quote(identifier);
-    }
 
     /** 流式查询（{@code queryStream}）的游标 {@code fetchSize}。 */
     default int streamFetchSize() {

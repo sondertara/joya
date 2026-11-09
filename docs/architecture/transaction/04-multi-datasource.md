@@ -138,23 +138,9 @@ Session session = Session.owner(resolved,
 2. PostgreSQL 可用 `SET TRANSACTION READ ONLY` 优化
 3. MySQL 只读事务跳过部分锁开销
 
-### 分片拦截器的硬约束
+### 历史方案注记：分片与跨库路由约束
 
-`SqlInterceptor` 链（`kernel/interceptor/`，示例 `ShardingInterceptor`）**不得在事务中把语句改写到另一个物理库**。
-
-```java
-public interface SqlInterceptor extends Ordered {
-    /**
-     * 声明本拦截器是否可能改变语句的目标**物理库**。
-     *
-     * <p>返回 true 的拦截器在事务上下文中执行时，链上校验器会抛
-     * {@link TxRoutingViolationException} —— 分片 + 事务若无此约束必然静默错乱。
-     */
-    default boolean mayChangePhysicalDatabase() { return false; }
-}
-```
-
-现状 `ShardingInterceptor` 在 SQL 改写层，与连接选择、事务绑定**完全脱钩**——语句被改写到 `db2.orders` 却仍在 `db1` 的连接上执行。这个约束必须在链上强制校验，不能只写文档。
+> **演进说明（现行实现）**：文本级拦截器与跨库路由已废弃，现行架构采用 **1 `JoyaClient` = 1 `DataSource`**，分表/schema 切换统一在渲染期由 `NamingPolicy.tableNameResolver` 完成，结构改写统一收敛于 AST 级 `SqlRewriter`（且 `StatementPreparer` 禁止在改写器中重命名或移除物理表）。以下为早期评审阶段的草案记录。
 
 ---
 

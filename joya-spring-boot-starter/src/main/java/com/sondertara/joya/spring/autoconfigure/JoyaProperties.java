@@ -2,17 +2,17 @@ package com.sondertara.joya.spring.autoconfigure;
 
 import com.sondertara.joya.core.JoyaSettings;
 import com.sondertara.joya.core.kernel.statement.DbType;
-import com.sondertara.joya.core.kernel.dialect.DialectStrategy;
+import com.sondertara.joya.core.kernel.dialect.QuoteStyle;
 import org.springframework.boot.autoconfigure.jdbc.DataSourceProperties;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.NestedConfigurationProperty;
 
-import javax.sql.DataSource;
 import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Joya Spring Boot 配置项：
+ * Joya Spring Boot 配置项（纯绑定载体：只负责属性读取、单库覆写与绑定期校验，
+ * 不承担到内核领域对象的转换；转换见 {@link JoyaSettingsFactory}）：
  * <ul>
  *   <li>主库通过 {@code joya.primary.*} 配置（默认 {@code use-spring=true} 直接复用 {@code spring.datasource.*}，也可设为 {@code false} 独立配置连接）；</li>
  *   <li>扩展数据源通过 {@code joya.datasources} 数组统一配置连接参数与单库可选的 Joya 参数覆写。</li>
@@ -24,7 +24,7 @@ public class JoyaProperties {
     /** 全局开关，默认开启。 */
     private boolean enabled = true;
 
-    /** 是否开启内置 SQL 日志拦截器，默认关闭。 */
+    /** 是否开启内置 SQL 执行日志监听器，默认关闭。 */
     private boolean sqlLog = false;
 
     /** 开启 SQL 日志时是否打印明文参数，默认关闭（仅输出参数个数脱敏占位）。 */
@@ -51,53 +51,15 @@ public class JoyaProperties {
     /** 动态路由数据源模式（每次按当前连接解析方言），默认 false。 */
     private boolean dynamicDialect = false;
 
+    /** 标识符引用风格（默认不引用；MySQL 保留字场景可设为 BACKTICK）。 */
+    private QuoteStyle quoteStyle = QuoteStyle.NONE;
+
     /** 主数据源配置（单数对象，天然唯一，默认复用 Spring 原生 {@code spring.datasource}）。 */
     @NestedConfigurationProperty
     private PrimaryDataSourceProperties primary = new PrimaryDataSourceProperties();
 
     /** 扩展数据源列表（数组形式，支持 IDE 直接补全每个元素的属性）。 */
     private List<JoyaDataSourceProperties> datasources = new ArrayList<>();
-
-    public JoyaSettings toSettings(JoyaDataSourceProperties override) {
-        int timeout = (override != null && override.getQueryTimeoutSeconds() != null)
-                ? override.getQueryTimeoutSeconds()
-                : this.queryTimeoutSeconds;
-        int batch = (override != null && override.getBatchSize() != null)
-                ? override.getBatchSize()
-                : this.batchSize;
-        int maxJoin = (override != null && override.getMaxJoinTable() != null)
-                ? override.getMaxJoinTable()
-                : this.maxJoinTable;
-        boolean colUpper = (override != null && override.getColumnUppercase() != null)
-                ? override.getColumnUppercase()
-                : this.columnUppercase;
-        boolean tblUpper = (override != null && override.getTableUppercase() != null)
-                ? override.getTableUppercase()
-                : this.tableUppercase;
-        return JoyaSettings.builder()
-                .queryTimeoutSeconds(timeout)
-                .batchSize(batch)
-                .maxJoinTable(maxJoin)
-                .columnUppercase(colUpper)
-                .tableUppercase(tblUpper)
-                .build();
-    }
-
-    public DialectStrategy toDialectStrategy(JoyaDataSourceProperties override, DataSource dataSource) {
-        boolean dynamic = (override != null && override.getDynamicDialect() != null)
-                ? override.getDynamicDialect()
-                : this.dynamicDialect;
-        if (dynamic) {
-            return DialectStrategy.perConnection();
-        }
-        DbType fixed = (override != null && override.getDialect() != null)
-                ? override.getDialect()
-                : this.dialect;
-        if (fixed != null) {
-            return DialectStrategy.fixed(fixed);
-        }
-        return DialectStrategy.cached(dataSource);
-    }
 
     // ===== Getters & Setters =====
 
@@ -141,6 +103,9 @@ public class JoyaProperties {
     }
 
     public void setBatchSize(int batchSize) {
+        if (batchSize <= 0) {
+            throw new IllegalArgumentException("batchSize must be > 0: " + batchSize);
+        }
         this.batchSize = batchSize;
     }
 
@@ -149,6 +114,9 @@ public class JoyaProperties {
     }
 
     public void setMaxJoinTable(int maxJoinTable) {
+        if (maxJoinTable <= 0) {
+            throw new IllegalArgumentException("maxJoinTable must be > 0: " + maxJoinTable);
+        }
         this.maxJoinTable = maxJoinTable;
     }
 
@@ -182,6 +150,14 @@ public class JoyaProperties {
 
     public void setDynamicDialect(boolean dynamicDialect) {
         this.dynamicDialect = dynamicDialect;
+    }
+
+    public QuoteStyle getQuoteStyle() {
+        return quoteStyle;
+    }
+
+    public void setQuoteStyle(QuoteStyle quoteStyle) {
+        this.quoteStyle = quoteStyle == null ? QuoteStyle.NONE : quoteStyle;
     }
 
     public PrimaryDataSourceProperties getPrimary() {
@@ -230,6 +206,9 @@ public class JoyaProperties {
         /** 单库动态方言探测开关覆写。 */
         private Boolean dynamicDialect;
 
+        /** 单库标识符引用风格覆写（{@code null} 表示沿用全局 {@code joya.quote-style}）。 */
+        private QuoteStyle quoteStyle;
+
         /** 单库 Hikari 连接池属性透传绑定（如 maximum-pool-size、minimum-idle）。 */
         private java.util.Map<String, Object> hikari = new java.util.LinkedHashMap<>();
 
@@ -259,6 +238,9 @@ public class JoyaProperties {
         }
 
         public void setBatchSize(Integer batchSize) {
+            if (batchSize != null && batchSize <= 0) {
+                throw new IllegalArgumentException("batchSize must be > 0: " + batchSize);
+            }
             this.batchSize = batchSize;
         }
 
@@ -267,6 +249,9 @@ public class JoyaProperties {
         }
 
         public void setMaxJoinTable(Integer maxJoinTable) {
+            if (maxJoinTable != null && maxJoinTable <= 0) {
+                throw new IllegalArgumentException("maxJoinTable must be > 0: " + maxJoinTable);
+            }
             this.maxJoinTable = maxJoinTable;
         }
 
@@ -300,6 +285,14 @@ public class JoyaProperties {
 
         public void setDynamicDialect(Boolean dynamicDialect) {
             this.dynamicDialect = dynamicDialect;
+        }
+
+        public QuoteStyle getQuoteStyle() {
+            return quoteStyle;
+        }
+
+        public void setQuoteStyle(QuoteStyle quoteStyle) {
+            this.quoteStyle = quoteStyle;
         }
 
         public java.util.Map<String, Object> getHikari() {

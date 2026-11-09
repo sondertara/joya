@@ -23,8 +23,12 @@ public class ListRecordExtractor<T> implements ResultSetExtractor<List<T>> {
     public List<T> extract(ResultSet record) {
         List<T> result = new ArrayList<>();
         try {
+            RowMapper<T> boundMapper = null;
             while (record.next()) {
-                result.add(rowMapper.map(record));
+                if (boundMapper == null) {
+                    boundMapper = rowMapper.forResultSet(record);
+                }
+                result.add(boundMapper.map(record));
             }
         } catch (SQLException e) {
             throw new DbException(e);

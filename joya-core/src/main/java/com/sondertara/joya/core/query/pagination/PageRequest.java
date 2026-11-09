@@ -9,6 +9,9 @@ import java.util.Objects;
 public final class PageRequest implements Serializable {
     private static final long serialVersionUID = 1L;
 
+    /** 单页最大条数，防止一次拉取过多数据。 */
+    public static final int MAX_PAGE_SIZE = 2000;
+
     private final int page;         // 0-based 内部页索引
     private final int size;         // 每页条数
     private final boolean needTotal;
@@ -19,6 +22,9 @@ public final class PageRequest implements Serializable {
         }
         if (size <= 0) {
             throw new IllegalArgumentException("size must be > 0");
+        }
+        if (size > MAX_PAGE_SIZE) {
+            throw new IllegalArgumentException("size must be <= " + MAX_PAGE_SIZE + ": " + size);
         }
         this.page = page;
         this.size = size;
@@ -105,13 +111,8 @@ public final class PageRequest implements Serializable {
         return needTotal;
     }
 
-    /** 计算 OFFSET（超出 int 范围时抛出 {@link ArithmeticException}）。 */
-    public int getOffset() {
-        return Math.multiplyExact(page, size);
-    }
-
-    /** 计算 64 位 OFFSET。 */
-    public long getOffsetAsLong() {
+    /** 计算 64 位 OFFSET（防 int 溢出）。 */
+    public long getOffset() {
         return (long) page * (long) size;
     }
 

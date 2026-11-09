@@ -274,7 +274,7 @@ class DialectBatchAndMappingTest {
             return sql(
                     "SELECT * FROM t_chain_user WHERE dept_id = ? ORDER BY id DESC",
                     deptId)
-                    .limit(ChainUser.class, page.getOffsetAsLong(), page.getSize());
+                    .limit(ChainUser.class, page.getOffset(), page.getSize());
         }
     }
 
@@ -444,9 +444,6 @@ class DialectBatchAndMappingTest {
         SqlStatement oracleCount = Dialect.ORACLE.countSql(baseStmt);
         assertEquals("SELECT COUNT(*) FROM (SELECT id FROM t_chain_user WHERE dept_id = ? ORDER BY id ASC) TEMP_T", oracleCount.sql());
 
-        assertEquals("`t_order`", Dialect.MYSQL.quoteIdentifier("t_order"));
-        assertEquals("\"sec\".\"t_order\"", Dialect.POSTGRESQL.quoteIdentifier("sec.t_order"));
-        assertEquals("[dbo].[t_order]", Dialect.SQLSERVER.quoteIdentifier("dbo.t_order"));
         assertEquals(QuoteStyle.DOUBLE_QUOTE, Dialect.H2.quoteStyle());
         assertEquals(PaginationStyle.LIMIT_OFFSET, Dialect.H2.paginationStyle());
 
@@ -1057,10 +1054,8 @@ class DialectBatchAndMappingTest {
         assertEquals(0L, emptyPage.getTotal());
         assertEquals(0, emptyPage.getTotalPages());
 
-        // 9. PageRequest.getOffset() 整数溢出保护
-        org.junit.jupiter.api.Assertions.assertThrows(
-                ArithmeticException.class,
-                () -> PageRequest.of(Integer.MAX_VALUE, 2).getOffset());
+        // 9. PageRequest.getOffset() 64 位无溢出计算
+        assertEquals(4294967294L, PageRequest.of(Integer.MAX_VALUE, 2).getOffset());
 
         // 10. sumAsLong / sumAsDecimal 与整型溢出检测
         Long deptSumLong = joya.from(ChainUser.class).sumAsLong(ChainUser::getDeptId).orElseThrow();

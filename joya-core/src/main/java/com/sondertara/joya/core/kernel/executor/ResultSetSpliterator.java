@@ -36,6 +36,8 @@ public  class ResultSetSpliterator<T> implements Spliterator<T> {
 
 		private final StreamAccess streamAccess;
 
+		private RowMapper<T> boundMapper;
+
 		public ResultSetSpliterator(ResultSet rs, RowMapper<T> rowMapper) {
 			this(rs, rowMapper, null);
 		}
@@ -53,7 +55,10 @@ public  class ResultSetSpliterator<T> implements Spliterator<T> {
 			}
 			try {
 				if (this.rs.next()) {
-					action.accept(this.rowMapper.map(this.rs));
+					if (this.boundMapper == null) {
+						this.boundMapper = this.rowMapper.forResultSet(this.rs);
+					}
+					action.accept(this.boundMapper.map(this.rs));
 					return true;
 				}
 				return false;

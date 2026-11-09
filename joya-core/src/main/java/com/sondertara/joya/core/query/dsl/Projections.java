@@ -63,7 +63,6 @@ final class Projections {
                     + " across joined tables without explicit select(...); use select(...).list("
                     + type.getSimpleName() + "::new) or select(...).list(" + type.getSimpleName() + ".class)");
         }
-        List<String> columns = new ArrayList<>();
         List<SqlNode> nodes = new ArrayList<>();
         for (Field field : properties(type)) {
             String property = field.getName();
@@ -74,25 +73,22 @@ final class Projections {
                         + " matches no column of " + ctx.rootType().getSimpleName()
                         + "; use select(...).list(" + type.getSimpleName() + "::new)");
             }
-            columns.add(match.identity() + " AS " + property);
             nodes.add(SqlNodes.alias(node(match), property));
         }
-        if (columns.isEmpty()) {
+        if (nodes.isEmpty()) {
             throw new IllegalStateException("No mappable property found on " + type.getName());
         }
-        return Projection.typed(columns, nodes, kind, type, false, ctx);
+        return Projection.typed(nodes, kind, type, false, ctx);
     }
 
     /** 实体全部列（按实体元数据映射）。 */
     static <V> Projection<V> entity(Class<V> type, RenderContext ctx) {
         List<ColumnAlias> allColumns = ctx.getAllColumns(type);
-        List<String> columns = new ArrayList<>(allColumns.size());
         List<SqlNode> nodes = new ArrayList<>(allColumns.size());
         for (ColumnAlias column : allColumns) {
-            columns.add(column.identity());
             nodes.add(node(column));
         }
-        return Projection.typed(columns, nodes, ResultType.BEAN, type, false, ctx);
+        return Projection.typed(nodes, ResultType.BEAN, type, false, ctx);
     }
 
     // ===== 写了 select =====
@@ -107,7 +103,6 @@ final class Projections {
             throw new IllegalArgumentException("Cannot map " + selected.size() + " columns to scalar type "
                     + type.getName() + "; use a concrete DTO or record type, or select a single column");
         }
-        List<String> columns = new ArrayList<>(selected.size());
         List<SqlNode> nodes = new ArrayList<>(selected.size());
         Set<String> labels = new HashSet<>();
         for (IGetter<?, ?> column : selected) {
@@ -121,18 +116,16 @@ final class Projections {
                 throw new IllegalStateException("Duplicate column label '" + label + "' from different tables; use list("
                         + type.getSimpleName() + "::new) to map by position");
             }
-            columns.add(provider.resolveSql(ctx) + " AS " + label);
             nodes.add(SqlNodes.alias(provider.resolveNode(ctx), label));
         }
-        return Projection.typed(columns, nodes, kind, type, hasAggregate(selected), ctx);
+        return Projection.typed(nodes, kind, type, hasAggregate(selected), ctx);
     }
 
     @SuppressWarnings("unchecked")
     static <A> Projection<A> single(IGetter<?, ?> column, RenderContext ctx) {
         Class<?> type = valueType(column);
         ColumnMetaProvider provider = ColumnMetaProvider.fromGetter(column);
-        String sql = provider.resolveSql(ctx) + " AS c1";
-        return Projection.mapped(List.of(sql),
+        return Projection.mapped(
                 List.of(SqlNodes.alias(provider.resolveNode(ctx), "c1")),
                 rs -> (A) ColumnValues.read(rs, 1, type),
                 column instanceof Expr<?> expr && expr.isAggregate(),
@@ -141,14 +134,12 @@ final class Projections {
 
     static <V> Projection<V> positional(List<IGetter<?, ?>> selected, Function<Object[], V> factory, Object mapper,
                                         RenderContext ctx) {
-        List<String> columns = new ArrayList<>(selected.size());
         List<SqlNode> nodes = new ArrayList<>(selected.size());
         Class<?>[] types = new Class<?>[selected.size()];
         List<String> names = new ArrayList<>(selected.size());
         for (int i = 0; i < selected.size(); i++) {
             IGetter<?, ?> column = selected.get(i);
             ColumnMetaProvider provider = ColumnMetaProvider.fromGetter(column);
-            columns.add(provider.resolveSql(ctx) + " AS c" + (i + 1));
             nodes.add(SqlNodes.alias(provider.resolveNode(ctx), "c" + (i + 1)));
             types[i] = valueType(column);
             names.add((column instanceof Expr<?> expr && expr.alias() == null) ? null : provider.propertyName());
@@ -159,7 +150,7 @@ final class Projections {
             RecordOrderVerifier.verify(record, names);
             parameterTypes = RecordOrderVerifier.parameterTypes(record);
         }
-        return Projection.mapped(columns, nodes, new PositionalRowMapper<>(types, parameterTypes, factory),
+        return Projection.mapped(nodes, new PositionalRowMapper<>(types, parameterTypes, factory),
                 hasAggregate(selected), ctx);
     }
 

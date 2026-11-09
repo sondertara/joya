@@ -39,11 +39,11 @@ public final class Query<T> implements QueryScope {
     private final QueryRenderer<T> renderer;
     private final QueryExecutor<T> executor;
 
-    public Query(ExecutionKernel template, Class<T> rootType) {
+    public Query(ExecutionKernel kernel, Class<T> rootType) {
         Objects.requireNonNull(rootType, "rootType must not be null");
         this.spec = new QuerySpec<>(rootType);
-        this.renderer = new QueryRenderer<>(template);
-        this.executor = new QueryExecutor<>(template, renderer);
+        this.renderer = new QueryRenderer<>(kernel);
+        this.executor = new QueryExecutor<>(kernel, renderer);
     }
 
     private Query(QuerySpec<T> spec, QueryRenderer<T> renderer, QueryExecutor<T> executor) {
@@ -483,7 +483,7 @@ public final class Query<T> implements QueryScope {
 
     SqlStatement renderStatement(Projection<?> projection) {
         RenderContext ctx = projection.context() != null ? projection.context() : renderContext();
-        return renderer.renderStatementNodes(spec, projection.nodes(), true, ctx);
+        return renderer.renderStatement(spec, projection.nodes(), true, ctx);
     }
 
     <V> List<V> executeList(Projection<V> projection) {

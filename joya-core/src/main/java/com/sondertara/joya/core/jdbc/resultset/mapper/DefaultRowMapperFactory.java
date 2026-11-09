@@ -20,7 +20,7 @@ public final class DefaultRowMapperFactory implements RowMapperFactory {
     public <V> RowMapper<V> create(ResultType type, Class<V> javaType) {
         return switch (type) {
             case SCALAR -> new SingleColumnRowMapper<>(javaType);
-            case MAP -> (RowMapper<V>) new MapRowMapper();
+            case MAP -> (RowMapper<V>) MapRowMapper.INSTANCE;
             case BEAN, RECORD -> BeanRowMapper.of(javaType);
             case UNSUPPORTED -> throw new IllegalArgumentException("Cannot map rows to "
                     + (javaType == null ? "null" : javaType.getName())

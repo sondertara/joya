@@ -63,7 +63,7 @@ public class JdbcExecutor implements Executor {
     }
 
     private Connection guardConnection(Connection target) {
-        boolean transactional = connections instanceof ResultSetSpliterator.StreamAccess;
+        boolean transactionControlForbidden = !connections.allowsTransactionControl();
         return (Connection) Proxy.newProxyInstance(
                 Connection.class.getClassLoader(),
                 new Class<?>[]{Connection.class},
@@ -72,7 +72,7 @@ public class JdbcExecutor implements Executor {
                     if ("close".equals(name) || "abort".equals(name)) {
                         return null;
                     }
-                    if (transactional && isTransactionControlMethod(name)) {
+                    if (transactionControlForbidden && isTransactionControlMethod(name)) {
                         throw new UnsupportedOperationException(
                                 "Cannot invoke " + name + "() directly on a Joya-managed transactional Connection; "
                                         + "use Tx APIs (commit / rollback / savepoint) instead");
@@ -270,12 +270,12 @@ public class JdbcExecutor implements Executor {
                     ps.addBatch();
                     inChunk++;
                     if (inChunk >= chunkSize) {
-                        countOffset = flushChunk(ps, allCounts, countOffset, wantKeys, pkColumn, generatedKeys);
+                        countOffset = flushChunk(ps, allCounts, countOffset, inChunk, wantKeys, pkColumn, generatedKeys);
                         inChunk = 0;
                     }
                 }
                 if (inChunk > 0) {
-                    flushChunk(ps, allCounts, countOffset, wantKeys, pkColumn, generatedKeys);
+                    flushChunk(ps, allCounts, countOffset, inChunk, wantKeys, pkColumn, generatedKeys);
                 }
                 return BatchSlice.of(allCounts, generatedKeys);
             }
@@ -286,18 +286,21 @@ public class JdbcExecutor implements Executor {
             PreparedStatement ps,
             int[] allCounts,
             int countOffset,
+            int chunkRows,
             boolean wantKeys,
             @Nullable String pkColumn,
             List<Object> generatedKeys
     ) throws SQLException {
         int[] chunkCounts = ps.executeBatch();
-        if (chunkCounts != null && chunkCounts.length > 0) {
-            int copyLen = Math.min(chunkCounts.length, allCounts.length - countOffset);
-            if (copyLen > 0) {
-                System.arraycopy(chunkCounts, 0, allCounts, countOffset, copyLen);
-                countOffset += copyLen;
-            }
+        int available = Math.max(0, Math.min(chunkRows, allCounts.length - countOffset));
+        int copyLen = chunkCounts == null ? 0 : Math.min(chunkCounts.length, available);
+        if (copyLen > 0) {
+            System.arraycopy(chunkCounts, 0, allCounts, countOffset, copyLen);
         }
+        if (copyLen < available) {
+            java.util.Arrays.fill(allCounts, countOffset + copyLen, countOffset + available, Statement.SUCCESS_NO_INFO);
+        }
+        countOffset += available;
         if (wantKeys) {
             try (ResultSet keys = ps.getGeneratedKeys()) {
                 while (keys != null && keys.next()) {

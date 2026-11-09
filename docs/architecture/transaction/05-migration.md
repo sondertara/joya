@@ -137,7 +137,7 @@ boolean inTransaction() {
 |---|---|
 | `DataSourceId` + `DataSourceRegistry` + `TxCapabilities` 启动期探测 | 热路径无 `DatabaseMetaData` 调用（对比现状 `ConnectionContext.java:165-167`） |
 | `RoutingStrategy`，begin 时解析一次 | 写事务内的读**必定**落主库（Spring 路由数据源经典 bug 回归测试） |
-| `SqlInterceptor.mayChangePhysicalDatabase()` + 链上校验 | 事务中改库的拦截器抛 `TxRoutingViolationException` |
+| `SqlRewriter` 表引用守卫（历史草案曾拟用 `mayChangePhysicalDatabase`） | 禁止在改写器中篡改物理表名或跨库路由 |
 | 移除 `@ConditionalOnSingleCandidate`（`JoyaJdbcAutoConfiguration.java:33`） | 双 `DataSource` 容器下自动配置正常生效 |
 | `readOnly` 真正调 `setReadOnly(true)` | H2/PG 上只读事务内写操作失败 |
 

@@ -14,7 +14,8 @@ import java.util.stream.Stream;
 
 /**
  * 执行观测编排器：把 {@link SqlExecutionListener} 的 before / after / onError / onStreamClosed 回调
- * 包装在一次执行外围。监听器按 {@code order()} 升序（同值按类名字典序）在构造时排序一次，
+ * 包装在一次执行外围。监听器按 {@code order()} 升序（同值按类名字典序）在首次执行时惰性排序一次
+ * （扩展点可能是容器启动期的循环依赖代理，构造期读取 {@code order()} 不可靠），
  * 监听器自身抛出的异常只记录日志，不影响执行；监听器为空时零额外开销。
  */
 public final class ExecutionObserver {
@@ -22,9 +23,24 @@ public final class ExecutionObserver {
     private static final Logger log = LoggerFactory.getLogger(ExecutionObserver.class);
 
     private final List<SqlExecutionListener> listeners;
+    private volatile List<SqlExecutionListener> orderedListeners;
 
     public ExecutionObserver(List<SqlExecutionListener> listeners) {
-        this.listeners = sort(listeners);
+        this.listeners = listeners == null ? List.of() : List.copyOf(listeners);
+    }
+
+    private List<SqlExecutionListener> orderedListeners() {
+        List<SqlExecutionListener> local = orderedListeners;
+        if (local == null) {
+            synchronized (this) {
+                local = orderedListeners;
+                if (local == null) {
+                    local = sort(listeners);
+                    orderedListeners = local;
+                }
+            }
+        }
+        return local;
     }
 
     private static List<SqlExecutionListener> sort(List<SqlExecutionListener> listeners) {
@@ -50,8 +66,9 @@ public final class ExecutionObserver {
         if (listeners.isEmpty()) {
             return action.get();
         }
+        List<SqlExecutionListener> active = orderedListeners();
         SqlExecutionContext ctx = new SqlExecutionContext(statement, false, attributes);
-        for (SqlExecutionListener listener : listeners) {
+        for (SqlExecutionListener listener : active) {
             runListenerQuietly(() -> listener.beforeExecute(ctx), "beforeExecute");
         }
         long start = System.nanoTime();
@@ -59,16 +76,16 @@ public final class ExecutionObserver {
             Stream<T> stream = action.get();
             SqlExecutionResult summary = SqlExecutionResult.rows(-1L)
                     .withElapsedNanos(System.nanoTime() - start);
-            for (SqlExecutionListener listener : listeners) {
+            for (SqlExecutionListener listener : active) {
                 runListenerQuietly(() -> listener.afterExecute(ctx, summary), "afterExecute");
             }
             return stream.onClose(() -> {
-                for (SqlExecutionListener listener : listeners) {
+                for (SqlExecutionListener listener : active) {
                     runListenerQuietly(() -> listener.onStreamClosed(ctx), "onStreamClosed");
                 }
             });
         } catch (Throwable error) {
-            for (SqlExecutionListener listener : listeners) {
+            for (SqlExecutionListener listener : active) {
                 runListenerQuietly(() -> listener.onError(ctx, error), "onError");
             }
             throw error;
@@ -80,8 +97,9 @@ public final class ExecutionObserver {
         if (listeners.isEmpty()) {
             return action.get();
         }
+        List<SqlExecutionListener> active = orderedListeners();
         SqlExecutionContext ctx = new SqlExecutionContext(statement, batch, attributes);
-        for (SqlExecutionListener listener : listeners) {
+        for (SqlExecutionListener listener : active) {
             runListenerQuietly(() -> listener.beforeExecute(ctx), "beforeExecute");
         }
         long start = System.nanoTime();
@@ -89,12 +107,12 @@ public final class ExecutionObserver {
             T result = action.get();
             SqlExecutionResult summary = resultMapper.apply(result)
                     .withElapsedNanos(System.nanoTime() - start);
-            for (SqlExecutionListener listener : listeners) {
+            for (SqlExecutionListener listener : active) {
                 runListenerQuietly(() -> listener.afterExecute(ctx, summary), "afterExecute");
             }
             return result;
         } catch (Throwable error) {
-            for (SqlExecutionListener listener : listeners) {
+            for (SqlExecutionListener listener : active) {
                 runListenerQuietly(() -> listener.onError(ctx, error), "onError");
             }
             throw error;

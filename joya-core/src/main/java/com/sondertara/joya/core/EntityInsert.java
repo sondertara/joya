@@ -25,7 +25,7 @@ import java.util.Set;
  */
 public final class EntityInsert<T> {
 
-    private final ExecutionKernel template;
+    private final ExecutionKernel kernel;
     private final EntityMetadataContext meta;
     private final EntityLifecycle lifecycle;
     private final Map<String, Object> values = new LinkedHashMap<>();
@@ -33,12 +33,8 @@ public final class EntityInsert<T> {
     private @Nullable T sourceEntity;
     private boolean ignoreNull;
 
-    EntityInsert(ExecutionKernel template, EntityMetadataContext meta) {
-        this(template, meta, EntityLifecycle.EMPTY);
-    }
-
-    EntityInsert(ExecutionKernel template, EntityMetadataContext meta, EntityLifecycle lifecycle) {
-        this.template = Objects.requireNonNull(template, "template must not be null");
+    EntityInsert(ExecutionKernel kernel, EntityMetadataContext meta, EntityLifecycle lifecycle) {
+        this.kernel = Objects.requireNonNull(kernel, "kernel must not be null");
         this.meta = Objects.requireNonNull(meta, "meta must not be null");
         this.lifecycle = lifecycle == null ? EntityLifecycle.EMPTY : lifecycle;
     }
@@ -109,7 +105,7 @@ public final class EntityInsert<T> {
             throw new IllegalStateException("Insert values must not be empty");
         }
         Set<String> declared = new LinkedHashSet<>(values.keySet());
-        MutationContext ctx = new MutationContext(meta, values, null, declared, ignoreNull, false, template.namingPolicy());
+        MutationContext ctx = new MutationContext(meta, values, null, declared, ignoreNull, false, kernel.namingPolicy());
         return InsertStatementFactory.create(ctx);
     }
 
@@ -119,11 +115,11 @@ public final class EntityInsert<T> {
             // 实体模式统一交给 InsertPlan：prePersist 之后重新快照并重新选列，
             // 监听器新增的字段（含生成主键）因此不会被漏掉。
             return new InsertPlan<>(meta, List.of(sourceEntity), ignoreNull,
-                    "entity must not be null", explicitValues, lifecycle).execute(template);
+                    "entity must not be null", explicitValues, lifecycle).execute(kernel);
         }
         SqlStatement stmt = toSqlStatement();
         String pk = meta.primaryKey();
         Object existingPkVal = pk == null ? null : values.get(pk);
-        return InsertPlan.executeSingleStatement(template, meta, stmt, null, existingPkVal, false);
+        return InsertPlan.executeSingleStatement(kernel, meta, stmt, null, existingPkVal, false);
     }
 }

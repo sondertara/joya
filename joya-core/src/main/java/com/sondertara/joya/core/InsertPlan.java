@@ -42,15 +42,6 @@ final class InsertPlan<T> {
     private final Map<String, Object> overrides;
     private final EntityLifecycle lifecycle;
 
-    InsertPlan(EntityMetadataContext meta, Collection<T> entities, boolean ignoreNull, String nullMessage) {
-        this(meta, entities, ignoreNull, nullMessage, Map.of(), EntityLifecycle.EMPTY);
-    }
-
-    InsertPlan(EntityMetadataContext meta, Collection<T> entities, boolean ignoreNull, String nullMessage,
-               Map<String, Object> overrides) {
-        this(meta, entities, ignoreNull, nullMessage, overrides, EntityLifecycle.EMPTY);
-    }
-
     InsertPlan(EntityMetadataContext meta, Collection<T> entities, boolean ignoreNull, String nullMessage,
                Map<String, Object> overrides, EntityLifecycle lifecycle) {
         this.meta = Objects.requireNonNull(meta, "meta must not be null");
@@ -83,7 +74,7 @@ final class InsertPlan<T> {
         return values;
     }
 
-    MutationResult execute(ExecutionKernel template) {
+    MutationResult execute(ExecutionKernel kernel) {
         if (entities.isEmpty()) {
             return MutationResult.EMPTY;
         }
@@ -111,10 +102,10 @@ final class InsertPlan<T> {
         for (InsertRun<T> run : runs) {
             MutationResult result;
             if (runs.size() == 1 && run.rows().size() == 1) {
-                result = insertSingle(template, run.rows().get(0), pk);
+                result = insertSingle(kernel, run.rows().get(0), pk);
             } else {
                 boolean wantKeys = pkGenerated && !run.cols().contains(pk);
-                result = insertBatch(template, run.rows(), run.cols(), wantKeys);
+                result = insertBatch(kernel, run.rows(), run.cols(), wantKeys);
             }
             total = total.merge(result);
             for (RowPlan<T> row : run.rows()) {
@@ -157,27 +148,27 @@ final class InsertPlan<T> {
         return cols;
     }
 
-    private MutationResult insertSingle(ExecutionKernel template, RowPlan<T> row, String pk) {
+    private MutationResult insertSingle(ExecutionKernel kernel, RowPlan<T> row, String pk) {
         Set<String> declared = new LinkedHashSet<>(row.columns());
         MutationContext ctx = new MutationContext(meta, row.values(), null, declared, ignoreNull, false,
-                template.namingPolicy());
+                kernel.namingPolicy());
         Object existingPkValue = pk == null ? null : row.values().get(pk);
-        return executeSingleStatement(template, meta, InsertStatementFactory.create(ctx),
+        return executeSingleStatement(kernel, meta, InsertStatementFactory.create(ctx),
                 row.entity(), existingPkValue, false, lifecycle);
     }
 
-    private MutationResult insertBatch(ExecutionKernel template, List<RowPlan<T>> rows,
+    private MutationResult insertBatch(ExecutionKernel kernel, List<RowPlan<T>> rows,
                                        List<String> columns, boolean wantKeys) {
         List<Object[]> batchRows = new ArrayList<>(rows.size());
         for (RowPlan<T> row : rows) {
             batchRows.add(rowValues(row.values(), columns));
         }
-        int batchSize = template.executionOptions().batchSize() > 0
-                ? template.executionOptions().batchSize()
+        int batchSize = kernel.executionOptions().batchSize() > 0
+                ? kernel.executionOptions().batchSize()
                 : ExecutionOptions.DEFAULT_BATCH_SIZE;
         BatchSqlStatement batch = InsertStatementFactory.createBatch(
-                meta, columns, batchRows, template.namingPolicy(), batchSize, wantKeys);
-        BatchSlice slice = template.batchExecute(batch);
+                meta, columns, batchRows, kernel.namingPolicy(), batchSize, wantKeys);
+        BatchSlice slice = kernel.batchExecute(batch);
         MutationResult result = slice.isEmpty()
                 ? MutationResult.EMPTY
                 : MutationResult.ofBatch(slice.batchCounts(), slice.generatedKeys());
@@ -222,25 +213,25 @@ final class InsertPlan<T> {
     }
 
     static <T> MutationResult executeSingleStatement(
-            ExecutionKernel template,
+            ExecutionKernel kernel,
             EntityMetadataContext meta,
             SqlStatement statement,
             @Nullable T sourceEntity,
             @Nullable Object existingPkValue,
             boolean firePostPersist) {
-        return executeSingleStatement(template, meta, statement, sourceEntity, existingPkValue,
+        return executeSingleStatement(kernel, meta, statement, sourceEntity, existingPkValue,
                 firePostPersist, EntityLifecycle.EMPTY);
     }
 
     static <T> MutationResult executeSingleStatement(
-            ExecutionKernel template,
+            ExecutionKernel kernel,
             EntityMetadataContext meta,
             SqlStatement statement,
             @Nullable T sourceEntity,
             @Nullable Object existingPkValue,
             boolean firePostPersist,
             EntityLifecycle lifecycle) {
-        var slice = template.insertExecute(statement);
+        var slice = kernel.insertExecute(statement);
         Object generatedKey = slice.generatedKey();
         if (sourceEntity != null) {
             if (existingPkValue == null && generatedKey != null) {

@@ -22,7 +22,7 @@ import java.util.Optional;
  */
 public final class EntityOps<T> {
 
-    private final ExecutionKernel template;
+    private final ExecutionKernel kernel;
     private final Class<T> entityType;
     private final EntityMetadataContext meta;
     private final EntityLifecycle lifecycle;
@@ -31,24 +31,20 @@ public final class EntityOps<T> {
     private final EntityWriter<T> writer;
     private final UpsertPlanner<T> upsert;
 
-    EntityOps(ExecutionKernel template, Class<T> entityType) {
-        this(template, entityType, EntityLifecycle.EMPTY);
-    }
-
-    EntityOps(ExecutionKernel template, Class<T> entityType, EntityLifecycle lifecycle) {
-        this.template = Objects.requireNonNull(template, "template must not be null");
+    EntityOps(ExecutionKernel kernel, Class<T> entityType, EntityLifecycle lifecycle) {
+        this.kernel = Objects.requireNonNull(kernel, "kernel must not be null");
         this.entityType = Objects.requireNonNull(entityType, "entityType must not be null");
         this.meta = LocalTableMetaCache.getMetadataContext(entityType);
-        this.finder = new EntityFinder<>(template, entityType, meta, meta.primaryKey());
+        this.finder = new EntityFinder<>(kernel, entityType, meta.primaryKey());
         EntityLifecycle effectiveLifecycle = lifecycle == null ? EntityLifecycle.EMPTY : lifecycle;
         this.lifecycle = effectiveLifecycle;
-        this.deleter = new EntityDeleter<>(template, entityType, meta, meta.primaryKey(), effectiveLifecycle);
-        this.writer = new EntityWriter<>(template, meta, effectiveLifecycle);
-        this.upsert = new UpsertPlanner<>(template, meta, effectiveLifecycle, writer, finder);
+        this.deleter = new EntityDeleter<>(kernel, entityType, meta, meta.primaryKey(), effectiveLifecycle);
+        this.writer = new EntityWriter<>(kernel, meta, effectiveLifecycle);
+        this.upsert = new UpsertPlanner<>(kernel, meta, effectiveLifecycle, writer, finder);
     }
 
-    public static <T> EntityOps<T> of(ExecutionKernel template, Class<T> entityType, EntityLifecycle lifecycle) {
-        return new EntityOps<>(template, entityType, lifecycle);
+    public static <T> EntityOps<T> of(ExecutionKernel kernel, Class<T> entityType, EntityLifecycle lifecycle) {
+        return new EntityOps<>(kernel, entityType, lifecycle);
     }
 
     public MutationResult insert(T entity) {
@@ -136,15 +132,15 @@ public final class EntityOps<T> {
     }
 
     public EntityInsert<T> insert() {
-        return new EntityInsert<>(template, meta, lifecycle);
+        return new EntityInsert<>(kernel, meta, lifecycle);
     }
 
     public EntityUpdate<T> update() {
-        return new EntityUpdate<>(template, meta);
+        return new EntityUpdate<>(kernel, meta);
     }
 
     public EntityDelete<T> delete() {
-        return new EntityDelete<>(template, meta);
+        return new EntityDelete<>(kernel, meta);
     }
 
     public Optional<T> findById(Serializable id) {

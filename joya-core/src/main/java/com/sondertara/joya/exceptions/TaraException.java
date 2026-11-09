@@ -1,27 +1,25 @@
 package com.sondertara.joya.exceptions;
 
-
 import java.util.Arrays;
 
 /**
+ * Joya 基础运行时异常，内置无外部依赖的 {@code {}} 占位符格式化。
+ *
  * @author huangxiaohu
  */
 public class TaraException extends RuntimeException {
     private static final long serialVersionUID = 1L;
-    private final int code;
 
     public TaraException(String format, Object... arguments) {
-
-        super(arrayFormat(format, arguments),
-                getThrowableCandidate(arguments));
-        this.code = 9999;
+        super(arrayFormat(format, arguments), getThrowableCandidate(arguments));
     }
 
-    public TaraException(int code, String format, Object... arguments) {
+    public TaraException(String msg, Throwable e) {
+        super(msg, e);
+    }
 
-        super(arrayFormat(format, arguments),
-                getThrowableCandidate(arguments));
-        this.code = code;
+    public TaraException(Throwable cause) {
+        super(cause);
     }
 
     static String arrayFormat(String format, Object[] argArray) {
@@ -71,19 +69,4 @@ public class TaraException extends RuntimeException {
             return null;
         }
     }
-
-    public TaraException(String msg, Throwable e) {
-        super(msg, e);
-        this.code = 9999;
-    }
-
-    public TaraException(Throwable cause) {
-        super(cause);
-        this.code = 9999;
-    }
-
-    public String getCode() {
-        return String.format("TE%010d\n", code);
-    }
-
 }

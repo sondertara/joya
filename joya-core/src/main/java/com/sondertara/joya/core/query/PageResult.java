@@ -16,12 +16,20 @@ public final class PageResult<T> {
     private final long total;
     private final int pageNum;      // 1-based 页码（>= 1）
     private final int pageSize;
+    /** 免 COUNT 模式下的显式 hasNext；null 表示按 total/items 推导。 */
+    private final Boolean hasNextOverride;
 
     public PageResult(List<T> items, Long total, int currentPage, int pageSize) {
+        this(items, total, currentPage, pageSize, null);
+    }
+
+    public PageResult(List<T> items, Long total, int currentPage, int pageSize,
+                      @org.jspecify.annotations.Nullable Boolean hasNextOverride) {
         this.items = items == null ? List.of() : Collections.unmodifiableList(new ArrayList<>(items));
-        this.total = total == null ? 0L : total;
+        this.total = (total == null || total < 0L) ? -1L : total;
         this.pageNum = currentPage < 1 ? 1 : currentPage;
         this.pageSize = pageSize < 1 ? 20 : pageSize;
+        this.hasNextOverride = hasNextOverride;
     }
 
     /**
@@ -32,7 +40,14 @@ public final class PageResult<T> {
     }
 
     /**
-     * 未命中任何数据的空页。
+     * 直接构造分页结果，并显式指定 {@code hasNext}（免 COUNT 模式使用）。
+     */
+    public static <T> PageResult<T> of(List<T> items, long total, int pageNum, int pageSize, boolean hasNext) {
+        return new PageResult<>(items, total, pageNum, pageSize, hasNext);
+    }
+
+    /**
+     * 未命中任何数据的空页（已知总记录数为 {@code 0L}）。
      */
     public static <T> PageResult<T> empty(int pageNum, int pageSize) {
         return new PageResult<>(List.of(), 0L, pageNum, pageSize);
@@ -68,6 +83,11 @@ public final class PageResult<T> {
     /** 总记录数。 */
     public Long getTotal() {
         return total;
+    }
+
+    /** 当前分页结果是否包含已统计的总记录数（{@code total >= 0}）。 */
+    public boolean hasTotal() {
+        return total >= 0L;
     }
 
     /** 1-based 当前页码（第 1 页为 1）。 */
@@ -122,10 +142,15 @@ public final class PageResult<T> {
         return hasPrev();
     }
 
-    /** 是否有下一页（未统计总数时按“当前页取满 {@code pageSize}”判断）。 */
+    /** 是否有下一页（未统计总数时必须由调用方显式给出 {@code hasNext}，否则无法可靠推导）。 */
     public boolean hasNext() {
+        if (hasNextOverride != null) {
+            return hasNextOverride;
+        }
         if (total < 0L) {
-            return items.size() >= pageSize;
+            // 未统计总数：当前页已按 pageSize 裁剪，无法判断是否还有下一页。
+            // 需要该语义的调用方（SqlOps.page / QueryExecutor）必须传入显式 hasNext。
+            return false;
         }
         return pageNum < getTotalPages();
     }
@@ -149,12 +174,13 @@ public final class PageResult<T> {
         return total == that.total
                 && pageNum == that.pageNum
                 && pageSize == that.pageSize
+                && Objects.equals(hasNextOverride, that.hasNextOverride)
                 && Objects.equals(items, that.items);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(items, total, pageNum, pageSize);
+        return Objects.hash(items, total, pageNum, pageSize, hasNextOverride);
     }
 
     @Override
@@ -168,17 +194,18 @@ public final class PageResult<T> {
         private final List<T> data;
         private int pageNum = 1;
         private int pageSize = 20;
-        private Long total = 0L;
+        private Long total = -1L;
+        private Boolean hasNext;
 
         public Builder(List<T> data) {
             this.data = data;
         }
 
         /**
-         * 设置 0-based 页索引与每页大小（内部自动换算为 1-based {@code pageNum}）。
+         * 设置 1-based 页码与每页大小。
          */
-        public Builder<T> pagination(int zeroBasedPage, int pageSize) {
-            this.pageNum = zeroBasedPage < Integer.MAX_VALUE ? Math.max(1, zeroBasedPage + 1) : Integer.MAX_VALUE;
+        public Builder<T> page(int pageNum, int pageSize) {
+            this.pageNum = Math.max(1, pageNum);
             this.pageSize = pageSize;
             return this;
         }
@@ -188,8 +215,14 @@ public final class PageResult<T> {
             return this;
         }
 
+        /** 免 COUNT 模式下显式指定是否还有下一页。 */
+        public Builder<T> hasNext(boolean hasNext) {
+            this.hasNext = hasNext;
+            return this;
+        }
+
         public PageResult<T> build() {
-            return new PageResult<>(data, total, pageNum, pageSize);
+            return new PageResult<>(data, total, pageNum, pageSize, hasNext);
         }
     }
 }

@@ -21,6 +21,13 @@ import javax.persistence.Column;
 import javax.persistence.Entity;
 import javax.persistence.Id;
 import javax.persistence.Table;
+import javax.sql.DataSource;
+import java.lang.reflect.Proxy;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.ResultSetMetaData;
+import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -149,9 +156,11 @@ class SilentFailureRegressionTest {
         ds.setURL("jdbc:h2:mem:joya_silent_failure_test;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE");
         executedStatements.clear();
         joya = JoyaClient.builder(ds)
-                .interceptor((context, chain) -> {
-                    executedStatements.add(context.statement());
-                    return chain.proceed(context);
+                .executionListener(new SqlExecutionListener() {
+                    @Override
+                    public void beforeExecute(SqlExecutionContext context) {
+                        executedStatements.add(context.statement());
+                    }
                 })
                 .build();
         joya.sql("""
@@ -365,22 +374,16 @@ class SilentFailureRegressionTest {
     }
 
     @Test
-    void nativeSqlUpdateAndBatch_inferActualDmlOperationAndPropagateRewriteAttributes() {
+    void nativeSqlUpdateAndBatch_inferActualDmlOperation() {
         JdbcDataSource ds = new JdbcDataSource();
         ds.setURL("jdbc:h2:mem:joya_silent_failure_test;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE");
         List<Operation> observedOps = new ArrayList<>();
-        List<Object> observedTraces = new ArrayList<>();
 
         JoyaClient observedClient = JoyaClient.builder(ds)
-                .interceptor((context, chain) -> {
-                    context.attrs().put("traceId", "trace-42");
-                    return chain.proceed(context);
-                })
                 .executionListener(new SqlExecutionListener() {
                     @Override
                     public void afterExecute(SqlExecutionContext context, SqlExecutionResult result) {
                         observedOps.add(context.metadata().operation());
-                        observedTraces.add(context.attributes().get("traceId"));
                     }
                 })
                 .build();
@@ -392,7 +395,6 @@ class SilentFailureRegressionTest {
                 .update();
 
         assertEquals(List.of(Operation.INSERT, Operation.DELETE, Operation.INSERT), observedOps);
-        assertEquals(List.of("trace-42", "trace-42", "trace-42"), observedTraces);
     }
 
     @Test
@@ -650,6 +652,187 @@ class SilentFailureRegressionTest {
                 return null;
             });
             assertEquals(2L, tx.from(User.class).count());
+        });
+    }
+
+    @Test
+    void bug1_batchExecuteWithShortDriverCountsAdvancesByChunkRowsAndNeverOverwritesPriorChunks() {
+        java.util.concurrent.atomic.AtomicInteger chunkCall = new java.util.concurrent.atomic.AtomicInteger();
+        PreparedStatement mockPs = (PreparedStatement) Proxy.newProxyInstance(
+                SilentFailureRegressionTest.class.getClassLoader(),
+                new Class<?>[]{PreparedStatement.class},
+                (proxy, method, args) -> switch (method.getName()) {
+                    case "executeBatch" -> switch (chunkCall.incrementAndGet()) {
+                        // 第 1 批（2 行）：仅返回 1 个计数 [1]，第 2 行未知应填 SUCCESS_NO_INFO (-2)
+                        case 1 -> new int[]{1};
+                        // 第 2 批（2 行）：返回空数组 []，两行均应填 SUCCESS_NO_INFO (-2)，且绝不覆盖第 1 批
+                        case 2 -> new int[0];
+                        // 第 3 批（1 行）：返回 [1]
+                        default -> new int[]{1};
+                    };
+                    case "clearParameters", "setObject", "addBatch", "clearBatch", "close" -> null;
+                    default -> throw new UnsupportedOperationException(method.getName());
+                });
+        Connection mockConn = (Connection) Proxy.newProxyInstance(
+                SilentFailureRegressionTest.class.getClassLoader(),
+                new Class<?>[]{Connection.class},
+                (proxy, method, args) -> switch (method.getName()) {
+                    case "prepareStatement" -> mockPs;
+                    case "getAutoCommit" -> true;
+                    case "close" -> null;
+                    default -> throw new UnsupportedOperationException(method.getName());
+                });
+        DataSource mockDs = (DataSource) Proxy.newProxyInstance(
+                SilentFailureRegressionTest.class.getClassLoader(),
+                new Class<?>[]{DataSource.class},
+                (proxy, method, args) -> "getConnection".equals(method.getName()) ? mockConn : null);
+
+        JoyaClient client = JoyaClient.builder(mockDs)
+                .dialect(com.sondertara.joya.core.kernel.statement.DbType.postgresql)
+                .settings(JoyaSettings.builder().batchSize(2).build())
+                .build();
+
+        var result = client.sql("UPDATE t_user SET age = ? WHERE id = ?")
+                .batchResult(List.of(1L, 2L, 3L, 4L, 5L), id -> new Object[]{20, id});
+
+        org.junit.jupiter.api.Assertions.assertArrayEquals(
+                new int[]{1, java.sql.Statement.SUCCESS_NO_INFO, java.sql.Statement.SUCCESS_NO_INFO, java.sql.Statement.SUCCESS_NO_INFO, 1},
+                result.batchCounts(),
+                "短返回数组的分片不得覆盖前序分片计数");
+        assertEquals(5L, result.affectedRows());
+    }
+
+    @Test
+    void bug2_txConnectionRollbackFailureDiscardsViaProviderAndCleansFlippedAutoCommit() throws Exception {
+        java.util.concurrent.atomic.AtomicBoolean discardCalled = new java.util.concurrent.atomic.AtomicBoolean();
+        java.util.concurrent.atomic.AtomicBoolean autoCommitTurnedOnAfterRollbackFail = new java.util.concurrent.atomic.AtomicBoolean();
+        java.util.concurrent.atomic.AtomicBoolean inTx = new java.util.concurrent.atomic.AtomicBoolean();
+
+        Connection rawConn = (Connection) Proxy.newProxyInstance(
+                SilentFailureRegressionTest.class.getClassLoader(),
+                new Class<?>[]{Connection.class},
+                (proxy, method, args) -> switch (method.getName()) {
+                    case "getAutoCommit" -> false;
+                    case "setAutoCommit" -> {
+                        boolean target = (Boolean) args[0];
+                        if (inTx.get() && target) {
+                            autoCommitTurnedOnAfterRollbackFail.set(true);
+                        }
+                        yield null;
+                    }
+                    case "isReadOnly" -> false;
+                    case "getTransactionIsolation" -> Connection.TRANSACTION_READ_COMMITTED;
+                    case "rollback" -> {
+                        inTx.set(true);
+                        throw new SQLException("simulated rollback failure");
+                    }
+                    case "close" -> null;
+                    default -> null;
+                });
+        DataSource poolWithManualCommit = (DataSource) Proxy.newProxyInstance(
+                SilentFailureRegressionTest.class.getClassLoader(),
+                new Class<?>[]{DataSource.class},
+                (proxy, method, args) -> "getConnection".equals(method.getName()) ? rawConn : null);
+
+        var dsProvider = new com.sondertara.joya.core.kernel.connection.DataSourceConnectionProvider(poolWithManualCommit);
+        com.sondertara.joya.core.kernel.connection.ConnectionProvider trackingProvider =
+                new com.sondertara.joya.core.kernel.connection.ConnectionProvider() {
+                    @Override
+                    public Connection acquire() throws SQLException {
+                        return dsProvider.acquire();
+                    }
+
+                    @Override
+                    public void release(Connection connection) throws SQLException {
+                        dsProvider.release(connection);
+                    }
+
+                    @Override
+                    public void discard(Connection connection) throws SQLException {
+                        discardCalled.set(true);
+                        dsProvider.discard(connection);
+                    }
+                };
+
+        Connection borrowed = trackingProvider.acquire();
+        var txConn = new com.sondertara.joya.core.tx.TxConnection(borrowed, trackingProvider);
+        txConn.begin(com.sondertara.joya.core.tx.TxOptions.DEFAULT);
+        assertThrows(SQLException.class, txConn::close);
+
+        assertTrue(discardCalled.get(), "回滚失败关闭时必须经由 ConnectionProvider.discard 归还/清理");
+        org.junit.jupiter.api.Assertions.assertFalse(
+                autoCommitTurnedOnAfterRollbackFail.get(),
+                "回滚失败后严禁调用 setAutoCommit(true) 触发隐式提交");
+
+        java.lang.reflect.Field trackerField =
+                com.sondertara.joya.core.kernel.connection.DataSourceConnectionProvider.class
+                        .getDeclaredField("autoCommitFlips");
+        trackerField.setAccessible(true);
+        var tracker = trackerField.get(dsProvider);
+        java.lang.reflect.Field flippedField = tracker.getClass().getDeclaredField("flipped");
+        flippedField.setAccessible(true);
+        java.util.Set<?> flippedSet = (java.util.Set<?>) flippedField.get(tracker);
+        assertTrue(flippedSet.isEmpty(), "discard 后自动提交翻转登记必须被清理，不得泄漏连接引用");
+    }
+
+    @Test
+    void bug3_bug4_pageResultNullTotalIsNegativeOneAndPageRequestGetOffsetNeverOverflowsInt() {
+        var withoutTotalResult = new com.sondertara.joya.core.query.PageResult<>(List.of("a"), null, 1, 10);
+        assertEquals(-1L, withoutTotalResult.total());
+        org.junit.jupiter.api.Assertions.assertFalse(withoutTotalResult.hasTotal());
+
+        var builderDefaultResult = com.sondertara.joya.core.query.PageResult.of(List.of("a")).page(1, 10).build();
+        assertEquals(-1L, builderDefaultResult.total());
+        org.junit.jupiter.api.Assertions.assertFalse(builderDefaultResult.hasTotal());
+
+        var emptyResult = com.sondertara.joya.core.query.PageResult.empty(1, 10);
+        assertEquals(0L, emptyResult.total());
+        assertTrue(emptyResult.hasTotal());
+
+        var hugePage = com.sondertara.joya.core.query.pagination.PageRequest.of(100_000_000, 100);
+        assertEquals(10_000_000_000L, hugePage.getOffset());
+        assertEquals(10_000_000_000L, hugePage.getOffset());
+    }
+
+    @Test
+    void bug6_bug7_bug8_beanRowMapperAndMapRowMapperInspectResultSetMetaDataOnlyOncePerQuery() {
+        java.util.concurrent.atomic.AtomicInteger getMetaDataCalls = new java.util.concurrent.atomic.AtomicInteger();
+        java.util.concurrent.atomic.AtomicInteger getColumnLabelCalls = new java.util.concurrent.atomic.AtomicInteger();
+
+        joya.withConnection(realConn -> {
+            try (PreparedStatement ps = realConn.prepareStatement("SELECT id AS \"t0.id\", name AS \"t0.name\", age AS \"t0.age\" FROM t_user");
+                 ResultSet realRs = ps.executeQuery()) {
+
+                ResultSetMetaData realMeta = realRs.getMetaData();
+                ResultSetMetaData countingMeta = (ResultSetMetaData) Proxy.newProxyInstance(
+                        SilentFailureRegressionTest.class.getClassLoader(),
+                        new Class<?>[]{ResultSetMetaData.class},
+                        (proxy, method, args) -> {
+                            if ("getColumnLabel".equals(method.getName())) {
+                                getColumnLabelCalls.incrementAndGet();
+                            }
+                            return method.invoke(realMeta, args);
+                        });
+
+                ResultSet countingRs = (ResultSet) Proxy.newProxyInstance(
+                        SilentFailureRegressionTest.class.getClassLoader(),
+                        new Class<?>[]{ResultSet.class},
+                        (proxy, method, args) -> {
+                            if ("getMetaData".equals(method.getName())) {
+                                getMetaDataCalls.incrementAndGet();
+                                return countingMeta;
+                            }
+                            return method.invoke(realRs, args);
+                        });
+
+                var extractor = new com.sondertara.joya.core.kernel.executor.ListRecordExtractor<>(
+                        com.sondertara.joya.core.jdbc.resultset.mapper.BeanRowMapper.of(User.class));
+                List<User> users = extractor.extract(countingRs);
+                assertEquals(2, users.size());
+                assertEquals(1, getMetaDataCalls.get(), "多行查询中 ResultSet.getMetaData() 只应调用 1 次");
+                assertEquals(3, getColumnLabelCalls.get(), "3 列查询中 getColumnLabel 只应在首行布局阶段调用 3 次");
+            }
+            return null;
         });
     }
 }

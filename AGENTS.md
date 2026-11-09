@@ -80,10 +80,11 @@ core/
 │
 ├── kernel/                             执行内核（只依赖 kernel / naming / utils / exceptions）
 │   ├── ExecutionKernel.java            唯一执行入口（仅接收 SqlStatement / BatchSqlStatement，支持 bind(ConnectionProvider) 派生事务视图；执行委托 Executor 端口，观测委托 ExecutionObserver）
-│   ├── StatementPreparer.java          语句准备管线（包内）：注入 dbType → SqlRewriter（AST）→ SqlInterceptor（文本），单条与批量共用，无旁路
+│   ├── StatementPreparer.java          语句准备管线（包内）：注入 dbType → SqlRewriter（AST）→ SqlRenderer，单条与批量共用，无旁路
 │   ├── connection/
-│   │   ├── ConnectionProvider.java     连接获取策略端口（acquire / release / queryTimeoutSeconds）
+│   │   ├── ConnectionProvider.java     连接获取策略端口（acquire / release / discard / queryTimeoutSeconds / isExternallyManaged / allowsTransactionControl / originDataSource）
 │   │   ├── ConnectionCallback.java     连接级逃生回调端口
+│   │   ├── AutoCommitFlipTracker.java  非自动提交连接池借还时的 autoCommit 临时切换与还原追踪器
 │   │   └── DataSourceConnectionProvider.java  池化自动提交连接提供者
 │   ├── executor/                       执行端口与默认 JDBC 适配器
 │   │   ├── ExecutionOptions.java       执行期配置（超时 / 批大小）
@@ -94,7 +95,7 @@ core/
 │   │   ├── ResultType.java            结果类型分类（SCALAR/BEAN/RECORD/MAP/UNSUPPORTED）
 │   │   ├── ResultSetExtractor.java    结果集提取端口
 │   │   └── BatchSlice.java            批量执行内核值类型（计数 + 生成键）
-│   ├── interceptor/                    SqlInterceptor / SqlRewriter / RewriteContext / DefaultChain
+│   ├── interceptor/                    SqlRewriter / SqlRewriteContext / SqlRewriteException
 │   ├── observe/                        SqlExecutionListener / SqlExecutionContext / SqlExecutionResult / ExecutionObserver（监听器编排）
 │   ├── error/                          SqlExceptionTranslator
 │   ├── statement/                      SqlStatement / BatchSqlStatement / SqlRenderer（唯一 SQL 文本组装点）/ SqlFormatUtils（占位符词法扫描）/ 参数契约 / DbType / UpsertStyle（语句词汇表，dialect 与 executor 单向依赖它）
@@ -117,12 +118,16 @@ core/
 │   ├── LocalTableMetaCache.java        基于 JDK ClassValue 的无锁实体元数据缓存
 │   └── EntitySnapshot.java             单次操作实体字段值快照
 │
+├── function/                           类型化列引用与转换契约（IGetter / TypedConverter / FieldAlias）
+│
 ├── naming/                             命名与表名解析（零内部依赖）
 │   ├── NamingPolicy.java               formatTable / formatColumn / maxJoinTable / resolveTable
 │   └── TableNameResolver.java          配置期唯一表名入口（分表 / schema 切换；默认恒等）
 │
+├── result/                             变更结果值类型（MutationResult；只依赖 utils/exceptions）
+│
 └── jdbc/                               JDBC 结果集映射适配（只依赖 kernel/metadata/naming/model/function/utils/exceptions，不依赖 core 门面）
-    └── resultset/                      BeanRowMapper / MapRowMapper / FieldAlias / DefaultRowMapperFactory
+    └── resultset/mapper/               BeanRowMapper / MapRowMapper / DefaultRowMapperFactory
 ```
 
 ## 核心设计原则
@@ -146,9 +151,9 @@ core/
    - `EntityUpdate` 与 `EntityDelete` 默认强制要求非空 `WHERE` 条件，全表操作必须显式调用 `.allowAll()`。
    - 外部动态筛选协议通过 `QueryCustomizer` 插件（`PageQueryParams.of(param)`）接入，强制执行标识符正则与实体元数据白名单校验，杜绝 SQL 注入。
    - 动态表名（按月分表 / 租户分表 / schema 切换）在**渲染期**由 `NamingPolicy.tableNameResolver` 决定：SQL 生成时就是最终表名，不存在执行期字符串改写。原生 SQL（`joya.sql(...)`）不携带表元数据，也不在该保证范围内。
-4. **拦截器链无旁路与现代 Java 17 映射**：
-   - `ExecutionKernel` 是所有 SQL 执行的唯一收口，所有查询、变更、原生 SQL 与批处理 100% 经过 `SqlInterceptor` 链并携带完整 `StatementMetadata`。
+4. **AST 改写无旁路与现代 Java 17 映射**：
+   - `ExecutionKernel` 是所有 SQL 执行的唯一收口，所有查询、变更、原生 SQL 与批处理 100% 经过 `SqlRewriter`（仅框架生成的 AST）与 `SqlExecutionListener` 观测，并携带完整 `StatementMetadata`；文本级 `SqlInterceptor` 已删除，避免静默错绑参数。
 5. **Spring Boot 3 旁路（Sidecar）与多数据源注册表（`joya-spring-boot-starter`）**：
-   - **主库复用与扩展库旁路隔离（`JoyaAutoConfiguration` → `JoyaClientRegistry`）**：主库通过 `joya.primary` 配置（默认 `use-spring=true` 复用 Spring 容器主 `DataSource`），扩展库通过 `joya.datasources` 数组独立初始化并登记到 `JoyaClientRegistry`（不注册全局 `DataSource` Bean，不干扰主 ORM）；`SqlInterceptor` / `SqlRewriter` / `SqlExecutionListener` / `EntityListener` 自动发现并按 `@Qualifier("dsName")` 路由到指定数据源客户端（无限定符的 Bean 对所有客户端生效），`RowMapperFactory` / `SqlExceptionTranslator` 为单例型扩展点（限定本库优先，同级多个则启动失败）。
-   - **Spring 事务无缝融入（`SpringConnectionProvider` + `SpringTxEngine`）**：通过 `DataSourceUtils` 与 `DataSourceTransactionManager` 体系（`ResourceTransactionManager.getResourceFactory()` 匹配主 `DataSource`）协同，使 `joya` 操作、`joya.tx(...)`（含 `savepoint`）与 `@Transactional` 及基于 `DataSourceTransactionManager` 的主 ORM 共享同一条事务连接。
+   - **主库复用与扩展库旁路隔离（`JoyaAutoConfiguration` → `JoyaClientRegistry`）**：主库通过 `joya.primary` 配置（默认 `use-spring=true` 复用 Spring 容器主 `DataSource`），扩展库通过 `joya.datasources` 数组独立初始化并登记到 `JoyaClientRegistry`（不注册全局 `DataSource` Bean，不干扰主 ORM）；`SqlRewriter` / `SqlExecutionListener` / `EntityListener` 自动发现并按 `@Qualifier("dsName")` 路由到指定数据源客户端（无限定符的 Bean 对所有客户端生效），`RowMapperFactory` / `SqlExceptionTranslator` 为单例型扩展点（限定本库优先，同级多个则启动失败）。
+   - **Spring 事务无缝融入（`SpringConnectionProvider` + `SpringTxEngine`）**：当容器中存在与主 `DataSource` 匹配的 `DataSourceTransactionManager` 或已显式绑定同一 `DataSource` 的 `JpaTransactionManager` 时，通过 `DataSourceUtils` 与其协同，使 `joya` 操作、`joya.tx(...)`（含 `savepoint`）与 `@Transactional` 及主 ORM 共享同一条事务连接；若无匹配的事务管理器（如未绑定 `DataSource` 的 JPA 管理器或资源键不一致），则输出启动告警并回退为纯 JDBC 事务引擎（`DataSourceConnectionProvider` + `TxEngine.JDBC`）。
    - **`JoyaMapper` 免扫描随取随用**：通过 `joya.mapper(XxxMapper.class)` / `tx.mapper(XxxMapper.class)` 直接按需获取绑定到对应客户端或事务上下文的 Mapper 代理，零包扫描开销。

@@ -6,7 +6,7 @@ import javax.sql.DataSource;
 
 /**
  * {@link JoyaClient} 构建自定义器：支持在构建每个客户端时按名称（主库为 {@code "primary"}，扩展库为 {@code joya.datasources.<name>} 的 key）
- * 定制拦截器、配置或方言策略。
+ * 定制 SQL 改写器、执行监听器、配置或方言策略。
  */
 @FunctionalInterface
 public interface JoyaClientCustomizer {

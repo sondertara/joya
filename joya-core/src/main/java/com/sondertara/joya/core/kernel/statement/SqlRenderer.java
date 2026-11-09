@@ -143,7 +143,8 @@ public final class SqlRenderer {
         if (node instanceof SqlNode.Count count) {
             StringBuilder inner = new StringBuilder();
             renderNode(count.select().withLockMode(LockMode.NONE), inner, params, dbType);
-            sql.append("SELECT COUNT(*) FROM (").append(inner).append(") TEMP_T");
+            String alias = uniqueCountAlias(inner);
+            sql.append("SELECT COUNT(*) FROM (").append(inner).append(") ").append(alias);
             return;
         }
         if (node instanceof SqlNode.Select select) {
@@ -172,6 +173,39 @@ public final class SqlRenderer {
             return;
         }
         throw new IllegalStateException("Unknown SqlNode: " + node.getClass().getName());
+    }
+
+    /** 计数包装别名：避免与内层查询中的同名表/CTE/列冲突。 */
+    private static String uniqueCountAlias(CharSequence inner) {
+        String candidate = "TEMP_T";
+        int suffix = 1;
+        while (containsIdentifier(inner, candidate)) {
+            candidate = "TEMP_T_" + suffix++;
+        }
+        return candidate;
+    }
+
+    private static boolean containsIdentifier(CharSequence sql, String identifier) {
+        String text = sql.toString();
+        int from = 0;
+        while (true) {
+            int index = text.toLowerCase(java.util.Locale.ROOT)
+                    .indexOf(identifier.toLowerCase(java.util.Locale.ROOT), from);
+            if (index < 0) {
+                return false;
+            }
+            boolean left = index == 0 || !isIdentifierPart(text.charAt(index - 1));
+            int end = index + identifier.length();
+            boolean right = end == text.length() || !isIdentifierPart(text.charAt(end));
+            if (left && right) {
+                return true;
+            }
+            from = index + 1;
+        }
+    }
+
+    private static boolean isIdentifierPart(char c) {
+        return Character.isLetterOrDigit(c) || c == '_' || c == '$' || c == '#';
     }
 
     private static void renderOperand(@Nullable SqlNode operand, String parentOp,

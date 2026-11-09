@@ -1,7 +1,6 @@
 package com.sondertara.joya.core;
 
 import com.sondertara.joya.core.kernel.ExecutionKernel;
-import com.sondertara.joya.core.metadata.EntityMetadataContext;
 import com.sondertara.joya.core.query.dsl.Query;
 import com.sondertara.joya.core.query.pagination.SortCondition;
 
@@ -19,22 +18,20 @@ import java.util.Optional;
  */
 final class EntityFinder<T> {
 
-    private final ExecutionKernel template;
+    private final ExecutionKernel kernel;
     private final Class<T> entityType;
-    private final EntityMetadataContext meta;
     private final String primaryKey;
 
-    EntityFinder(ExecutionKernel template, Class<T> entityType, EntityMetadataContext meta, String primaryKey) {
-        this.template = Objects.requireNonNull(template, "template must not be null");
+    EntityFinder(ExecutionKernel kernel, Class<T> entityType, String primaryKey) {
+        this.kernel = Objects.requireNonNull(kernel, "kernel must not be null");
         this.entityType = Objects.requireNonNull(entityType, "entityType must not be null");
-        this.meta = Objects.requireNonNull(meta, "meta must not be null");
         this.primaryKey = primaryKey;
     }
 
     Optional<T> findById(Serializable id) {
         Objects.requireNonNull(id, "id must not be null");
         requirePrimaryKey();
-        return new Query<>(template, entityType)
+        return new Query<>(kernel, entityType)
                 .where(w -> w.eq(primaryKey, id))
                 .one();
     }
@@ -55,26 +52,26 @@ final class EntityFinder<T> {
     }
 
     List<T> findAll() {
-        return new Query<>(template, entityType).list();
+        return new Query<>(kernel, entityType).list();
     }
 
     List<T> findAll(SortCondition... sorts) {
-        return new Query<>(template, entityType).orderBy(sorts).list();
+        return new Query<>(kernel, entityType).orderBy(sorts).list();
     }
 
     boolean existsById(Serializable id) {
         Objects.requireNonNull(id, "id must not be null");
         requirePrimaryKey();
-        return new Query<>(template, entityType).where(w -> w.eq(primaryKey, id)).exists();
+        return new Query<>(kernel, entityType).where(w -> w.eq(primaryKey, id)).exists();
     }
 
     long count() {
-        return new Query<>(template, entityType).count();
+        return new Query<>(kernel, entityType).count();
     }
 
     private List<T> queryByIds(Collection<? extends Serializable> ids) {
         requirePrimaryKey();
-        return new Query<>(template, entityType).where(w -> w.in(primaryKey, ids)).list();
+        return new Query<>(kernel, entityType).where(w -> w.in(primaryKey, ids)).list();
     }
 
     private void requirePrimaryKey() {
