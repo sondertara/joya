@@ -48,10 +48,6 @@ public final class TxImpl implements Tx {
     private boolean deferCompletionCallbacks;
     private boolean completionCallbacksFired;
 
-    public TxImpl(ExecutionKernel rootKernel, TxSession session) {
-        this(rootKernel, session, EntityLifecycle.EMPTY);
-    }
-
     public TxImpl(ExecutionKernel rootKernel, TxSession session, EntityLifecycle entityLifecycle) {
         this.session = Objects.requireNonNull(session, "session must not be null");
         this.ownerThread = Thread.currentThread();
@@ -62,10 +58,6 @@ public final class TxImpl implements Tx {
 
     public boolean isCompleted() {
         return outcome != null;
-    }
-
-    TxOutcome outcome() {
-        return outcome;
     }
 
     boolean isPhysicalRollbackConfirmed() {

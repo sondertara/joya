@@ -25,19 +25,13 @@ public final class UpsertStatementFactory {
     }
 
     /**
-     * 构造单条 UPSERT 语句（保留 AST，供 {@code SqlRewriter} 观察）。
+     * 构造单条 UPSERT 语句（保留 AST，供 {@code SqlRewriter} 观察；当已知 {@link DbType} 时一并预置以避免重复探测方言）。
      *
      * @param ctx     单条插入上下文（列选择已体现在 {@code ctx.declaredColumns()}）
      * @param columns 参与插入的列（含主键）
      * @param pk      主键列
      * @param style   方言 upsert 风格（不得为 {@link UpsertStyle#NONE}）
-     */
-    public static SqlStatement create(MutationContext ctx, List<String> columns, String pk, UpsertStyle style) {
-        return create(ctx, columns, pk, style, null);
-    }
-
-    /**
-     * 构造单条 UPSERT 语句并预置已解析的 {@link DbType}（避免准备阶段重复探测方言）。
+     * @param dbType  可选已解析数据库类型
      */
     public static SqlStatement create(MutationContext ctx,
                                       List<String> columns,
@@ -52,20 +46,7 @@ public final class UpsertStatementFactory {
     }
 
     /**
-     * 构造批量 UPSERT 语句：沿用 INSERT 批量语句的列绑定与行值，仅将 SQL 文本替换为 UPSERT 渲染结果。
-     */
-    public static BatchSqlStatement createBatch(EntityMetadataContext meta,
-                                                List<String> columns,
-                                                List<Object[]> rows,
-                                                NamingPolicy namingPolicy,
-                                                int batchSize,
-                                                String pk,
-                                                UpsertStyle style) {
-        return createBatch(meta, columns, rows, namingPolicy, batchSize, pk, style, null);
-    }
-
-    /**
-     * 构造批量 UPSERT 语句并预置已解析的 {@link DbType}（避免批量准备阶段重复探测方言）。
+     * 构造批量 UPSERT 语句：沿用 INSERT 批量语句的列绑定与行值，仅将 AST 与 SQL 文本替换为 UPSERT 渲染结果。
      */
     public static BatchSqlStatement createBatch(EntityMetadataContext meta,
                                                 List<String> columns,

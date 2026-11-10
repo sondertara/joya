@@ -428,7 +428,8 @@ class AstRewriteIntegrationTest {
                 NamingPolicy.DEFAULT,
                 100,
                 "id",
-                UpsertStyle.MERGE);
+                UpsertStyle.MERGE,
+                null);
         assertTrue(batch.ast() instanceof SqlNode.Upsert, "批量 UPSERT 必须保留 SqlNode.Upsert AST");
 
         // 直接使用仅匹配 SqlNode.Insert 的 InsertTenantRewriter，验证 StatementPreparer 自动解包/重包装 Upsert
@@ -522,7 +523,8 @@ class AstRewriteIntegrationTest {
                 NamingPolicy.DEFAULT,
                 100,
                 "id",
-                UpsertStyle.MERGE);
+                UpsertStyle.MERGE,
+                null);
         com.sondertara.joya.core.kernel.ExecutionKernel unwrapKernel =
                 new com.sondertara.joya.core.kernel.ExecutionKernel(new com.sondertara.joya.core.kernel.ExecutionKernel.Config(
                         List.of(unwrapUpsertRewriter),

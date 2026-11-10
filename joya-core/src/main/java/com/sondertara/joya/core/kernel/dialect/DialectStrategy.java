@@ -85,7 +85,7 @@ public interface DialectStrategy {
                 if (local != null) {
                     return local;
                 }
-                Dialect probed = probe(dataSource, connections);
+                Dialect probed = probe(connections);
                 synchronized (this) {
                     if (resolved == null) {
                         resolved = probed;
@@ -127,7 +127,10 @@ public interface DialectStrategy {
             if (val instanceof String url && !url.isBlank()) {
                 return Dialect.of(DbType.of(url));
             }
-        } catch (Throwable ignored) {
+        } catch (Throwable t) {
+            if (t instanceof Error err) {
+                throw err;
+            }
             // 数据源未暴露零连接 URL 访问器时保持惰性
         }
         return null;
@@ -137,33 +140,24 @@ public interface DialectStrategy {
      * 动态连接策略：每次通过 {@link ConnectionProvider} 获取当前连接以解析方言（适用于 {@code AbstractRoutingDataSource} 跨异构库动态切换场景）。
      */
     static DialectStrategy perConnection() {
-        return connections -> probe(null, Objects.requireNonNull(connections, "connections must not be null"));
+        return DialectStrategy::probe;
     }
 
-    private static Dialect probe(@Nullable DataSource dataSource, @Nullable ConnectionProvider connections) {
-        if (connections != null) {
-            Connection conn = null;
-            try {
-                conn = connections.acquire();
-                return Dialect.of(DbType.of(conn));
-            } catch (SQLException e) {
-                throw new IllegalStateException("Failed to resolve dialect from ConnectionProvider", e);
-            } finally {
-                if (conn != null) {
-                    try {
-                        connections.release(conn);
-                    } catch (SQLException ignored) {
-                    }
+    private static Dialect probe(ConnectionProvider connections) {
+        Objects.requireNonNull(connections, "connections must not be null");
+        Connection conn = null;
+        try {
+            conn = connections.acquire();
+            return Dialect.of(DbType.of(conn));
+        } catch (SQLException e) {
+            throw new IllegalStateException("Failed to resolve dialect from ConnectionProvider", e);
+        } finally {
+            if (conn != null) {
+                try {
+                    connections.release(conn);
+                } catch (SQLException ignored) {
                 }
             }
-        }
-        if (dataSource == null) {
-            return Dialect.DEFAULT;
-        }
-        try (Connection connection = dataSource.getConnection()) {
-            return Dialect.of(DbType.of(connection));
-        } catch (SQLException e) {
-            throw new IllegalStateException("Failed to resolve dialect from DataSource", e);
         }
     }
 }

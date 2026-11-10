@@ -623,7 +623,8 @@ class TxSemanticsTest {
                         List.of(),
                         new com.sondertara.joya.core.kernel.connection.DataSourceConnectionProvider(spy.dataSource(), 0),
                         com.sondertara.joya.core.kernel.dialect.DialectStrategy.cached(spy.dataSource()), null, null, null, null, null));
-        TxImpl tx = new TxImpl(rootKernel, rejectAfterCommitRegistration(delegate));
+        TxImpl tx = new TxImpl(rootKernel, rejectAfterCommitRegistration(delegate),
+                com.sondertara.joya.core.listener.EntityLifecycle.EMPTY);
         java.util.concurrent.atomic.AtomicBoolean callbackRan = new java.util.concurrent.atomic.AtomicBoolean();
 
         assertThrows(TxException.class, () -> tx.savepoint(sp ->

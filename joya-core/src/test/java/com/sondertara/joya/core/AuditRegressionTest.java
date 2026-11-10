@@ -506,4 +506,59 @@ class AuditRegressionTest {
         });
         assertTrue(h2Client.of(ProbeEntity.class).existsById(99L));
     }
+
+    public static final class ErrorOnJdbcUrlDataSource implements javax.sql.DataSource {
+        public String getJdbcUrl() {
+            throw new AssertionError("url-getter-error");
+        }
+
+        @Override public Connection getConnection() { throw new UnsupportedOperationException(); }
+        @Override public Connection getConnection(String u, String p) { throw new UnsupportedOperationException(); }
+        @Override public java.io.PrintWriter getLogWriter() { return null; }
+        @Override public void setLogWriter(java.io.PrintWriter out) {}
+        @Override public void setLoginTimeout(int seconds) {}
+        @Override public int getLoginTimeout() { return 0; }
+        @Override public java.util.logging.Logger getParentLogger() { return java.util.logging.Logger.getGlobal(); }
+        @Override public <T> T unwrap(Class<T> iface) { throw new UnsupportedOperationException(); }
+        @Override public boolean isWrapperFor(Class<?> iface) { return false; }
+    }
+
+    @Test
+    void dialectStrategy_rethrowsErrorOnUrlPeek_andRequiresConnectionProviderOnProbe() {
+        ErrorOnJdbcUrlDataSource errDs = new ErrorOnJdbcUrlDataSource();
+        var cached = com.sondertara.joya.core.kernel.dialect.DialectStrategy.cached(errDs);
+        AssertionError err = assertThrows(AssertionError.class, cached::peek);
+        assertEquals("url-getter-error", err.getMessage());
+
+        var lazy = com.sondertara.joya.core.kernel.dialect.DialectStrategy.cachedFromProvider();
+        assertThrows(NullPointerException.class, () -> lazy.resolve(null));
+    }
+
+    @Test
+    void pageResult_exposesCompleteJavaBeanGettersForJsonSerialization() throws Exception {
+        PageResult<String> slice = PageResult.of(List.of("a", "b"), -1L, 2, 2, true);
+        java.beans.BeanInfo beanInfo = java.beans.Introspector.getBeanInfo(PageResult.class, Object.class);
+        java.util.Map<String, java.lang.reflect.Method> getters = new java.util.LinkedHashMap<>();
+        for (java.beans.PropertyDescriptor pd : beanInfo.getPropertyDescriptors()) {
+            if (pd.getReadMethod() != null) {
+                getters.put(pd.getName(), pd.getReadMethod());
+            }
+        }
+        for (String expectedProp : List.of(
+                "items", "data", "total", "pageNum", "currentPage",
+                "pageSize", "totalPages", "hasPrev", "hasNext", "empty")) {
+            assertTrue(getters.containsKey(expectedProp),
+                    "PageResult 必须暴露 JavaBean getter 以支持 Jackson JSON 序列化字段: " + expectedProp);
+        }
+        assertEquals(List.of("a", "b"), getters.get("items").invoke(slice));
+        assertEquals(List.of("a", "b"), getters.get("data").invoke(slice));
+        assertEquals(-1L, getters.get("total").invoke(slice));
+        assertEquals(2, getters.get("pageNum").invoke(slice));
+        assertEquals(1, getters.get("currentPage").invoke(slice));
+        assertEquals(2, getters.get("pageSize").invoke(slice));
+        assertEquals(-1, getters.get("totalPages").invoke(slice));
+        assertEquals(Boolean.TRUE, getters.get("hasPrev").invoke(slice));
+        assertEquals(Boolean.TRUE, getters.get("hasNext").invoke(slice));
+        assertEquals(Boolean.FALSE, getters.get("empty").invoke(slice));
+    }
 }

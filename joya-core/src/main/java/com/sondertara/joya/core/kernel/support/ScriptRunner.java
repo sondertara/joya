@@ -51,8 +51,8 @@ public class ScriptRunner {
     private boolean stopOnError;
     private boolean throwWarning;
 
-    private PrintWriter logWriter = new PrintWriter(System.out);
-    private PrintWriter errorLogWriter = new PrintWriter(System.err);
+    private PrintWriter logWriter;
+    private PrintWriter errorLogWriter;
 
     private String delimiter = DEFAULT_DELIMITER;
 
@@ -67,11 +67,6 @@ public class ScriptRunner {
     public void setThrowWarning(boolean throwWarning) {
         this.throwWarning = throwWarning;
     }
-
-
-
-
-
 
     public void setLogWriter(PrintWriter logWriter) {
         this.logWriter = logWriter;
@@ -142,9 +137,9 @@ public class ScriptRunner {
 
     private void executeStatement(String command) throws SQLException {
         try (Statement statement = connection.createStatement()) {
-                try {
+            try {
                 boolean hasResults = statement.execute(command);
-                // DO NOT try to 'imporove' the condition even if IDE tells you to!
+                // DO NOT try to 'improve' the condition even if IDE tells you to!
                 // It's important that getUpdateCount() is called here.
                 while (!(!hasResults && statement.getUpdateCount() == -1)) {
                     checkWarnings(statement);

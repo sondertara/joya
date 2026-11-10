@@ -542,7 +542,8 @@ class SilentFailureRegressionTest {
                 ctx,
                 List.of("id", "name", "created_by"),
                 "id",
-                com.sondertara.joya.core.kernel.statement.UpsertStyle.ON_DUPLICATE_KEY);
+                com.sondertara.joya.core.kernel.statement.UpsertStyle.ON_DUPLICATE_KEY,
+                com.sondertara.joya.core.kernel.statement.DbType.mysql);
         assertTrue(mysqlUpsert.sql().contains("ON DUPLICATE KEY UPDATE name = VALUES(name)"), mysqlUpsert.sql());
         org.junit.jupiter.api.Assertions.assertFalse(
                 mysqlUpsert.sql().contains("created_by = VALUES(created_by)"), mysqlUpsert.sql());

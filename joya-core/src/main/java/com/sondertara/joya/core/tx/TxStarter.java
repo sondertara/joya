@@ -34,22 +34,6 @@ public final class TxStarter {
     private final TxOptions options;
     private final EntityLifecycle entityLifecycle;
 
-    public TxStarter(ExecutionKernel kernel) {
-        this(kernel, TxEngine.JDBC, TxOptions.DEFAULT, EntityLifecycle.EMPTY);
-    }
-
-    public TxStarter(ExecutionKernel kernel, TxOptions options) {
-        this(kernel, TxEngine.JDBC, options, EntityLifecycle.EMPTY);
-    }
-
-    public TxStarter(ExecutionKernel kernel, TxEngine txEngine) {
-        this(kernel, txEngine, TxOptions.DEFAULT, EntityLifecycle.EMPTY);
-    }
-
-    public TxStarter(ExecutionKernel kernel, TxEngine txEngine, TxOptions options) {
-        this(kernel, txEngine, options, EntityLifecycle.EMPTY);
-    }
-
     public TxStarter(ExecutionKernel kernel, TxEngine txEngine, TxOptions options, EntityLifecycle entityLifecycle) {
         this.kernel = Objects.requireNonNull(kernel, "kernel must not be null");
         this.txEngine = Objects.requireNonNull(txEngine, "txEngine must not be null");
