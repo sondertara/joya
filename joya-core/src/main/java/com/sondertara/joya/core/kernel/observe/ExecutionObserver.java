@@ -1,6 +1,7 @@
 package com.sondertara.joya.core.kernel.observe;
 
 import com.sondertara.joya.core.kernel.statement.SqlStatement;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -58,16 +59,28 @@ public final class ExecutionObserver {
         return listeners;
     }
 
+    /** 是否注册了任何监听器（供调用方在无监听时跳过观测视图对象分配）。 */
+    public boolean hasListeners() {
+        return !listeners.isEmpty();
+    }
+
     /**
      * 执行观测包装：before → 执行 → after/onError。监听器为空时零额外开销。
      */
     public <T> Stream<T> observeStream(SqlStatement statement, Map<String, Object> attributes,
                                        Supplier<Stream<T>> action) {
+        return observeStream(statement, attributes, null, action);
+    }
+
+    public <T> Stream<T> observeStream(SqlStatement statement,
+                                       Map<String, Object> attributes,
+                                       SqlExecutionContext.@Nullable PaginationView page,
+                                       Supplier<Stream<T>> action) {
         if (listeners.isEmpty()) {
             return action.get();
         }
         List<SqlExecutionListener> active = orderedListeners();
-        SqlExecutionContext ctx = new SqlExecutionContext(statement, false, attributes);
+        SqlExecutionContext ctx = new SqlExecutionContext(statement, false, attributes, page);
         for (SqlExecutionListener listener : active) {
             runListenerQuietly(() -> listener.beforeExecute(ctx), "beforeExecute");
         }
@@ -94,11 +107,20 @@ public final class ExecutionObserver {
 
     public <T> T observe(SqlStatement statement, boolean batch, Map<String, Object> attributes,
                           Supplier<T> action, Function<T, SqlExecutionResult> resultMapper) {
+        return observe(statement, batch, attributes, null, action, resultMapper);
+    }
+
+    public <T> T observe(SqlStatement statement,
+                          boolean batch,
+                          Map<String, Object> attributes,
+                          SqlExecutionContext.@Nullable PaginationView page,
+                          Supplier<T> action,
+                          Function<T, SqlExecutionResult> resultMapper) {
         if (listeners.isEmpty()) {
             return action.get();
         }
         List<SqlExecutionListener> active = orderedListeners();
-        SqlExecutionContext ctx = new SqlExecutionContext(statement, batch, attributes);
+        SqlExecutionContext ctx = new SqlExecutionContext(statement, batch, attributes, page);
         for (SqlExecutionListener listener : active) {
             runListenerQuietly(() -> listener.beforeExecute(ctx), "beforeExecute");
         }

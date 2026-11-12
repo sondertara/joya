@@ -156,7 +156,10 @@ public final class JoyaClient implements DataOps {
 
     // ===== 底层逃生舱与配置访问 =====
 
-    /** 执行 SQL 脚本流。 */
+    /**
+     * 执行轻量级 SQL 脚本流（逃生舱：自动提交连接逐条执行，非原子、不经过改写器与观测管线、整脚本读入内存切分；
+     * 详见 {@link DataOps#script(Reader)}）。
+     */
     @Override
     public void script(Reader reader) {
         dataOps.script(reader);

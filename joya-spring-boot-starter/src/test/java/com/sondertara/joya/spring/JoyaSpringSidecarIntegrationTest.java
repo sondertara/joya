@@ -816,4 +816,26 @@ class JoyaSpringSidecarIntegrationTest {
                             "绑定内层 target 而非 LazyConnectionDataSourceProxy 主 Bean 的管理器不得被误判为匹配");
                 });
     }
+
+    @Test
+    void selfManagedDataSource_withoutConnectionPoolOrExplicitType_failsFastWithActionableGuidance() {
+        autoDiscoveryRunner()
+                .withPropertyValues(
+                        "spring.datasource.url=jdbc:h2:mem:pool_missing_primary;MODE=MYSQL;DB_CLOSE_DELAY=-1",
+                        "spring.datasource.username=sa",
+                        "spring.datasource.password=",
+                        "spring.datasource.type=org.h2.jdbcx.JdbcDataSource",
+                        "joya.datasources[0].name=analytics",
+                        "joya.datasources[0].url=jdbc:h2:mem:pool_missing_ext;MODE=MYSQL;DB_CLOSE_DELAY=-1",
+                        "joya.datasources[0].username=sa")
+                .run(context -> {
+                    Throwable failure = context.getStartupFailure();
+                    assertNotNull(failure, "缺少连接池且未显式指定 type 时应启动失败");
+                    Throwable root = org.springframework.core.NestedExceptionUtils.getMostSpecificCause(failure);
+                    assertTrue(root instanceof IllegalStateException, root.getClass().getName());
+                    assertTrue(root.getMessage().contains("joya.datasources[0]"), root.getMessage());
+                    assertTrue(root.getMessage().contains("spring-boot-starter-jdbc"), root.getMessage());
+                    assertTrue(root.getMessage().contains("joya.datasources[0].type"), root.getMessage());
+                });
+    }
 }

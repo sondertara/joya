@@ -72,7 +72,7 @@ public final class SqlFormatUtils {
         int i = 0;
         while (i < len) {
             char current = sql.charAt(i);
-            if (current == '-' && i + 1 < len && sql.charAt(i + 1) == '-') {
+            if (current == '-' && isDashCommentStart(sql, i, dbType)) {
                 i = skipLineComment(sql, i + 2);
                 continue;
             }
@@ -137,7 +137,7 @@ public final class SqlFormatUtils {
         return placeholders;
     }
 
-    private static boolean usesBackslashEscape(String sql, int quoteStart, char quote, @Nullable DbType dbType) {
+    static boolean usesBackslashEscape(String sql, int quoteStart, char quote, @Nullable DbType dbType) {
         if (dbType == null) {
             return true;
         }
@@ -155,6 +155,12 @@ public final class SqlFormatUtils {
     }
 
     private static int skipBracketIdentifier(String sql, int start) {
+        int end = findBracketIdentifierEnd(sql, start);
+        return end < 0 ? sql.length() : end;
+    }
+
+    /** 查找 {@code [...]} 方括号标识符结束下标（闭合 {@code ]} 之后）；未闭合时返回 {@code -1}。 */
+    static int findBracketIdentifierEnd(String sql, int start) {
         int len = sql.length();
         int i = start + 1;
         while (i < len) {
@@ -167,10 +173,10 @@ public final class SqlFormatUtils {
             }
             i++;
         }
-        return len;
+        return -1;
     }
 
-    private static int skipLineComment(String sql, int index) {
+    static int skipLineComment(String sql, int index) {
         int len = sql.length();
         while (index < len && sql.charAt(index) != '\n' && sql.charAt(index) != '\r') {
             index++;
@@ -178,7 +184,34 @@ public final class SqlFormatUtils {
         return index;
     }
 
+    /**
+     * 判断 {@code index} 处的 {@code --} 是否构成行注释起始（各方言词法扫描共用）。
+     *
+     * <p>MySQL 家族（以及方言未知的通用模式）要求 {@code --} 后紧跟空白或控制字符：
+     * {@code SET x = x--1} 中的 {@code --1} 是减负一的合法算术，不能被吞成注释。
+     * 其他已知方言（PostgreSQL / H2 / SQL Server 等）按标准语义，任意位置的 {@code --} 都是行注释。
+     */
+    static boolean isDashCommentStart(String sql, int index, @Nullable DbType dbType) {
+        if (index + 1 >= sql.length() || sql.charAt(index) != '-' || sql.charAt(index + 1) != '-') {
+            return false;
+        }
+        if (dbType != null && !dbType.isLikeMysql()) {
+            return true;
+        }
+        if (index + 2 >= sql.length()) {
+            return true;
+        }
+        char next = sql.charAt(index + 2);
+        return Character.isWhitespace(next) || Character.isISOControl(next);
+    }
+
     private static int skipBlockComment(String sql, int start, @Nullable DbType dbType) {
+        int end = findBlockCommentEnd(sql, start, dbType);
+        return end < 0 ? sql.length() : end;
+    }
+
+    /** 查找 {@code /* ... * /} 块注释结束下标（含 PostgreSQL 嵌套注释）；未闭合时返回 {@code -1}。 */
+    static int findBlockCommentEnd(String sql, int start, @Nullable DbType dbType) {
         int len = sql.length();
         boolean nested = dbType != null && dbType.isLikePostgres();
         int depth = 1;
@@ -197,10 +230,16 @@ public final class SqlFormatUtils {
                 i++;
             }
         }
-        return len;
+        return -1;
     }
 
     private static int skipQuoted(String sql, int start, char quote, boolean backslashEscaped) {
+        int end = findQuotedEnd(sql, start, quote, backslashEscaped);
+        return end < 0 ? sql.length() : end;
+    }
+
+    /** 查找单/双/反引号字面量或标识符结束下标；未闭合时返回 {@code -1}。 */
+    static int findQuotedEnd(String sql, int start, char quote, boolean backslashEscaped) {
         int len = sql.length();
         int i = start + 1;
         while (i < len) {
@@ -221,7 +260,7 @@ public final class SqlFormatUtils {
             }
             i++;
         }
-        return len;
+        return -1;
     }
 
     private static boolean isPrecededByEscapeKeyword(String sql, int quoteStart) {
@@ -237,7 +276,7 @@ public final class SqlFormatUtils {
         return wordStart == 0 || !isIdentifierPart(sql.charAt(wordStart - 1));
     }
 
-    private static String dollarQuoteDelimiter(String sql, int start) {
+    static String dollarQuoteDelimiter(String sql, int start) {
         if (start > 0) {
             char previous = sql.charAt(start - 1);
             if (previous == '$' || isIdentifierPart(previous)) {
@@ -318,7 +357,7 @@ public final class SqlFormatUtils {
         while (i < len) {
             char current = sql.charAt(i);
             int literalEnd = -1;
-            if (current == '-' && i + 1 < len && sql.charAt(i + 1) == '-') {
+            if (current == '-' && isDashCommentStart(sql, i, null)) {
                 literalEnd = skipLineComment(sql, i + 2);
             } else if (current == '#' && isHashCommentStart(sql, i, null)) {
                 literalEnd = skipLineComment(sql, i + 1);
@@ -364,7 +403,7 @@ public final class SqlFormatUtils {
      *       （排除跨行 {@code FROM\n#temp}）时视为行注释。</li>
      * </ul>
      */
-    private static boolean isHashCommentStart(String sql, int index, @Nullable DbType dbType) {
+    static boolean isHashCommentStart(String sql, int index, @Nullable DbType dbType) {
         if (dbType != null) {
             return dbType.isLikeMysql();
         }
@@ -432,7 +471,7 @@ public final class SqlFormatUtils {
             char c = sql.charAt(i);
             if (Character.isWhitespace(c)) {
                 i++;
-            } else if (c == '-' && i + 1 < len && sql.charAt(i + 1) == '-') {
+            } else if (c == '-' && isDashCommentStart(sql, i, dbType)) {
                 i = skipLineComment(sql, i + 2);
             } else if (c == '#' && (dbType == null || dbType.isLikeMysql())) {
                 i = skipLineComment(sql, i + 1);

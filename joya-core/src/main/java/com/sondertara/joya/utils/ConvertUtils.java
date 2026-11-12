@@ -241,8 +241,12 @@ public final class ConvertUtils {
         if (value instanceof java.sql.Date d) return d.toLocalDate().atStartOfDay();
         if (value instanceof Date d) return LocalDateTime.ofInstant(d.toInstant(), ZoneId.systemDefault());
         if (value instanceof Instant i) return LocalDateTime.ofInstant(i, ZoneId.systemDefault());
-        if (value instanceof OffsetDateTime odt) return odt.toLocalDateTime();
-        if (value instanceof ZonedDateTime zdt) return zdt.toLocalDateTime();
+        if (value instanceof OffsetDateTime odt) {
+            return odt.atZoneSameInstant(ZoneId.systemDefault()).toLocalDateTime();
+        }
+        if (value instanceof ZonedDateTime zdt) {
+            return zdt.withZoneSameInstant(ZoneId.systemDefault()).toLocalDateTime();
+        }
         if (value instanceof LocalDate ld) return ld.atStartOfDay();
         if (value instanceof Number n) {
             return LocalDateTime.ofInstant(Instant.ofEpochMilli(n.longValue()), ZoneId.systemDefault());
@@ -256,8 +260,12 @@ public final class ConvertUtils {
         if (value instanceof java.sql.Date d) return d.toLocalDate();
         if (value instanceof Timestamp ts) return ts.toLocalDateTime().toLocalDate();
         if (value instanceof LocalDateTime ldt) return ldt.toLocalDate();
-        if (value instanceof OffsetDateTime odt) return odt.toLocalDate();
-        if (value instanceof ZonedDateTime zdt) return zdt.toLocalDate();
+        if (value instanceof OffsetDateTime odt) {
+            return odt.atZoneSameInstant(ZoneId.systemDefault()).toLocalDate();
+        }
+        if (value instanceof ZonedDateTime zdt) {
+            return zdt.withZoneSameInstant(ZoneId.systemDefault()).toLocalDate();
+        }
         if (value instanceof Date d) return LocalDateTime.ofInstant(d.toInstant(), ZoneId.systemDefault()).toLocalDate();
         if (value instanceof Instant i) return LocalDateTime.ofInstant(i, ZoneId.systemDefault()).toLocalDate();
         String s = value.toString().trim();
@@ -283,8 +291,12 @@ public final class ConvertUtils {
         }
         if (value instanceof Timestamp ts) return ts.toLocalDateTime().toLocalTime();
         if (value instanceof LocalDateTime ldt) return ldt.toLocalTime();
-        if (value instanceof OffsetDateTime odt) return odt.toLocalTime();
-        if (value instanceof ZonedDateTime zdt) return zdt.toLocalTime();
+        if (value instanceof OffsetDateTime odt) {
+            return odt.atZoneSameInstant(ZoneId.systemDefault()).toLocalTime();
+        }
+        if (value instanceof ZonedDateTime zdt) {
+            return zdt.withZoneSameInstant(ZoneId.systemDefault()).toLocalTime();
+        }
         if (value instanceof Date d) return LocalDateTime.ofInstant(d.toInstant(), ZoneId.systemDefault()).toLocalTime();
         String s = value.toString().trim();
         return s.isEmpty() ? null : LocalTime.parse(s);

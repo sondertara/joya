@@ -259,22 +259,24 @@ public class JdbcExecutor implements Executor {
                     ps.clearParameters();
                     for (int c = 0; c < columns.size(); c++) {
                         ColumnBinding column = columns.get(c);
-                        column.binder().bindValue(ps, c + 1, column.name(), row[c]);
+                        column.binder().bindValue(ps, c + 1, column.name(), row[c], dbType);
                     }
                     List<ColumnBinding> extraColumns = batch.extraColumns();
                     List<Object> extraValues = batch.extraValues();
                     for (int e = 0; e < extraColumns.size(); e++) {
                         ColumnBinding column = extraColumns.get(e);
-                        column.binder().bindValue(ps, columns.size() + e + 1, column.name(), extraValues.get(e));
+                        column.binder().bindValue(ps, columns.size() + e + 1, column.name(), extraValues.get(e), dbType);
                     }
                     ps.addBatch();
                     inChunk++;
                     if (inChunk >= chunkSize) {
+                        applyQueryTimeout(ps);
                         countOffset = flushChunk(ps, allCounts, countOffset, inChunk, wantKeys, pkColumn, generatedKeys);
                         inChunk = 0;
                     }
                 }
                 if (inChunk > 0) {
+                    applyQueryTimeout(ps);
                     flushChunk(ps, allCounts, countOffset, inChunk, wantKeys, pkColumn, generatedKeys);
                 }
                 return BatchSlice.of(allCounts, generatedKeys);
@@ -336,11 +338,17 @@ public class JdbcExecutor implements Executor {
 
     @Override
     public void runScript(Reader reader) {
+        runScript(reader, null);
+    }
+
+    @Override
+    public void runScript(Reader reader, @org.jspecify.annotations.Nullable DbType dbType) {
         // 注意：不能用 try-with-resources 关闭连接——事务模式下连接属于事务，由 ConnectionProvider 决定如何归还
         withConnection(conn -> {
             try (PrintWriter logWriter = new PrintWriter(new LoggingOutputStream(logger, Level.DEBUG));
                  PrintWriter errorWriter = new PrintWriter(new LoggingOutputStream(logger, Level.ERROR))) {
-                ScriptRunner runner = new ScriptRunner(conn);
+                ScriptRunner runner = new ScriptRunner(conn, dbType,
+                        () -> connections.queryTimeoutSeconds().orElse(0));
                 runner.setStopOnError(true);
                 runner.setThrowWarning(true);
                 runner.setLogWriter(logWriter);
@@ -357,6 +365,19 @@ public class JdbcExecutor implements Executor {
 
     // ===== 语句准备 =====
 
+    /**
+     * 按当前连接提供者重新计算剩余超时预算并下沉到语句。
+     *
+     * <p>批量分片与脚本执行会在单条语句/单个分片开始时重检该值：事务 deadline 是全局预算，
+     * 若只在借出连接时计算一次，慢分片或长脚本会在预算耗尽后继续占用数据库行锁与连接。
+     */
+    private void applyQueryTimeout(PreparedStatement ps) throws SQLException {
+        OptionalInt timeout = connections.queryTimeoutSeconds();
+        if (timeout.isPresent()) {
+            ps.setQueryTimeout(timeout.getAsInt());
+        }
+    }
+
     private PreparedStatement prepare(Connection conn, SqlStatement statement, boolean generatedKeys) throws SQLException {
         var dbType = statement.metadata() != null ? statement.metadata().dbType() : null;
         String jdbcStyleSql = SqlFormatUtils.getJdbcStyleSql(statement.sql(), dbType);
@@ -367,12 +388,9 @@ public class JdbcExecutor implements Executor {
             List<SqlParameter> parameters = statement.parameters();
             for (int i = 0; i < parameters.size(); i++) {
                 SqlParameter param = parameters.get(i);
-                param.binder().bind(ps, i + 1, param);
+                param.binder().bind(ps, i + 1, param, dbType);
             }
-            OptionalInt timeout = connections.queryTimeoutSeconds();
-            if (timeout.isPresent()) {
-                ps.setQueryTimeout(timeout.getAsInt());
-            }
+            applyQueryTimeout(ps);
             return ps;
         } catch (SQLException | RuntimeException e) {
             closeQuietly(ps);
@@ -392,11 +410,8 @@ public class JdbcExecutor implements Executor {
                 ? conn.prepareStatement(jdbcStyleSql, Statement.RETURN_GENERATED_KEYS)
                 : conn.prepareStatement(jdbcStyleSql);
         try {
-            bindRow(ps, params);
-            OptionalInt timeout = connections.queryTimeoutSeconds();
-            if (timeout.isPresent()) {
-                ps.setQueryTimeout(timeout.getAsInt());
-            }
+            bindRow(ps, params, dbType);
+            applyQueryTimeout(ps);
             return ps;
         } catch (SQLException | RuntimeException e) {
             closeQuietly(ps);
@@ -496,13 +511,13 @@ public class JdbcExecutor implements Executor {
         }
     }
 
-    private static void bindRow(PreparedStatement stmt, Object[] params) throws SQLException {
+    private static void bindRow(PreparedStatement stmt, Object[] params, @Nullable DbType dbType) throws SQLException {
         stmt.clearParameters();
         if (params == null) {
             return;
         }
         for (int i = 0; i < params.length; i++) {
-            ParameterBinder.DEFAULT.bindValue(stmt, i + 1, params[i]);
+            ParameterBinder.DEFAULT.bindValue(stmt, i + 1, params[i], dbType);
         }
     }
 }

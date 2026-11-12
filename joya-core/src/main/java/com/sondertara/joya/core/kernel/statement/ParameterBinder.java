@@ -1,5 +1,6 @@
 package com.sondertara.joya.core.kernel.statement;
 
+import org.jspecify.annotations.Nullable;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -36,25 +37,65 @@ public interface ParameterBinder {
         bindValue(statement, index, null, value);
     }
 
+    /**
+     * 携带已知方言的绑定入口：方言已确定时（如语句元数据）跳过驱动方言探测，
+     * 避免代理连接上的元数据查询与全局锁争用；{@code dbType} 为空时保持原有探测行为。
+     */
+    default void bind(PreparedStatement statement, int index, SqlParameter parameter,
+                      @Nullable DbType dbType) throws SQLException {
+        bind(statement, index, parameter);
+    }
+
+    /** 携带已知方言的列值绑定（批量热路径）。 */
+    default void bindValue(PreparedStatement statement, int index, String columnName, Object value,
+                           @Nullable DbType dbType) throws SQLException {
+        bindValue(statement, index, columnName, value);
+    }
+
+    /** 携带已知方言的列值绑定（批量热路径）。 */
+    default void bindValue(PreparedStatement statement, int index, Object value,
+                           @Nullable DbType dbType) throws SQLException {
+        bindValue(statement, index, value);
+    }
+
     /** 默认绑定：零额外对象分配，含 java.util.Date / OffsetDateTime / Oracle 及跨驱动 NULL 兼容。 */
     ParameterBinder DEFAULT = new ParameterBinder() {
         @Override
         public void bind(PreparedStatement statement, int index, SqlParameter parameter) throws SQLException {
-            bindRawValue(statement, index, parameter.value());
+            bindRawValue(statement, index, parameter.value(), null);
+        }
+
+        @Override
+        public void bind(PreparedStatement statement, int index, SqlParameter parameter,
+                         @Nullable DbType dbType) throws SQLException {
+            bindRawValue(statement, index, parameter.value(), dbType);
         }
 
         @Override
         public void bindValue(PreparedStatement statement, int index, String columnName, Object value) throws SQLException {
-            bindRawValue(statement, index, value);
+            bindRawValue(statement, index, value, null);
+        }
+
+        @Override
+        public void bindValue(PreparedStatement statement, int index, String columnName, Object value,
+                              @Nullable DbType dbType) throws SQLException {
+            bindRawValue(statement, index, value, dbType);
         }
 
         @Override
         public void bindValue(PreparedStatement statement, int index, Object value) throws SQLException {
-            bindRawValue(statement, index, value);
+            bindRawValue(statement, index, value, null);
+        }
+
+        @Override
+        public void bindValue(PreparedStatement statement, int index, Object value,
+                              @Nullable DbType dbType) throws SQLException {
+            bindRawValue(statement, index, value, dbType);
         }
     };
 
-    private static void bindRawValue(PreparedStatement statement, int index, Object value) throws SQLException {
+    private static void bindRawValue(PreparedStatement statement, int index, Object value,
+                                     @Nullable DbType dbType) throws SQLException {
         if (value == null) {
             bindNull(statement, index);
             return;
@@ -67,7 +108,7 @@ public interface ParameterBinder {
             statement.setTimestamp(index, Timestamp.from(date.toInstant()));
         } else if (value instanceof Enum<?> enumVal) {
             statement.setString(index, enumVal.name());
-        } else if (value instanceof OffsetDateTime odt && isOracle(statement)) {
+        } else if (value instanceof OffsetDateTime odt && isOracle(statement, dbType)) {
             if (odt.getYear() < 1905) {
                 statement.setTimestamp(index, Timestamp.valueOf(odt.atZoneSameInstant(ZoneId.systemDefault()).toLocalDateTime()));
             } else {
@@ -90,7 +131,10 @@ public interface ParameterBinder {
         }
     }
 
-    private static boolean isOracle(PreparedStatement statement) {
+    private static boolean isOracle(PreparedStatement statement, @Nullable DbType dbType) {
+        if (dbType != null) {
+            return DbType.oracle.equals(dbType);
+        }
         if (statement == null) {
             return false;
         }

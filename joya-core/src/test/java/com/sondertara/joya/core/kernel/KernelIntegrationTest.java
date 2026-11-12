@@ -24,6 +24,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -73,15 +74,34 @@ class KernelIntegrationTest {
 
     @Test
     void queryPage_observesCountAndDataStatements() {
-        recording.captured.clear();
+        List<SqlExecutionContext> contexts = new ArrayList<>();
+        ExecutionKernel tpl = templateWithListener(dataSource, new SqlExecutionListener() {
+            @Override
+            public void beforeExecute(SqlExecutionContext ctx) {
+                contexts.add(ctx);
+            }
+        });
 
         PageSlice<Map<String, Object>> result =
-                template.queryPage(SqlStatement.select("SELECT id, name FROM t_user WHERE id <= 2"),
+                tpl.queryPage(SqlStatement.select("SELECT id, name FROM t_user WHERE id <= 2"),
                         new MapRowMapper(), 0L, 10L);
 
-        assertEquals(2, recording.captured.size(), "count 与 data 语句各观测一次");
-        assertTrue(recording.captured.get(0).toUpperCase().contains("COUNT"), recording.captured.get(0));
-        assertEquals("SELECT id, name FROM t_user WHERE id <= 2", recording.captured.get(1));
+        assertEquals(2, contexts.size(), "count 与 data 语句各观测一次");
+        SqlExecutionContext countCtx = contexts.get(0);
+        SqlExecutionContext dataCtx = contexts.get(1);
+
+        assertTrue(countCtx.statement().sql().toUpperCase().contains("COUNT"), countCtx.statement().sql());
+        assertEquals("SELECT id, name FROM t_user WHERE id <= 2", countCtx.logicalStatement().sql());
+        assertTrue(countCtx.inPage());
+        assertEquals(0L, countCtx.offset());
+        assertEquals(10L, countCtx.limit());
+
+        assertEquals("SELECT id, name FROM t_user WHERE id <= 2 LIMIT ?", dataCtx.statement().sql());
+        assertEquals("SELECT id, name FROM t_user WHERE id <= 2", dataCtx.logicalStatement().sql());
+        assertTrue(dataCtx.inPage());
+        assertEquals(0L, dataCtx.offset());
+        assertEquals(10L, dataCtx.limit());
+        assertSame(countCtx.logicalStatement(), dataCtx.logicalStatement(), "隐式计数分页共享同一份改写后逻辑语句");
 
         assertNotNull(result);
         assertEquals(2L, result.total());
@@ -145,11 +165,11 @@ class KernelIntegrationTest {
 
     @Test
     void explicitCountQueryPage_observesBothCountAndDataStatements() {
-        List<String> events = new ArrayList<>();
+        List<SqlExecutionContext> contexts = new ArrayList<>();
         ExecutionKernel tpl = templateWithListener(dataSource, new SqlExecutionListener() {
             @Override
             public void beforeExecute(SqlExecutionContext ctx) {
-                events.add(ctx.statement().sql());
+                contexts.add(ctx);
             }
         });
 
@@ -160,16 +180,162 @@ class KernelIntegrationTest {
 
         assertEquals(2L, page.total());
         assertEquals(2, page.rows().size());
-        assertEquals(List.of("SELECT count(*) FROM t_user WHERE id <= 2", "SELECT id, name FROM t_user WHERE id <= 2"),
-                events);
+        assertEquals(2, contexts.size());
+        assertEquals("SELECT count(*) FROM t_user WHERE id <= 2", contexts.get(0).statement().sql());
+        assertEquals("SELECT count(*) FROM t_user WHERE id <= 2", contexts.get(0).logicalStatement().sql());
+        assertTrue(contexts.get(0).inPage());
+        assertEquals(0L, contexts.get(0).offset());
+        assertEquals(10L, contexts.get(0).limit());
 
-        events.clear();
+        assertEquals("SELECT id, name FROM t_user WHERE id <= 2 LIMIT ?", contexts.get(1).statement().sql());
+        assertEquals("SELECT id, name FROM t_user WHERE id <= 2", contexts.get(1).logicalStatement().sql());
+        assertTrue(contexts.get(1).inPage());
+        assertEquals(0L, contexts.get(1).offset());
+        assertEquals(10L, contexts.get(1).limit());
+
+        contexts.clear();
         PageSlice<Map<String, Object>> empty = tpl.queryPage(
                 SqlStatement.select("SELECT id, name FROM t_user WHERE id < 0"),
                 SqlStatement.select("SELECT count(*) FROM t_user WHERE id < 0"),
                 new MapRowMapper(), 0L, 10L);
         assertEquals(0L, empty.total());
-        assertEquals(1, events.size(), "无数据时不执行、也不观测数据语句");
+        assertEquals(1, contexts.size(), "无数据时不执行、也不观测数据语句");
+    }
+
+    @Test
+    void paginationObservability_deepOffsetDialectsIdentityStreamCloseAndUnsupportedFailFast() {
+        // 1. 深分页（offset = 1_000_000）+ 执行器身份断言（ctx.statement() 与 Executor 实际收到的实例严格同一引用）
+        List<SqlExecutionContext> beforeContexts = new ArrayList<>();
+        List<SqlExecutionContext> closedContexts = new ArrayList<>();
+        List<SqlStatement> executedStatements = new ArrayList<>();
+        Executor.Factory recordingFactory = (connections, translator) -> {
+            Executor delegate = Executors.JDBC.create(connections, translator);
+            return (Executor) java.lang.reflect.Proxy.newProxyInstance(
+                    Executor.class.getClassLoader(),
+                    new Class<?>[]{Executor.class},
+                    (proxy, method, args) -> {
+                        if (args != null && args.length > 0 && args[0] instanceof SqlStatement stmt) {
+                            executedStatements.add(stmt);
+                        }
+                        try {
+                            return method.invoke(delegate, args);
+                        } catch (java.lang.reflect.InvocationTargetException e) {
+                            throw e.getCause();
+                        }
+                    });
+        };
+        SqlExecutionListener listener = new SqlExecutionListener() {
+            @Override
+            public void beforeExecute(SqlExecutionContext ctx) {
+                beforeContexts.add(ctx);
+            }
+
+            @Override
+            public void onStreamClosed(SqlExecutionContext ctx) {
+                closedContexts.add(ctx);
+            }
+        };
+
+        ExecutionKernel h2Kernel = new ExecutionKernel(new ExecutionKernel.Config(
+                List.of(),
+                List.of(listener),
+                new DataSourceConnectionProvider(dataSource, 0),
+                DialectStrategy.cached(dataSource),
+                null, null, null, null, recordingFactory));
+
+        // 1a. H2 (LIMIT_OFFSET) 深分页 queryLimit
+        h2Kernel.queryLimit(SqlStatement.select("SELECT id, name FROM t_user ORDER BY id"),
+                new MapRowMapper(), 1_000_000L, 20L);
+        assertEquals(1, beforeContexts.size());
+        SqlExecutionContext deepH2 = beforeContexts.get(0);
+        assertEquals("SELECT id, name FROM t_user ORDER BY id LIMIT ? OFFSET ?", deepH2.statement().sql());
+        assertEquals("SELECT id, name FROM t_user ORDER BY id", deepH2.logicalStatement().sql());
+        assertTrue(deepH2.inPage());
+        assertEquals(1_000_000L, deepH2.offset());
+        assertEquals(20L, deepH2.limit());
+        assertEquals(List.of(20L, 1_000_000L), deepH2.statement().args());
+        assertSame(deepH2.statement(), executedStatements.get(0), "所执行即所观测：ctx.statement() 必须与送入 Executor 的实例同一引用");
+
+        // 1b. 流式分页 onStreamClosed 持有同一 ctx（含 PaginationView）且实例一致
+        beforeContexts.clear();
+        executedStatements.clear();
+        try (var stream = h2Kernel.queryStream(
+                SqlStatement.select("SELECT id, name FROM t_user WHERE id <= 2 ORDER BY id"),
+                new MapRowMapper(), 1L, 5L)) {
+            assertEquals(1, stream.toList().size());
+        }
+        assertEquals(1, beforeContexts.size());
+        assertEquals(1, closedContexts.size());
+        assertSame(beforeContexts.get(0), closedContexts.get(0));
+        assertTrue(closedContexts.get(0).inPage());
+        assertEquals(1L, closedContexts.get(0).offset());
+        assertEquals(5L, closedContexts.get(0).limit());
+        assertSame(beforeContexts.get(0).statement(), executedStatements.get(0));
+
+        // 1c. 非分页执行：inPage() == false，logicalStatement() 与 statement() 同一引用；3 参构造保持兼容
+        beforeContexts.clear();
+        executedStatements.clear();
+        h2Kernel.queryList(SqlStatement.select("SELECT id FROM t_user WHERE id = ?", 1), new MapRowMapper());
+        SqlExecutionContext nonPage = beforeContexts.get(0);
+        assertFalse(nonPage.inPage());
+        assertEquals(-1L, nonPage.offset());
+        assertEquals(-1L, nonPage.limit());
+        assertSame(nonPage.statement(), nonPage.logicalStatement());
+        assertSame(nonPage.statement(), executedStatements.get(0));
+        SqlExecutionContext legacyCtor = new SqlExecutionContext(nonPage.statement(), false, Map.of());
+        assertFalse(legacyCtor.inPage());
+        assertSame(nonPage.statement(), legacyCtor.logicalStatement());
+
+        // 2. SQL Server (ANSI_OFFSET_FETCH) 深分页双视图（通过零 JDBC 执行桩验证 SQL 与参数）
+        beforeContexts.clear();
+        executedStatements.clear();
+        Executor.Factory noOpSelectFactory = (connections, translator) -> (Executor) java.lang.reflect.Proxy.newProxyInstance(
+                Executor.class.getClassLoader(),
+                new Class<?>[]{Executor.class},
+                (proxy, method, args) -> {
+                    if (args != null && args.length > 0 && args[0] instanceof SqlStatement stmt) {
+                        executedStatements.add(stmt);
+                    }
+                    return List.of();
+                });
+        ExecutionKernel sqlServerKernel = new ExecutionKernel(new ExecutionKernel.Config(
+                List.of(),
+                List.of(listener),
+                new DataSourceConnectionProvider(dataSource, 0),
+                DialectStrategy.fixed(Dialect.SQLSERVER),
+                null, null, null, null, noOpSelectFactory));
+        sqlServerKernel.queryLimit(SqlStatement.select("SELECT id, name FROM t_user ORDER BY id"),
+                new MapRowMapper(), 1_000_000L, 20L);
+        SqlExecutionContext deepMsSql = beforeContexts.get(0);
+        assertEquals("SELECT id, name FROM t_user ORDER BY id OFFSET ? ROWS FETCH NEXT ? ROWS ONLY",
+                deepMsSql.statement().sql());
+        assertEquals("SELECT id, name FROM t_user ORDER BY id", deepMsSql.logicalStatement().sql());
+        assertEquals(1_000_000L, deepMsSql.offset());
+        assertEquals(20L, deepMsSql.limit());
+        assertEquals(List.of(1_000_000L, 20L), deepMsSql.statement().args());
+        assertSame(deepMsSql.statement(), executedStatements.get(0));
+
+        // 3. UNSUPPORTED 方言（如 Hive）在进入观测前 Fail-Fast，不触发 beforeExecute 或 onError
+        List<String> errorEvents = new ArrayList<>();
+        ExecutionKernel hiveKernel = new ExecutionKernel(new ExecutionKernel.Config(
+                List.of(),
+                List.of(new SqlExecutionListener() {
+                    @Override
+                    public void beforeExecute(SqlExecutionContext ctx) {
+                        errorEvents.add("before");
+                    }
+
+                    @Override
+                    public void onError(SqlExecutionContext ctx, Throwable error) {
+                        errorEvents.add("onError");
+                    }
+                }),
+                new DataSourceConnectionProvider(dataSource, 0),
+                DialectStrategy.fixed(Dialect.HIVE),
+                null, null, null, null, noOpSelectFactory));
+        assertThrows(UnsupportedOperationException.class,
+                () -> hiveKernel.queryLimit(SqlStatement.select("SELECT id FROM t_user"), new MapRowMapper(), 0L, 10L));
+        assertEquals(List.of(), errorEvents, "不支持分页的方言应在进入观测器前直接 Fail-Fast");
     }
 
     @Test

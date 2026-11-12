@@ -30,6 +30,13 @@ public class JoyaProperties {
     /** 开启 SQL 日志时是否打印明文参数，默认关闭（仅输出参数个数脱敏占位）。 */
     private boolean sqlLogPrintArgs = false;
 
+    /**
+     * 开启明文参数日志时按参数逻辑名匹配的脱敏正则；命中即把值替换为 {@code ***}。
+     * 默认覆盖 password / passwd / secret / token / credential 等常见敏感列，避免开日志即泄露凭据。
+     */
+    private List<String> sqlLogRedactPatterns = new ArrayList<>(
+            List.of("(?i).*(password|passwd|secret|token|credential).*"));
+
     /** 默认查询超时秒数（{@code <= 0} 表示不限制）。 */
     private int queryTimeoutSeconds = 0;
 
@@ -85,6 +92,16 @@ public class JoyaProperties {
 
     public void setSqlLogPrintArgs(boolean sqlLogPrintArgs) {
         this.sqlLogPrintArgs = sqlLogPrintArgs;
+    }
+
+    public List<String> getSqlLogRedactPatterns() {
+        return sqlLogRedactPatterns;
+    }
+
+    public void setSqlLogRedactPatterns(List<String> sqlLogRedactPatterns) {
+        this.sqlLogRedactPatterns = sqlLogRedactPatterns == null
+                ? new ArrayList<>()
+                : new ArrayList<>(sqlLogRedactPatterns);
     }
 
     public int getQueryTimeoutSeconds() {

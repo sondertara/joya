@@ -23,9 +23,12 @@ import com.sondertara.joya.core.kernel.observe.SqlExecutionContext;
 import com.sondertara.joya.core.kernel.observe.SqlExecutionListener;
 import com.sondertara.joya.core.kernel.observe.SqlExecutionResult;
 import com.sondertara.joya.core.kernel.statement.BatchSqlStatement;
+import com.sondertara.joya.core.kernel.statement.DbType;
+import com.sondertara.joya.core.kernel.statement.Operation;
 import com.sondertara.joya.core.kernel.statement.ParameterSource;
 import com.sondertara.joya.core.kernel.statement.SqlParameter;
 import com.sondertara.joya.core.kernel.statement.SqlStatement;
+import com.sondertara.joya.core.kernel.statement.TableRef;
 import com.sondertara.joya.core.naming.NamingPolicy;
 import com.sondertara.joya.exceptions.DbException;
 import org.jspecify.annotations.Nullable;
@@ -33,9 +36,11 @@ import org.jspecify.annotations.Nullable;
 import java.io.Reader;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.stream.Stream;
 
 /**
@@ -212,15 +217,17 @@ public final class ExecutionKernel {
         }
         SqlStatement rewritten = prepared.statement();
         Dialect currentDialect = dialectFor(prepared);
-        return observer.observe(rewritten, false, attrs,
-                () -> executor.queryList(currentDialect.pageSql(rewritten, offset, limit), mapper),
+        SqlStatement paged = currentDialect.pageSql(rewritten, offset, limit);
+        return observer.observe(paged, false, attrs, pageView(rewritten, offset, limit),
+                () -> executor.queryList(paged, mapper),
                 result -> SqlExecutionResult.rows(result.size()));
     }
 
     /**
      * 隐式计数分页查询（主要用于原生 SQL）：原始 {@code statement} 先经过一次 {@code StatementPreparer.prepare}
      * （完成 AST 改写），再由 {@link Dialect#countSql(SqlStatement)} 与 {@link Dialect#pageSql(SqlStatement, long, long)}
-     * 分别派生计数包装语句与分页语句（不重复触发改写器），两次物理执行各自独立进入 {@link ExecutionObserver}。
+     * 分别派生计数包装语句与分页物理语句（不重复触发改写器），两次物理执行各自独立进入 {@link ExecutionObserver}
+     * 并携带统一的 {@link SqlExecutionContext.PaginationView}。
      */
     public <T> PageSlice<T> queryPage(SqlStatement statement, RowMapper<T> mapper, long offset, long limit) {
         validatePageBounds(offset, limit);
@@ -229,7 +236,8 @@ public final class ExecutionKernel {
         SqlStatement rewritten = prepared.statement();
         Dialect currentDialect = dialectFor(prepared);
         SqlStatement countStmt = currentDialect.countSql(rewritten);
-        Long counted = observer.observe(countStmt, false, attrs,
+        SqlExecutionContext.PaginationView view = pageView(rewritten, offset, limit);
+        Long counted = observer.observe(countStmt, false, attrs, view,
                 () -> executor.query(countStmt,
                         new SingleRowRecordExtractor<>(new SingleColumnRowMapper<>(Long.class))),
                 value -> SqlExecutionResult.rows(value == null ? 0L : 1L));
@@ -237,8 +245,9 @@ public final class ExecutionKernel {
         if (total == 0 || limit == 0) {
             return new PageSlice<>(List.of(), total);
         }
-        List<T> rows = observer.observe(rewritten, false, attrs,
-                () -> executor.queryList(currentDialect.pageSql(rewritten, offset, limit), mapper),
+        SqlStatement paged = currentDialect.pageSql(rewritten, offset, limit);
+        List<T> rows = observer.observe(paged, false, attrs, view,
+                () -> executor.queryList(paged, mapper),
                 result -> SqlExecutionResult.rows(result.size()));
         return new PageSlice<>(rows, total);
     }
@@ -257,6 +266,7 @@ public final class ExecutionKernel {
         Map<String, Object> countAttrs = newExecutionAttributes();
         SqlStatement rewrittenCount = preparer.prepare(countStatement, countAttrs).statement();
         Long counted = observer.observe(rewrittenCount, false, countAttrs,
+                pageView(rewrittenCount, offset, limit),
                 () -> executor.query(rewrittenCount,
                         new SingleRowRecordExtractor<>(new SingleColumnRowMapper<>(Long.class))),
                 value -> SqlExecutionResult.rows(value == null ? 0L : 1L));
@@ -269,8 +279,10 @@ public final class ExecutionKernel {
         StatementPreparer.Prepared preparedData = preparer.prepare(statement, dataAttrs);
         SqlStatement rewrittenData = preparedData.statement();
         Dialect currentDialect = dialectFor(preparedData);
-        List<T> rows = observer.observe(rewrittenData, false, dataAttrs,
-                () -> executor.queryList(currentDialect.pageSql(rewrittenData, offset, limit), mapper),
+        SqlStatement pagedData = currentDialect.pageSql(rewrittenData, offset, limit);
+        List<T> rows = observer.observe(pagedData, false, dataAttrs,
+                pageView(rewrittenData, offset, limit),
+                () -> executor.queryList(pagedData, mapper),
                 result -> SqlExecutionResult.rows(result.size()));
         return new PageSlice<>(rows, total);
     }
@@ -285,9 +297,15 @@ public final class ExecutionKernel {
         }
         SqlStatement rewritten = prepared.statement();
         Dialect currentDialect = dialectFor(prepared);
-        return observer.observeStream(rewritten, attrs,
-                () -> executor.queryStream(currentDialect.pageSql(rewritten, offset, limit), mapper,
-                        currentDialect.streamFetchSize()));
+        SqlStatement paged = currentDialect.pageSql(rewritten, offset, limit);
+        return observer.observeStream(paged, attrs, pageView(rewritten, offset, limit),
+                () -> executor.queryStream(paged, mapper, currentDialect.streamFetchSize()));
+    }
+
+    private SqlExecutionContext.@Nullable PaginationView pageView(SqlStatement logicalStatement, long offset, long limit) {
+        return observer.hasListeners()
+                ? new SqlExecutionContext.PaginationView(logicalStatement, offset, limit)
+                : null;
     }
 
     private Dialect dialectFor(StatementPreparer.Prepared prepared) {
@@ -370,9 +388,10 @@ public final class ExecutionKernel {
         return executor.withConnection(action);
     }
 
-    /** 执行 SQL 脚本（DDL / 初始化数据，不经过改写器链）。 */
+    /** 执行 SQL 脚本（DDL / 初始化数据，逃生舱：不经过改写器与观测管线；优先复用已缓存方言词法，不触发额外探测连接）。 */
     public void runScript(Reader reader) {
-        executor.runScript(reader);
+        Dialect cached = peekDialect();
+        executor.runScript(reader, cached != null ? cached.dbType() : null);
     }
 
     // ===== 访问器 =====
@@ -397,6 +416,24 @@ public final class ExecutionKernel {
 
     public boolean hasRewriters() {
         return preparer.hasRewriters();
+    }
+
+    /**
+     * 是否存在对给定操作、实体与表可能生效的 {@link SqlRewriter}（只探测 {@code supports}，不执行改写）。
+     *
+     * <p>用于「原生 UPSERT 这类优化路径能否安全放行」的判定：写路径一旦可能被改写器改写为带行级过滤的语义，
+     * 就必须走回退路径，否则会绕过租户/审计等条件。返回 {@code false} 时可直接走原生最快的路径。
+     *
+     * @param operations 需要同时检查的操作集合（UPSERT 应同时检查 SELECT / INSERT / UPDATE）
+     * @param entityType 实体类型，可为 {@code null}
+     * @param tables     本次语句涉及的物理表引用
+     * @param dbType     当前方言，可为 {@code null}（改写器不感知方言时无影响）
+     */
+    public boolean hasApplicableRewriters(Collection<Operation> operations,
+                                         @Nullable Class<?> entityType,
+                                         Set<TableRef> tables,
+                                         @Nullable DbType dbType) {
+        return preparer.hasApplicableRewriters(operations, entityType, tables, dbType);
     }
 
     public ConnectionProvider connections() {

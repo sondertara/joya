@@ -27,7 +27,12 @@ import javax.sql.DataSource;
  *       {@link JoyaTransactionManagerResolver} / {@link JoyaExtensionPointResolver}。</li>
  * </ul>
  */
-@AutoConfiguration(afterName = "org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration")
+@AutoConfiguration(afterName = {
+        // 必须排在主 DataSource 与事务管理器装配之后，否则解析时事务管理器 Bean 定义尚未注册
+        "org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration",
+        "org.springframework.boot.autoconfigure.transaction.TransactionAutoConfiguration",
+        "org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration"
+})
 @ConditionalOnClass({DataSource.class, JoyaClient.class})
 @ConditionalOnProperty(prefix = "joya", name = "enabled", havingValue = "true", matchIfMissing = true)
 @EnableConfigurationProperties(JoyaProperties.class)
@@ -57,17 +62,23 @@ public class JoyaAutoConfiguration {
     @Bean
     @ConditionalOnProperty(prefix = "joya", name = "sql-log", havingValue = "true")
     public SqlExecutionListener joyaSqlLogListener(JoyaProperties properties) {
+        java.util.List<java.util.regex.Pattern> redactPatterns =
+                JoyaSqlLogSupport.compilePatterns(properties.getSqlLogRedactPatterns());
         return new SqlExecutionListener() {
             @Override
             public void beforeExecute(SqlExecutionContext context) {
+                String pageSuffix = context.inPage()
+                        ? " | page=[" + context.offset() + "," + context.limit() + "]"
+                        : "";
                 if (context.batch()) {
-                    log.info("[Joya SQL] {} | batch rows={}", context.statement().sql(),
-                            context.attributes().get(SqlExecutionContext.ATTR_BATCH_ROWS));
+                    log.info("[Joya SQL] {} | batch rows={}{}", context.statement().sql(),
+                            context.attributes().get(SqlExecutionContext.ATTR_BATCH_ROWS), pageSuffix);
                 } else if (properties.isSqlLogPrintArgs()) {
-                    log.info("[Joya SQL] {} | args={}", context.statement().sql(), context.statement().args());
+                    log.info("[Joya SQL] {} | args={}{}", context.statement().sql(),
+                            JoyaSqlLogSupport.maskedArgs(context.statement(), redactPatterns), pageSuffix);
                 } else {
-                    log.info("[Joya SQL] {} | paramCount={}", context.statement().sql(),
-                            context.statement().args().size());
+                    log.info("[Joya SQL] {} | paramCount={}{}", context.statement().sql(),
+                            context.statement().args().size(), pageSuffix);
                 }
             }
         };

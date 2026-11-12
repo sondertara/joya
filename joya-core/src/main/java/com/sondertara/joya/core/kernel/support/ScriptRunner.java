@@ -15,9 +15,12 @@
  */
 package com.sondertara.joya.core.kernel.support;
 
+import com.sondertara.joya.core.kernel.statement.DbType;
+import com.sondertara.joya.core.kernel.statement.SqlScriptSplitter;
 import com.sondertara.joya.exceptions.DbException;
+import org.jspecify.annotations.Nullable;
 
-import java.io.BufferedReader;
+import java.io.IOException;
 import java.io.PrintWriter;
 import java.io.Reader;
 import java.sql.Connection;
@@ -26,27 +29,20 @@ import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.SQLWarning;
 import java.sql.Statement;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
+import java.util.List;
+import java.util.function.IntSupplier;
 
 /**
- * This is an internal testing utility.<br>
- * You are welcome to use this class for your own purposes,<br>
- * but if there is some feature/enhancement you need for your own usage,<br>
- * please make and modify your own copy instead of sending us an enhancement request.<br>
+ * 轻量级 SQL 脚本执行工具（供 {@code DataOps.script(Reader)} 逃生舱与初始化测试使用）。
  *
- * @author Clinton Begin
+ * <p>执行前通过 {@link SqlScriptSplitter} 按方言词法一次性切分整份脚本（跳过引号字面量、注释与美元引号中的分号；
+ * 词法未闭合错误在执行第 1 条语句前即快速失败），日志输出默认脱敏（不打印 SQL 明文与查询结果单元格明文）。
  */
 public class ScriptRunner {
 
-    private static final String LINE_SEPARATOR = System.lineSeparator();
-
-    private static final String DEFAULT_DELIMITER = ";";
-
-    private static final Pattern DELIMITER_PATTERN = Pattern
-            .compile("^\\s*((--)|(//))?\\s*(//)?\\s*@DELIMITER\\s+([^\\s]+)", Pattern.CASE_INSENSITIVE);
-
     private final Connection connection;
+    private final @Nullable DbType dbType;
+    private final @Nullable IntSupplier queryTimeoutSeconds;
 
     private boolean stopOnError;
     private boolean throwWarning;
@@ -54,10 +50,22 @@ public class ScriptRunner {
     private PrintWriter logWriter;
     private PrintWriter errorLogWriter;
 
-    private String delimiter = DEFAULT_DELIMITER;
-
     public ScriptRunner(Connection connection) {
+        this(connection, null);
+    }
+
+    public ScriptRunner(Connection connection, @Nullable DbType dbType) {
+        this(connection, dbType, null);
+    }
+
+    /**
+     * @param queryTimeoutSeconds 每次执行语句前重检剩余超时秒数（返回值 {@code <= 0} 表示不限时）
+     */
+    public ScriptRunner(Connection connection, @Nullable DbType dbType,
+                        @Nullable IntSupplier queryTimeoutSeconds) {
         this.connection = connection;
+        this.dbType = dbType;
+        this.queryTimeoutSeconds = queryTimeoutSeconds;
     }
 
     public void setStopOnError(boolean stopOnError) {
@@ -76,85 +84,63 @@ public class ScriptRunner {
         this.errorLogWriter = errorLogWriter;
     }
 
-
-
     public void runScript(Reader reader) {
-        executeLineByLine(reader);
-    }
-
-
-    private void executeLineByLine(Reader reader) {
-        StringBuilder command = new StringBuilder();
+        final List<SqlScriptSplitter.Statement> statements;
         try {
-            BufferedReader lineReader = new BufferedReader(reader);
-            String line;
-            while ((line = lineReader.readLine()) != null) {
-                handleLine(command, line);
-            }
-            checkForMissingLineTerminator(command);
+            String script = readAll(reader);
+            statements = SqlScriptSplitter.split(script, dbType);
         } catch (Exception e) {
-            String message = "Error executing: " + commandDescription(command) + ".  Cause: " + e;
+            String message = "Error parsing SQL script: " + e.getMessage();
             printlnError(message);
             throw new DbException(message, e);
         }
-    }
 
-    private void checkForMissingLineTerminator(StringBuilder command) {
-        if (command != null && !command.toString().trim().isEmpty()) {
-            throw new DbException("Line missing end-of-line terminator (" + delimiter + ") => "
-                    + commandDescription(command));
+        for (SqlScriptSplitter.Statement stmt : statements) {
+            println(commandDescription(stmt.sql()));
+            executeStatement(stmt);
         }
     }
 
-    private void handleLine(StringBuilder command, String line) throws SQLException {
-        String trimmedLine = line.trim();
-        if (lineIsComment(trimmedLine)) {
-            Matcher matcher = DELIMITER_PATTERN.matcher(trimmedLine);
-            if (matcher.find()) {
-                delimiter = matcher.group(5);
-            }
-            println("SQL script comment");
-        } else if (commandReadyToExecute(trimmedLine)) {
-            command.append(line, 0, line.lastIndexOf(delimiter));
-            command.append(LINE_SEPARATOR);
-            println(commandDescription(command));
-            executeStatement(command.toString());
-            command.setLength(0);
-        } else if (!trimmedLine.isEmpty()) {
-            command.append(line);
-            command.append(LINE_SEPARATOR);
+    private static String readAll(Reader reader) throws IOException {
+        if (reader == null) {
+            return "";
         }
+        StringBuilder sb = new StringBuilder(1024);
+        char[] buffer = new char[4096];
+        int read;
+        while ((read = reader.read(buffer)) != -1) {
+            sb.append(buffer, 0, read);
+        }
+        return sb.toString();
     }
 
-    private boolean lineIsComment(String trimmedLine) {
-        return trimmedLine.startsWith("//") || trimmedLine.startsWith("--");
-    }
-
-    private boolean commandReadyToExecute(String trimmedLine) {
-        // issue #561 remove anything after the delimiter
-        return trimmedLine.contains(delimiter);
-    }
-
-    private void executeStatement(String command) throws SQLException {
+    private void executeStatement(SqlScriptSplitter.Statement stmt) {
         try (Statement statement = connection.createStatement()) {
-            try {
-                boolean hasResults = statement.execute(command);
-                // DO NOT try to 'improve' the condition even if IDE tells you to!
-                // It's important that getUpdateCount() is called here.
-                while (!(!hasResults && statement.getUpdateCount() == -1)) {
-                    checkWarnings(statement);
-                    printResults(statement, hasResults);
-                    hasResults = statement.getMoreResults();
+            if (queryTimeoutSeconds != null) {
+                int remaining = queryTimeoutSeconds.getAsInt();
+                if (remaining > 0) {
+                    statement.setQueryTimeout(remaining);
                 }
-            } catch (SQLWarning e) {
-                throw e;
-            } catch (SQLException e) {
-                if (stopOnError) {
-                    throw e;
-                }
-                String message = "Error executing: " + commandDescription(command) + ".  Cause: " + e;
-                printlnError(message);
             }
+            boolean hasResults = statement.execute(stmt.sql());
+            // 必须保留 getUpdateCount() == -1 终止判定以推进多结果集游标
+            while (!(!hasResults && statement.getUpdateCount() == -1)) {
+                checkWarnings(statement);
+                printResults(statement, hasResults);
+                hasResults = statement.getMoreResults();
+            }
+        } catch (SQLException e) {
+            String message = "Error executing: " + commandDescription(stmt.sql())
+                    + " (line " + stmt.line() + ").  Cause: " + e;
+            printlnError(message);
+            if (stopOnError || e instanceof SQLWarning) {
+                throw new DbException(message, e);
+            }
+        } catch (Exception e) {
+            String message = "Error executing: " + commandDescription(stmt.sql())
+                    + " (line " + stmt.line() + ").  Cause: " + e;
+            printlnError(message);
+            throw new DbException(message, e);
         }
     }
 
@@ -162,14 +148,11 @@ public class ScriptRunner {
         if (!throwWarning) {
             return;
         }
-        // In Oracle, CREATE PROCEDURE, FUNCTION, etc. returns warning
-        // instead of throwing exception if there is compilation error.
         SQLWarning warning = statement.getWarnings();
         if (warning != null) {
             throw warning;
         }
     }
-
 
     private String commandDescription(CharSequence command) {
         String sql = command.toString().trim();
@@ -194,29 +177,18 @@ public class ScriptRunner {
             return;
         }
         try (ResultSet rs = statement.getResultSet()) {
+            if (rs == null) {
+                return;
+            }
             ResultSetMetaData md = rs.getMetaData();
-            int cols = md.getColumnCount();
-            for (int i = 0; i < cols; i++) {
-                String name = md.getColumnLabel(i + 1);
-                print(name + "\t");
-            }
-            println("");
+            int cols = md != null ? md.getColumnCount() : 0;
+            long rows = 0L;
             while (rs.next()) {
-                for (int i = 0; i < cols; i++) {
-                    String value = rs.getString(i + 1);
-                    print(value + "\t");
-                }
-                println("");
+                rows++;
             }
+            println("SQL script result[rows=" + rows + ", cols=" + cols + "]");
         } catch (SQLException e) {
-            printlnError("Error printing results: " + e.getMessage());
-        }
-    }
-
-    private void print(Object o) {
-        if (logWriter != null) {
-            logWriter.print(o);
-            logWriter.flush();
+            printlnError("Error reading script result summary: " + e.getMessage());
         }
     }
 
@@ -233,5 +205,4 @@ public class ScriptRunner {
             errorLogWriter.flush();
         }
     }
-
 }

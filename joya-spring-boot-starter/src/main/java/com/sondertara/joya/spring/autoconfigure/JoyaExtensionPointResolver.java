@@ -41,7 +41,7 @@ final class JoyaExtensionPointResolver {
      * 收集对指定客户端生效的扩展点 Bean。
      */
     <T> List<T> forClient(Class<T> type, String clientName) {
-        String[] beanNames = beanFactory.getBeanNamesForType(type, false, false);
+        String[] beanNames = beanNamesForType(type);
         if (beanNames.length == 0) {
             return List.of();
         }
@@ -61,7 +61,7 @@ final class JoyaExtensionPointResolver {
     <T> T singleForClient(Class<T> type, String clientName) {
         List<String> scoped = new ArrayList<>();
         List<String> global = new ArrayList<>();
-        for (String beanName : beanFactory.getBeanNamesForType(type, false, false)) {
+        for (String beanName : beanNamesForType(type)) {
             Set<String> qualifiers = extractQualifierValues(beanName);
             if (qualifiers.contains(clientName)) {
                 scoped.add(beanName);
@@ -75,7 +75,7 @@ final class JoyaExtensionPointResolver {
                     + clientName + "': " + candidates + ". Keep exactly one global bean, or qualify one per client "
                     + "with @Qualifier(\"" + clientName + "\").");
         }
-        return candidates.isEmpty() ? null : beanFactory.getBean(candidates.get(0), type);
+        return candidates.isEmpty() ? null : resolveExtensionBean(candidates.get(0), type);
     }
 
     /**
@@ -131,6 +131,14 @@ final class JoyaExtensionPointResolver {
                         }
                     });
         }
+    }
+
+    /**
+     * FactoryBean 的 {@code getObjectType()} 往往需要初始化后才能确定类型；若不允许 eager init，
+     * 这类扩展点在 {@code getBeanNamesForType(type,false,false)} 下会被静默跳过（E-4）。
+     */
+    private String[] beanNamesForType(Class<?> type) {
+        return beanFactory.getBeanNamesForType(type, false, true);
     }
 
     private static boolean isCurrentlyInCreationFailure(Throwable ex) {

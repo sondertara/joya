@@ -95,6 +95,13 @@ public final class EntityOps<T> {
         return writer.patchAll(entities);
     }
 
+    /**
+     * 单条保存：按主键存在则更新、不存在则插入。
+     *
+     * <p>方言支持原生 UPSERT，且本实体/本表在 {@code SELECT} / {@code INSERT} / {@code UPDATE}
+     * 上均无匹配 {@code SqlRewriter} 时走原生路径；否则回退到受行级 {@code WHERE} 保护的先查后写。
+     * 回退模式下「跨可见范围」的主键会被视为不可见，最终以唯一键冲突暴露，而不是静默覆盖他人数据。
+     */
     public MutationResult save(T entity) {
         return upsert.save(entity, false);
     }
@@ -103,6 +110,12 @@ public final class EntityOps<T> {
         return upsert.save(entity, true);
     }
 
+    /**
+     * 批量保存，语义同 {@link #save(Object)}。
+     *
+     * <p>回退路径按 {@code batchSize} 分片，每片先 SELECT 再 UPDATE/INSERT；自动提交模式下分片之间
+     * 跨连接执行，<b>不保证整批原子性</b>。需要整批原子提交时请放在 {@code joya.tx(...)} 内执行。
+     */
     public MutationResult saveAll(Collection<T> entities) {
         return upsert.saveAll(entities, false);
     }

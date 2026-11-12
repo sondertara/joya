@@ -265,10 +265,13 @@ public final class SqlDataUtils {
             } else if (isOffsetDateTime) {
                 if (String.class.getName().equals(columnClassName)) {
                     return ConvertUtils.convert(rs.getObject(index), requiredType);
-                } else {
-                    java.sql.Timestamp ts = rs.getTimestamp(index);
-                    return ts == null ? null : ts.toInstant().atZone(ZoneId.systemDefault()).toOffsetDateTime();
                 }
+                OffsetDateTime stored = readStoredOffsetDateTime(rs, index);
+                if (stored != null) {
+                    return stored;
+                }
+                java.sql.Timestamp ts = rs.getTimestamp(index);
+                return ts == null ? null : ts.toLocalDateTime().atZone(ZoneId.systemDefault()).toOffsetDateTime();
             }
         } catch (Exception e) {
             if (log.isDebugEnabled()) {
@@ -293,6 +296,37 @@ public final class SqlDataUtils {
         }
 
         return getResultSetValue(rs, index, columnClassName);
+    }
+
+    /**
+     * 优先按 JDBC 4.2 的 {@link OffsetDateTime} 直读，保留数据库列内的原始时区偏移。
+     *
+     * <p>部分驱动不支持该类型转换（或仅返回通用对象），此时返回 {@code null} 交由调用方回退到
+     * {@link java.sql.Timestamp}；该回退路径只能以 JVM 默认时区表示，原始偏移不可恢复。
+     */
+    private static @Nullable OffsetDateTime readStoredOffsetDateTime(ResultSet rs, int index) throws SQLException {
+        try {
+            OffsetDateTime value = rs.getObject(index, OffsetDateTime.class);
+            if (value != null) {
+                return value;
+            }
+            if (rs.wasNull()) {
+                return null;
+            }
+        } catch (SQLException | RuntimeException | AbstractMethodError ignored) {
+            // 驱动不支持 OffsetDateTime 直读，继续尝试通用对象与字符串
+        }
+        Object raw = rs.getObject(index);
+        if (raw == null) {
+            return null;
+        }
+        if (raw instanceof OffsetDateTime odt) {
+            return odt;
+        }
+        if (raw instanceof String text) {
+            return ConvertUtils.convert(text, OffsetDateTime.class);
+        }
+        return null;
     }
 
     private static LocalTime readLocalTime(ResultSet rs, int index) throws SQLException {

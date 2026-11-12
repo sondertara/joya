@@ -9,6 +9,7 @@ import com.sondertara.joya.core.kernel.interceptor.SqlRewriter;
 import com.sondertara.joya.core.kernel.statement.BatchSqlStatement;
 import com.sondertara.joya.core.kernel.statement.ColumnBinding;
 import com.sondertara.joya.core.kernel.statement.DbType;
+import com.sondertara.joya.core.kernel.statement.Operation;
 import com.sondertara.joya.core.kernel.statement.SqlFormatUtils;
 import com.sondertara.joya.core.kernel.statement.SqlNode;
 import com.sondertara.joya.core.kernel.statement.SqlParameter;
@@ -18,6 +19,7 @@ import com.sondertara.joya.core.kernel.statement.StatementMetadata;
 import com.sondertara.joya.core.kernel.statement.TableRef;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -53,6 +55,47 @@ final class StatementPreparer {
 
     boolean hasRewriters() {
         return !rewriters.isEmpty();
+    }
+
+    /** SELECT 单表查询最常用的根表别名；探测时同时覆盖「带别名」与「无别名」两种形态。 */
+    private static final String PROBE_ROOT_ALIAS = "t0";
+
+    /**
+     * 只探测 {@code supports(ctx)}，不执行改写：用于判断优化路径（如原生批量 UPSERT）是否会被改写器影响。
+     *
+     * <p>逐个操作构建三种上下文（单条无别名、单条带别名、批量模板），任一改写器对任一操作声明支持
+     * 即视为「可能生效」——保守判定，避免把「改写器只在其他操作/其他形态生效」误判为安全而绕过行级过滤。
+     *
+     * <p>约定：{@code supports()} 的判定应只依赖 operation / entityType / tables / dbType；
+     * 若自定义改写器把 batch、rootAlias 或 attributes 作为必要条件，本门禁可能给出乐观结论。
+     */
+    boolean hasApplicableRewriters(Collection<Operation> operations,
+                                   @org.jspecify.annotations.Nullable Class<?> entityType,
+                                   Set<TableRef> tables,
+                                   @org.jspecify.annotations.Nullable DbType dbType) {
+        if (skipApplicableRewriteCheck(operations)) {
+            return false;
+        }
+        for (SqlRewriter rewriter : orderedRewriters()) {
+            for (Operation operation : operations) {
+                if (rewriter.supports(probe(operation, entityType, dbType, tables, null, false))
+                        || rewriter.supports(probe(operation, entityType, dbType, tables, PROBE_ROOT_ALIAS, false))
+                        || rewriter.supports(probe(operation, entityType, dbType, tables, null, true))) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private static SqlRewriteContext probe(Operation operation, @org.jspecify.annotations.Nullable Class<?> entityType,
+                                           @org.jspecify.annotations.Nullable DbType dbType, Set<TableRef> tables,
+                                           @org.jspecify.annotations.Nullable String rootAlias, boolean batch) {
+        return new SqlRewriteContext(operation, entityType, dbType, tables, rootAlias, batch, null);
+    }
+
+    private boolean skipApplicableRewriteCheck(Collection<Operation> operations) {
+        return rewriters.isEmpty() || operations == null || operations.isEmpty();
     }
 
     /**
@@ -199,8 +242,8 @@ final class StatementPreparer {
      * 将单个 {@link SqlRewriter} 应用于 AST 节点：
      * <ul>
      *   <li>{@link SqlNode.Count}：对内层 {@link SqlNode.Select} 应用改写后重包装；</li>
-     *   <li>{@link SqlNode.Upsert}：优先直接传入 {@link SqlNode.Upsert}；若改写器原样返回（如仅针对 {@link SqlNode.Insert} 编写的租户/审计改写器），
-     *       则对其内层 {@link SqlNode.Insert} 应用改写并自动同步新增更新列后重包装。</li>
+     *   <li>{@link SqlNode.Upsert}：仅允许改写器显式重写外层 {@link SqlNode.Upsert}；若改写器原样返回外层节点却修改了内层
+     *       {@link SqlNode.Insert}，由于各原生冲突分支均无行级 {@code WHERE} 守卫，立即抛 {@link SqlRewriteException} 显式拒绝。</li>
      * </ul>
      */
     private static SqlNode applySingleRewriter(SqlNode node, SqlRewriter rewriter, SqlRewriteContext ctx) {
@@ -221,20 +264,13 @@ final class StatementPreparer {
             }
             SqlNode innerRewritten = Objects.requireNonNull(rewriter.rewrite(upsert.insert(), ctx),
                     "SqlRewriter must not return null");
-            if (innerRewritten == upsert.insert()) {
-                return upsert;
-            }
-            if (!(innerRewritten instanceof SqlNode.Insert rewrittenInsert)) {
+            if (innerRewritten != upsert.insert()) {
                 throw new SqlRewriteException(
-                        "A SqlRewriter must keep the inner INSERT node of an upsert statement");
+                        "SqlRewriter 改写了 SqlNode.Upsert 的内层 INSERT，但未显式接管外层 Upsert 冲突语义："
+                                + "MERGE / ON CONFLICT / ON DUPLICATE KEY 冲突分支均无行级 WHERE 守卫，隐式改写会在主键冲突时绕过行级隔离。"
+                                + "请走带谓词的查询/更新路径，或由改写器显式重写外层 SqlNode.Upsert；仅处理 SELECT/UPDATE/DELETE 的改写器请勿改写 Insert。");
             }
-            List<String> updateColumns = new ArrayList<>(upsert.updateColumns());
-            for (String col : rewrittenInsert.columns()) {
-                if (!col.equals(upsert.keyColumn()) && !updateColumns.contains(col)) {
-                    updateColumns.add(col);
-                }
-            }
-            return new SqlNode.Upsert(rewrittenInsert, upsert.keyColumn(), updateColumns, upsert.style());
+            return upsert;
         }
         return Objects.requireNonNull(rewriter.rewrite(node, ctx), "SqlRewriter must not return null");
     }

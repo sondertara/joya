@@ -32,6 +32,11 @@ final class JoyaTransactionManagerResolver {
     static PlatformTransactionManager resolve(DataSource primaryDataSource,
                                               ObjectProvider<PlatformTransactionManager> txManagerProvider) {
         List<PlatformTransactionManager> managers = txManagerProvider.orderedStream().toList();
+        if (managers.isEmpty()) {
+            log.info("No Spring PlatformTransactionManager found; Joya uses its plain JDBC transaction engine "
+                    + "and @Transactional connection sharing is disabled.");
+            return null;
+        }
 
         List<PlatformTransactionManager> exact = managers.stream()
                 .filter(tm -> tm instanceof ResourceTransactionManager rtm

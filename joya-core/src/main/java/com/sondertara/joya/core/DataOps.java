@@ -51,8 +51,18 @@ public interface DataOps {
     <T> T withConnection(ConnectionCallback<T> action);
 
     /**
-     * 执行 SQL 脚本流（DDL / 初始化数据，不经过改写/观测管线）。与 {@link #withConnection} 一样，
-     * 在 {@code Tx} 上运行于事务连接。
+     * 执行轻量级 SQL 脚本流（面向测试建表与简单数据初始化的逃生舱）。
+     *
+     * <p>契约边界：
+     * <ul>
+     *   <li><b>连接归属</b>：与 {@link #withConnection} 一致，在 {@code JoyaClient} 上使用自动提交连接逐条执行；
+     *       在 {@link com.sondertara.joya.core.tx.Tx} 上运行于当前事务连接。</li>
+     *   <li><b>非原子性</b>：自动提交模式下前序已执行语句不会因后序语法/约束错误回滚；即便在 {@code Tx} 内，
+     *       部分数据库（如 MySQL / Oracle）执行 DDL 也会触发隐式提交。</li>
+     *   <li><b>旁路扩展点</b>：不经过 {@code SqlRewriter} 与 {@code SqlExecutionListener} 观测管线。</li>
+     *   <li><b>输入规模与语法范围</b>：整份脚本一次性读入内存做方言词法切分（支持注释/字符串/美元引号内分号与行首 {@code @DELIMITER} 指令），
+     *       不支持超大转储文件流式执行或 SQL Server {@code GO} / Oracle 独立 {@code /} 批分隔指令；生产库版本迁移请使用 Flyway / Liquibase。</li>
+     * </ul>
      */
     void script(Reader reader);
 

@@ -10,6 +10,12 @@ Maven Project（Spring Boot 3）
     <artifactId>joya-spring-boot-starter</artifactId>
     <version>1.0.0</version>
 </dependency>
+<!-- joya-spring-boot-starter 采用轻量旁路定位，不强制绑定特定连接池；
+     若宿主工程尚未引入连接池（如 spring-boot-starter-data-jpa / Druid），请一并引入 spring-boot-starter-jdbc 与对应数据库驱动 -->
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-jdbc</artifactId>
+</dependency>
 ```
 
 Maven Project（纯 Java）
@@ -63,6 +69,9 @@ spring:
 
 joya:
   sql-log: true
+  sql-log-print-args: false     # 默认只打印参数个数；开启后打印参数值
+  sql-log-redact-patterns:      # 按参数逻辑名脱敏，命中替换为 ***（默认已覆盖 password/secret/token 等）
+    - "(?i).*(password|passwd|secret|token|credential).*"
   primary:
     use-spring: true       # 默认 true：复用 spring.datasource；设为 false 时在当前节点下配置独立 url/username/password
     batch-size: 2048

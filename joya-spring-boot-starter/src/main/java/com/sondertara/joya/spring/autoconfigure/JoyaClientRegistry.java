@@ -20,7 +20,7 @@ import java.util.Set;
  * joyaRegistry.primary().from(UserAccount.class).where(...).list();
  * joyaRegistry.primary().mapper(UserAccountMapper.class).findByUserName("Alice");
  *
- * // 2. 扩展库操作（名称对应 joya.datasources.<name>）
+ * // 2. 扩展库操作（名称对应 joya.datasources[i].name 的值）
  * joyaRegistry.get("order").from(UserAccount.class).where(...).list();
  * joyaRegistry.get("order").mapper(UserAccountMapper.class).findByUserName("Alice");
  *

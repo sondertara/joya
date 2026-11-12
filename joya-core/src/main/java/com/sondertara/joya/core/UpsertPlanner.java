@@ -4,6 +4,8 @@ import com.sondertara.joya.core.kernel.dialect.Dialect;
 import com.sondertara.joya.core.kernel.executor.ExecutionOptions;
 import com.sondertara.joya.core.kernel.ExecutionKernel;
 import com.sondertara.joya.core.listener.EntityLifecycle;
+import com.sondertara.joya.core.kernel.statement.Operation;
+import com.sondertara.joya.core.kernel.statement.TableRef;
 import com.sondertara.joya.core.kernel.statement.UpsertStyle;
 import com.sondertara.joya.core.kernel.executor.BatchSlice;
 import com.sondertara.joya.core.kernel.statement.BatchSqlStatement;
@@ -34,8 +36,11 @@ import java.util.Set;
  * Upsert 规划器：负责单条与批量 {@code save} / {@code saveAll} 的主键存在性分片探测与插入/更新路由。
  *
  * <p><b>实现策略</b>：单条 {@code save} 与满足条件的 {@code saveAll} / {@code saveAllIgnoreNull}
- * （原生方言、无监听器、主键全非空）按列签名分组走原生 upsert；其余情况回退 select-then-write，
- * 该回退路径在并发插入同一主键时存在竞态，需要强一致性的场景请使用显式事务 + 唯一约束。
+ * （原生方言、无匹配改写器、主键非空）走原生 upsert；只要 {@code SELECT}/{@code INSERT}/{@code UPDATE}
+ * 任一操作存在可能生效的 {@code SqlRewriter}（如多租户行级过滤、审计列注入），单条与批量一致回退到
+ * 受 {@code WHERE} 保护的 select-then-write（可见则更新、不可见则插入），避免无条件冲突更新绕过行级过滤。
+ * 回退路径在并发插入同一主键时存在竞态，强一致性场景请使用显式事务 + 唯一约束；
+ * 批量回退在自动提交模式下跨连接执行，需要原子性时请包在 {@code joya.tx(...)} 内。
  */
 final class UpsertPlanner<T> {
 
@@ -64,7 +69,7 @@ final class UpsertPlanner<T> {
         boolean hasListeners = lifecycle.hasListenersFor(entity);
         if (pkVal instanceof Serializable) {
             Dialect dialect = kernel.dialect();
-            if (canUseNativeUpsert(dialect.upsertStyle())) {
+            if (!requiresGuardedFallback(dialect) && canUseNativeUpsert(dialect.upsertStyle())) {
                 MutationResult nativeResult = nativeUpsert(entity, ignoreNull, pkVal, hasListeners, dialect);
                 if (nativeResult != null) {
                     return nativeResult;
@@ -212,9 +217,9 @@ final class UpsertPlanner<T> {
         int batchPartitionSize = configuredBatchSize > 0 ? configuredBatchSize : ExecutionOptions.DEFAULT_BATCH_SIZE;
 
         boolean hasListeners = rows.stream().anyMatch(lifecycle::hasListenersFor);
-        if (!kernel.hasRewriters() && primaryKeys.stream().allMatch(Objects::nonNull)) {
+        if (primaryKeys.stream().allMatch(Objects::nonNull)) {
             Dialect dialect = kernel.dialect();
-            if (canUseNativeUpsert(dialect.upsertStyle())) {
+            if (!requiresGuardedFallback(dialect) && canUseNativeUpsert(dialect.upsertStyle())) {
                 Set<Object> existing = hasListeners
                         ? findExistingIds(kernel, meta, pk, primaryKeys)
                         : Set.of();
@@ -292,6 +297,29 @@ final class UpsertPlanner<T> {
             existing.addAll(rows);
         }
         return existing;
+    }
+
+    /**
+     * UPSERT 同时隐含 INSERT 与 UPDATE 语义，且回退路径必须先做 SELECT 存在性探测，
+     * 因此三者只要任一操作可能被改写，就必须回退到受行级 WHERE 保护的路径。
+     */
+    private static final Set<Operation> UPSERT_GUARD_OPERATIONS =
+            Set.of(Operation.SELECT, Operation.INSERT, Operation.UPDATE);
+
+    /**
+     * 是否必须回退到受行级 WHERE 保护的 select-then-write 路径。
+     *
+     * <p>判定口径与 {@code saveAll} 的既有门禁一致，但不再按「是否注册了任意改写器」一刀切：
+     * 只检查本实体、本表、{@code SELECT/INSERT/UPDATE} 三种操作是否有改写器声明支持。
+     * 这样「只处理其他实体或其他操作」的改写器不会让全库原生批量 UPSERT 失效。
+     */
+    private boolean requiresGuardedFallback(Dialect dialect) {
+        if (!kernel.hasRewriters()) {
+            return false;
+        }
+        Set<TableRef> tables = Set.of(TableRef.ofQualified(meta.qualifiedTableName(kernel.namingPolicy()), ""));
+        return kernel.hasApplicableRewriters(
+                UPSERT_GUARD_OPERATIONS, meta.entityType(), tables, dialect.dbType());
     }
 
     private boolean canUseNativeUpsert(UpsertStyle style) {

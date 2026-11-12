@@ -239,6 +239,26 @@ class AuditRegressionTest {
     }
 
     @Test
+    void knownDbTypeSkipsDriverProbeWhenBinding() throws Exception {
+        AtomicInteger probes = new AtomicInteger();
+        PreparedStatement ps = (PreparedStatement) Proxy.newProxyInstance(
+                getClass().getClassLoader(), new Class<?>[]{PreparedStatement.class},
+                (proxy, method, args) -> switch (method.getName()) {
+                    case "getConnection" -> {
+                        probes.incrementAndGet();
+                        throw new AssertionError("已知方言时不得再探测驱动");
+                    }
+                    case "hashCode" -> System.identityHashCode(proxy);
+                    case "equals" -> proxy == args[0];
+                    default -> null;
+                });
+
+        ParameterBinder.DEFAULT.bindValue(ps, 1, null, OffsetDateTime.now(), DbType.h2);
+
+        assertEquals(0, probes.get(), "已携带 DbType 时绑定不得触发 Oracle 方言探测");
+    }
+
+    @Test
     void transactionsStillBorrowOnlyFromConnectionProvider() {
         JdbcDataSource ds = new JdbcDataSource();
         ds.setURL("jdbc:h2:mem:audit_provider;DB_CLOSE_DELAY=-1");

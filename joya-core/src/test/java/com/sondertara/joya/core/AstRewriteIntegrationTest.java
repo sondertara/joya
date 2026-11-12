@@ -432,15 +432,33 @@ class AstRewriteIntegrationTest {
                 null);
         assertTrue(batch.ast() instanceof SqlNode.Upsert, "批量 UPSERT 必须保留 SqlNode.Upsert AST");
 
-        // 直接使用仅匹配 SqlNode.Insert 的 InsertTenantRewriter，验证 StatementPreparer 自动解包/重包装 Upsert
-        com.sondertara.joya.core.kernel.ExecutionKernel kernel =
+        // 1. 仅改写内层 SqlNode.Insert 的改写器必须被显式拒绝（防止无行级守卫时静默并入冲突分支）
+        com.sondertara.joya.core.kernel.ExecutionKernel innerOnlyKernel =
                 new com.sondertara.joya.core.kernel.ExecutionKernel(new com.sondertara.joya.core.kernel.ExecutionKernel.Config(
                         List.of(new InsertTenantRewriter("t_up")),
                         List.of(),
                         new com.sondertara.joya.core.kernel.connection.DataSourceConnectionProvider(dataSource, 0),
                         com.sondertara.joya.core.kernel.dialect.DialectStrategy.cached(dataSource), null, null, null, null, null));
+        assertThrows(SqlRewriteException.class, () -> innerOnlyKernel.batchExecute(batch));
 
-        kernel.batchExecute(batch);
+        // 2. 显式重写外层 SqlNode.Upsert 的改写器仍受支持并保留批量 AST 管线
+        SqlRewriter explicitUpsertRewriter = (node, ctx) -> {
+            if (node instanceof SqlNode.Upsert upsert) {
+                SqlNode.Insert rewrittenInsert = (SqlNode.Insert) new InsertTenantRewriter("t_up").rewrite(upsert.insert(), ctx);
+                List<String> updateCols = new ArrayList<>(upsert.updateColumns());
+                updateCols.add("tenant_id");
+                return new SqlNode.Upsert(rewrittenInsert, upsert.keyColumn(), updateCols, upsert.style());
+            }
+            return node;
+        };
+        com.sondertara.joya.core.kernel.ExecutionKernel explicitKernel =
+                new com.sondertara.joya.core.kernel.ExecutionKernel(new com.sondertara.joya.core.kernel.ExecutionKernel.Config(
+                        List.of(explicitUpsertRewriter),
+                        List.of(),
+                        new com.sondertara.joya.core.kernel.connection.DataSourceConnectionProvider(dataSource, 0),
+                        com.sondertara.joya.core.kernel.dialect.DialectStrategy.cached(dataSource), null, null, null, null, null));
+
+        explicitKernel.batchExecute(batch);
 
         JoyaClient verifier = JoyaClient.builder(dataSource).build();
         assertEquals("t_up", verifier.sql("SELECT tenant_id FROM t_ast_plain WHERE id = ?", 40L)
@@ -450,8 +468,53 @@ class AstRewriteIntegrationTest {
     }
 
     @Test
+    void save_crossTenantPrimaryKey_failsWithoutTouchingOtherTenantRow() {
+        List<String> t1ExecutedSql = new ArrayList<>();
+        JoyaClient t1Client = JoyaClient.builder(dataSource)
+                .rewriter(new TenantRewriter("t1"))
+                .rewriter(new InsertTenantRewriter("t1"))
+                .executionListener(new SqlExecutionListener() {
+                    @Override
+                    public void beforeExecute(SqlExecutionContext context) {
+                        t1ExecutedSql.add(context.statement().sql());
+                    }
+                })
+                .build();
+        JoyaClient verifier = JoyaClient.builder(dataSource).build();
+
+        // id=11 属于租户 t2：t1 调用 save / saveIgnoreNull 均不得进入原生 UPSERT，必须在 INSERT 阶段触发唯一键冲突，且 t2 数据与归属零改动
+        assertThrows(DbException.class, () -> t1Client.of(PlainUser.class).save(new PlainUser(11L, "pwned")));
+        assertThrows(DbException.class, () -> t1Client.of(PlainUser.class).saveIgnoreNull(new PlainUser(11L, "pwned-2")));
+        assertEquals("p2", verifier.sql("SELECT name FROM t_ast_plain WHERE id = ?", 11L).value(String.class).orElseThrow());
+        assertEquals("t2", verifier.sql("SELECT tenant_id FROM t_ast_plain WHERE id = ?", 11L).value(String.class).orElseThrow());
+        assertTrue(t1ExecutedSql.stream().noneMatch(sql -> sql.toUpperCase().contains("MERGE")),
+                "含 SqlRewriter 的客户端不得产出原生 MERGE/UPSERT: " + t1ExecutedSql);
+
+        // t1 保存新主键行：回退走 SELECT + INSERT 两条语句，正常写入 tenant_id='t1'
+        t1ExecutedSql.clear();
+        t1Client.of(PlainUser.class).save(new PlainUser(55L, "t1-new"));
+        assertEquals(2, t1ExecutedSql.size(), "含改写器客户端单条 save 应走 existsById + insert 两条 SQL");
+        assertTrue(t1ExecutedSql.stream().noneMatch(sql -> sql.toUpperCase().contains("MERGE")));
+        assertEquals("t1", verifier.sql("SELECT tenant_id FROM t_ast_plain WHERE id = ?", 55L).value(String.class).orElseThrow());
+
+        // 防回归：无改写器客户端单条 save 仍保持 1 条原生 UPSERT
+        List<String> plainSql = new ArrayList<>();
+        JoyaClient plainClient = JoyaClient.builder(dataSource)
+                .executionListener(new SqlExecutionListener() {
+                    @Override
+                    public void beforeExecute(SqlExecutionContext context) {
+                        plainSql.add(context.statement().sql());
+                    }
+                })
+                .build();
+        plainClient.of(PlainUser.class).save(new PlainUser(56L, "native-56"));
+        assertEquals(1, plainSql.size(), "无改写器客户端单条 save 必须保持 1 条原生 UPSERT");
+        assertTrue(plainSql.get(0).toUpperCase().startsWith("MERGE INTO"), plainSql.get(0));
+    }
+
+    @Test
     void saveAndSaveAll_workWithTenantAndInsertRewriters_andRejectBatchColumnReorder() {
-        // 1. 单条 save + Insert-only 租户改写器：自动作用于 SqlNode.Upsert 的内层 Insert
+        // 1. 单条 save + Insert-only 租户改写器：save 因存在 rewriter 回退，InsertTenantRewriter 在普通 INSERT 路径生效
         JoyaClient insertTenantClient = JoyaClient.builder(dataSource)
                 .rewriter(new InsertTenantRewriter("t_save"))
                 .build();
@@ -513,11 +576,22 @@ class AstRewriteIntegrationTest {
             }
             return node;
         };
-        JoyaClient unwrapClient = JoyaClient.builder(dataSource).rewriter(unwrapUpsertRewriter).build();
-        assertThrows(SqlRewriteException.class,
-                () -> unwrapClient.of(PlainUser.class).save(new PlainUser(70L, "u70")));
+        var plainMeta = LocalTableMetaCache.getMetadataContext(PlainUser.class);
+        SqlStatement singleUpsert = UpsertStatementFactory.create(
+                new com.sondertara.joya.core.statement.MutationContext(
+                        plainMeta,
+                        java.util.Map.of("id", 70L, "name", "u70"),
+                        null,
+                        java.util.Set.of("id", "name"),
+                        false,
+                        false,
+                        NamingPolicy.DEFAULT),
+                List.of("id", "name"),
+                "id",
+                UpsertStyle.MERGE,
+                null);
         BatchSqlStatement upsertBatch = UpsertStatementFactory.createBatch(
-                LocalTableMetaCache.getMetadataContext(PlainUser.class),
+                plainMeta,
                 List.of("id", "name"),
                 List.<Object[]>of(new Object[]{71L, "u71"}),
                 NamingPolicy.DEFAULT,
@@ -531,6 +605,7 @@ class AstRewriteIntegrationTest {
                         List.of(),
                         new com.sondertara.joya.core.kernel.connection.DataSourceConnectionProvider(dataSource, 0),
                         com.sondertara.joya.core.kernel.dialect.DialectStrategy.cached(dataSource), null, null, null, null, null));
+        assertThrows(SqlRewriteException.class, () -> unwrapKernel.update(singleUpsert));
         assertThrows(SqlRewriteException.class, () -> unwrapKernel.batchExecute(upsertBatch));
 
         // 批量 UPDATE 被改写为 DELETE 时同样被 validateRewrittenShape 拦截

@@ -6,6 +6,7 @@ import com.sondertara.joya.utils.Strings;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
 import org.springframework.boot.autoconfigure.jdbc.DataSourceProperties;
+import org.springframework.boot.jdbc.DataSourceBuilder;
 
 import javax.sql.DataSource;
 import java.util.ArrayList;
@@ -34,7 +35,8 @@ final class JoyaDataSourceFactory {
         if (dsBeanNames.length == 0) {
             throw new IllegalStateException(
                     "joya.primary.use-spring is true, but no Spring DataSource bean was found. "
-                            + "Configure spring.datasource.* or set joya.primary.use-spring=false with joya.primary.url.");
+                            + "Configure spring.datasource.* (with 'spring-boot-starter-jdbc' or a connection pool on the classpath) "
+                            + "or set joya.primary.use-spring=false with joya.primary.url.");
         }
         for (String candidateName : List.of(primaryName, "dataSource")) {
             for (String beanName : dsBeanNames) {
@@ -54,6 +56,14 @@ final class JoyaDataSourceFactory {
      * 按配置构造独立数据源，并把 {@code hikari} 子属性绑定到实例上。
      */
     static DataSource buildSelfManaged(String propertyPath, JoyaDataSourceProperties props) {
+        if (props.getType() == null && DataSourceBuilder.findType(props.getClassLoader()) == null) {
+            throw new IllegalStateException(
+                    "Failed to create self-managed Joya DataSource under '" + propertyPath
+                            + "': no supported connection pool implementation (such as HikariCP) was found on the classpath. "
+                            + "joya-spring-boot-starter is a lightweight sidecar and does not bundle a connection pool by default; "
+                            + "add 'org.springframework.boot:spring-boot-starter-jdbc' (or 'com.zaxxer:HikariCP'), "
+                            + "or explicitly configure '" + propertyPath + ".type'.");
+        }
         DataSource dataSource = props.initializeDataSourceBuilder().build();
         Map<String, Object> hikariProps = props.getHikari();
         if (hikariProps != null && !hikariProps.isEmpty()) {

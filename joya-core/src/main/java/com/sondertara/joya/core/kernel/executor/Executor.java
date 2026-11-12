@@ -4,7 +4,9 @@ import com.sondertara.joya.core.kernel.connection.ConnectionProvider;
 import com.sondertara.joya.core.kernel.error.SqlExceptionTranslator;
 import com.sondertara.joya.core.kernel.connection.ConnectionCallback;
 import com.sondertara.joya.core.kernel.statement.BatchSqlStatement;
+import com.sondertara.joya.core.kernel.statement.DbType;
 import com.sondertara.joya.core.kernel.statement.SqlStatement;
+import org.jspecify.annotations.Nullable;
 
 import java.io.Reader;
 import java.util.List;
@@ -61,4 +63,9 @@ public interface Executor {
 
     /** 执行 SQL 脚本。 */
     void runScript(Reader reader);
+
+    /** 按可选已知方言词法规则执行 SQL 脚本（默认回退 {@link #runScript(Reader)}）。 */
+    default void runScript(Reader reader, @Nullable DbType dbType) {
+        runScript(reader);
+    }
 }
