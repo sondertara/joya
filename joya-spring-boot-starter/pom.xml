@@ -9,6 +9,8 @@
     </parent>
     <modelVersion>4.0.0</modelVersion>
     <artifactId>joya-spring-boot-starter</artifactId>
+    <name>joya-spring-boot-starter</name>
+    <description>Spring Boot 3 auto-configuration, sidecar multi-DataSource registry, and transaction integration for Joya.</description>
 
     <properties>
         <maven.compiler.release>17</maven.compiler.release>

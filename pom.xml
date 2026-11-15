@@ -33,8 +33,8 @@
         <module>joya-spring-boot-starter</module>
     </modules>
     <scm>
-        <connection>scm:https://github.com/sondertara/joya.git</connection>
-        <developerConnection>scm:git@github.com:sondertara/joya.git</developerConnection>
+        <connection>scm:git:https://github.com/sondertara/joya.git</connection>
+        <developerConnection>scm:git:ssh://git@github.com/sondertara/joya.git</developerConnection>
         <url>https://github.com/sondertara/joya</url>
     </scm>
     <properties>
@@ -184,4 +184,60 @@
             <url>https://maven.pkg.github.com/sondertara/joya</url>
         </repository>
     </distributionManagement>
+
+    <profiles>
+        <!-- Maven Central Portal 发布配置；平时默认测试与 GitHub Packages 发布不受影响 -->
+        <profile>
+            <id>central</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-javadoc-plugin</artifactId>
+                        <version>3.12.0</version>
+                        <configuration>
+                            <doclint>none</doclint>
+                            <failOnError>true</failOnError>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <id>attach-javadocs</id>
+                                <goals>
+                                    <goal>jar</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-gpg-plugin</artifactId>
+                        <version>3.2.8</version>
+                        <configuration>
+                            <bestPractices>true</bestPractices>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <id>sign-artifacts</id>
+                                <phase>verify</phase>
+                                <goals>
+                                    <goal>sign</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.sonatype.central</groupId>
+                        <artifactId>central-publishing-maven-plugin</artifactId>
+                        <version>0.12.0</version>
+                        <extensions>true</extensions>
+                        <configuration>
+                            <publishingServerId>central</publishingServerId>
+                            <autoPublish>true</autoPublish>
+                            <waitUntil>published</waitUntil>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>

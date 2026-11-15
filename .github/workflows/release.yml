@@ -1,0 +1,58 @@
+name: Release to Maven Central
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      skip_upload:
+        description: '仅构建校验与签名打包，不上传到 Maven Central（dry-run）'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Build, Sign & Publish to Maven Central
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17 & Central credentials
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+          server-id: central
+          server-username: CENTRAL_TOKEN_USERNAME
+          server-password: CENTRAL_TOKEN_PASSWORD
+
+      - name: Verify Release tag matches project version
+        if: github.event_name == 'release'
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          POM_VERSION="$(mvn -B -ntp help:evaluate -Dexpression=project.version -q -DforceStdout)"
+          if [[ "$TAG_VERSION" != "$POM_VERSION" ]]; then
+            echo "Release tag ($GITHUB_REF_NAME -> $TAG_VERSION) 与 pom.xml project.version ($POM_VERSION) 不一致"
+            exit 1
+          fi
+
+      - name: Deploy to Maven Central Portal
+        run: |
+          SKIP_UPLOAD="${{ inputs.skip_upload == true }}"
+          mvn -B -ntp clean deploy -Pcentral -Dgpg.signer=bc -DskipUpload="$SKIP_UPLOAD"
+        env:
+          CENTRAL_TOKEN_USERNAME: ${{ secrets.CENTRAL_TOKEN_USERNAME }}
+          CENTRAL_TOKEN_PASSWORD: ${{ secrets.CENTRAL_TOKEN_PASSWORD }}
+          MAVEN_GPG_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}

@@ -10,6 +10,8 @@
     </parent>
 
     <artifactId>joya-core</artifactId>
+    <name>joya-core</name>
+    <description>Core lightweight ORM, type-safe fluent SQL DSL, and explicit value-based transaction engine for Joya.</description>
 
     <properties>
         <maven.compiler.release>17</maven.compiler.release>
