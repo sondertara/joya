@@ -4,6 +4,21 @@
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-11-15
+
+### Added（新增能力）
+- **方言感知的原生 SQL 命名参数绑定（`SqlOps` + `NamedSqlCompiler`）**：
+  - `joya.sql(...)` 新增 `bind(name, value)`、`bindMap(Map)` 与 `bindBean(bean)`，支持 `:name` 命名占位符（自动跳过字符串字面量、注释与 PostgreSQL `::type` 类型转换），非空集合与数组自动展开为 `?, ?, ...`。
+- **局部不可变派生配置视图（`DataOps.withSettings`）**：
+  - `JoyaSettings` 新增 `toBuilder()`，`DataOps` 新增 `withSettings(UnaryOperator<JoyaSettings>)`；`JoyaClient` 派生视图共享底层连接源与元数据缓存，`Tx` 派生视图自动受当前事务剩余 deadline 超时钳制。
+- **查询、分页与仓储门面易用性增强**：
+  - `PageResult` 新增 `<R> PageResult<R> map(Function)` 转换方法；`SortCondition` 新增基于类型化方法引用 `IGetter` 的 `SortCondition.asc(...)` / `desc(...)` 工厂；`WhereCriterion` 补充 `rangeIfPresent`、`eqIfNotBlank`、`neIfNotBlank`、`startsWithIfNotBlank`、`endsWithIfNotBlank`、`notInChunked`；`JoyaMapper` 补齐 `saveAll`、`patchAll`、`findPageByCondition`、`existsByCondition`、`countByCondition` 等快捷方法。
+- **Spring Boot 3 深度集成、容器数据源复用与可观测性（`joya-spring-boot-starter`）**：
+  - 默认自动装配惰性 `SpringSqlExceptionTranslator`，统一翻译为 Spring `DataAccessException` 异常体系。
+  - `joya.datasources` 支持通过 `data-source-bean` / `transaction-manager-bean` 复用容器既有 Bean，自动为扩展数据源注册带 `@Qualifier("<name>")` 的 `JoyaClient` Bean（与同名 `DataSource` 或用户自定义 Bean 自动避让）。
+  - 兼容绑定了 `DataSource` 的 `JpaTransactionManager` 共享事务连接与外层超时 deadline，并在 `TxStarter` 提供 `requiresNew()` 支持在外层托管事务内开启独立新事务。
+  - 扩展点自动发现新增 `TableNameResolver` 与 `Executor.Factory`（支持 `@Qualifier` 按数据源路由）；新增 `joya.slow-sql-threshold-ms` 慢 SQL `WARN` 告警与可选 `spring-boot-actuator` 旁路数据源健康检查 `joyaHealthContributor`。
+
 ### Security（安全加固）
 - **修复多租户场景下 `EntityOps.save` / `saveIgnoreNull` 的跨租户覆写风险**：
   - `UpsertPlanner.save` / `saveAll` 的计划期门禁改为「本实体 + 本表 + `SELECT` / `INSERT` / `UPDATE` 三操作任一存在匹配改写器」才回退（口径与 Performance 段一致）。命中时回退到受行级 `WHERE` 谓词保护的 `existsById` + `insert` / `updateByPrimaryKey` 路径，杜绝通过原生冲突更新覆盖其他租户同主键数据；只处理其他实体或其他操作的 `SqlRewriter` 不再阻断原生 UPSERT。
@@ -12,7 +27,6 @@
   - `ScriptRunner.printResults` 不再打印 `SELECT` 结果集的列名与单元格内容，仅输出 `SQL script result[rows=?, cols=?]` 摘要，与语句指纹脱敏策略保持一致。
 
 ### Fixed（缺陷修复）
-
 - `joya-spring-boot-starter` 的扩展点发现不再静默跳过 `FactoryBean` 形式的 Bean：类型探测允许 eager init，且单值扩展点在 Bean 创建中返回惰性代理（E-4）。
 - 开启 `joya.sql-log-print-args` 打印明文参数时，按 `joya.sql-log-redact-patterns`（默认覆盖 password/passwd/secret/token/credential）对敏感列脱敏，非法正则启动期失败。
 - **时间类型换算统一为“同一时刻”语义（E-2）**：
@@ -25,12 +39,13 @@
   - `JoyaTransactionManagerResolver` 在容器内无 `PlatformTransactionManager` 时输出 info 日志（说明 Joya 回退纯 JDBC 引擎、`@Transactional` 连接共享关闭），不再静默。
 
 ### Performance（性能）
-
 - `save` / `saveAll` 的原生 UPSERT 放行门禁由「是否注册了任意 `SqlRewriter`」细化为「本实体、本表在 `SELECT` / `INSERT` / `UPDATE` 上是否均无匹配改写器」：只作用于其他实体或其他操作的改写器不再让全库批量 UPSERT 退化为先查后写。
 - **参数绑定在已知方言时不再探测驱动（R-M1）**：
   - `ParameterBinder` 新增 `DbType` 重载并把方言透传到 `bindRawValue`，`isOracle` 在方言已知时直接判定；仅未知方言才回退 `DatabaseMetaData` 探测与 `WeakHashMap` 缓存，消除 Oracle 探测路径上的全局 `synchronized` 热锁。批量绑定同样按分片传入 `DbType`。
 
 ### Changed（行为与契约变更）
+- **`EntityListener` 收敛为实体自实现的零参前置钩子**：
+  - 移除全局 `EntityLifecycle`，`EntityListener` 精简为零项目内外部依赖的 `prePersist()` / `preUpdate()` 默认方法，由实体或公共 `BaseEntity` 自实现并在快照前触发（未实现该接口的实体在原生 UPSERT 下零额外探测开销）。
 - **分页执行可观测性升级为“物理执行主语句 + 逻辑双视图”（向后兼容构造器签名）**：
   - `SqlExecutionContext.statement()` 的契约统一修正为**实际送入 JDBC 执行器的物理语句**（包含方言 `LIMIT/OFFSET` 或 `OFFSET ... FETCH` 分页包装与 `COUNT(*)` 包装），消除默认 SQL 日志与慢查询监听的分页盲区。
   - `SqlExecutionContext` 新增 `PaginationView` 组件及 `inPage()`、`logicalStatement()`、`offset()`、`limit()` 访问器（保留原三参构造器兼容既有调用点）；需要访问结构化 AST 的监听器请读取 `ctx.logicalStatement().ast()`。

@@ -42,7 +42,7 @@ PageResult<OrderUserVO> page = joya.from(Order.class)
     .where(w -> w.eq(User::getUserName, "张三"))
     .orderByDesc(Order::getId)
     .select(Order::getId, Order::getAmount, User::getUserName)
-    .page(PageRequest.of(0, 10), OrderUserVO::new);
+    .page(OrderUserVO::new, PageRequest.of(0, 10));
 ```
 
 ## 3. 分组聚合统计
@@ -59,10 +59,29 @@ List<DeptStat> stats = joya.from(User.class)
     .list(DeptStat::new);
 ```
 
-## 4. 动态参数分页（`PageQueryParam` + `PageQueryParams`）
+## 4. 动态参数分页（`PageQueryRequest` + `PageQueryParams`）
 
 ```java
 PageResult<User> pageResult = joya.from(User.class)
-    .apply(PageQueryParams.of(pageQueryParam))
-    .page(pageQueryParam.toPageRequest());
+    .apply(PageQueryParams.of(pageQueryRequest))
+    .page(pageQueryRequest.toPageRequest());
+```
+
+## 5. 原生 SQL 与 `:name` 命名参数（`joya.sql`）
+
+```java
+List<User> matched = joya.sql("SELECT * FROM t_user WHERE status = :status AND id IN (:ids)")
+    .bind("status", 1)
+    .bind("ids", List.of(1L, 2L, 3L))
+    .list(User.class);
+```
+
+## 6. 显式事务与保存点（`joya.tx`）
+
+```java
+joya.tx(tx -> {
+    tx.of(User.class).insert(user);
+    tx.savepoint(sp -> sp.of(WelcomeCoupon.class).insert(coupon));
+    tx.afterCommit(() -> log.info("Committed user: {}", user.getId()));
+});
 ```

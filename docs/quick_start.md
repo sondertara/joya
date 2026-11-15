@@ -30,7 +30,7 @@ Maven Project（纯 Java）
 
 ## Spring Boot 3 集成 :id=spring_boot
 
-引入 `joya-spring-boot-starter` 后，默认自动复用 Spring 容器原生的 `spring.datasource` 并装配 `JoyaClient` 与 `JoyaClientRegistry`：
+引入 `joya-spring-boot-starter` 后，默认复用 Spring 容器原生的 `spring.datasource` 装配主 `@Primary JoyaClient` 与 `JoyaClientRegistry`，并为扩展数据源自动注册 `@Qualifier("<name>") JoyaClient`：
 
 ```java
 @Service
@@ -38,6 +38,10 @@ public class UserService {
 
     @Autowired
     private JoyaClient joya;
+
+    @Autowired
+    @Qualifier("order")
+    private JoyaClient orderJoya;
 
     @Autowired
     private JoyaClientRegistry joyaRegistry;
@@ -50,9 +54,8 @@ public class UserService {
     }
 
     public Optional<UserAccount> findFromOrderDb(String name) {
-        // 使用免扫描 JoyaMapper 跨库查询
-        return joyaRegistry.get("order")
-            .mapper(UserAccountMapper.class)
+        // 直接使用按名称注入的客户端或通过 joyaRegistry.get("order") 获取免扫描 JoyaMapper
+        return orderJoya.mapper(UserAccountMapper.class)
             .findByUserName(name);
     }
 }
@@ -72,13 +75,17 @@ joya:
   sql-log-print-args: false     # 默认只打印参数个数；开启后打印参数值
   sql-log-redact-patterns:      # 按参数逻辑名脱敏，命中替换为 ***（默认已覆盖 password/secret/token 等）
     - "(?i).*(password|passwd|secret|token|credential).*"
+  slow-sql-threshold-ms: 500    # 慢 SQL 阈值（毫秒）：超阈值语句以 WARN 级别输出
   primary:
-    use-spring: true       # 默认 true：复用 spring.datasource；设为 false 时在当前节点下配置独立 url/username/password
+    use-spring: true            # 默认 true：复用 spring.datasource；设为 false 时在当前节点下配置独立 url/username/password
     batch-size: 2048
   datasources:
-    - name: order
+    - name: order               # 自建旁路连接池
       url: jdbc:mysql://localhost:3306/order_db
       username: root
       password: secret
       batch-size: 512
+    - name: archive             # 复用容器中已有的 DataSource / PlatformTransactionManager Bean
+      data-source-bean: archiveDataSource
+      transaction-manager-bean: archiveTxManager
 ```
