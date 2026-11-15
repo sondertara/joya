@@ -1,6 +1,5 @@
 package com.sondertara.joya.core.tx;
 
-import com.sondertara.joya.core.listener.EntityLifecycle;
 import com.sondertara.joya.core.kernel.ExecutionKernel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -32,19 +31,17 @@ public final class TxStarter {
     private final ExecutionKernel kernel;
     private final TxEngine txEngine;
     private final TxOptions options;
-    private final EntityLifecycle entityLifecycle;
 
-    public TxStarter(ExecutionKernel kernel, TxEngine txEngine, TxOptions options, EntityLifecycle entityLifecycle) {
+    public TxStarter(ExecutionKernel kernel, TxEngine txEngine, TxOptions options) {
         this.kernel = Objects.requireNonNull(kernel, "kernel must not be null");
         this.txEngine = Objects.requireNonNull(txEngine, "txEngine must not be null");
         this.options = Objects.requireNonNull(options, "options must not be null");
-        this.entityLifecycle = entityLifecycle == null ? EntityLifecycle.EMPTY : entityLifecycle;
     }
 
     // ===== 流式配置（每个方法返回新实例） =====
 
     public TxStarter isolation(Isolation isolation) {
-        return new TxStarter(kernel, txEngine, options.withIsolation(isolation), entityLifecycle);
+        return new TxStarter(kernel, txEngine, options.withIsolation(isolation));
     }
 
     public TxStarter serializable() {
@@ -52,7 +49,7 @@ public final class TxStarter {
     }
 
     public TxStarter readOnly() {
-        return new TxStarter(kernel, txEngine, options.withReadOnly(true), entityLifecycle);
+        return new TxStarter(kernel, txEngine, options.withReadOnly(true));
     }
 
     /** 事务超时：超时后后续语句抛 {@link TxTimeoutException}，并作为语句级 queryTimeout 下沉。 */
@@ -61,7 +58,15 @@ public final class TxStarter {
     }
 
     public TxStarter timeout(Duration timeout) {
-        return new TxStarter(kernel, txEngine, options.withTimeout(timeout), entityLifecycle);
+        return new TxStarter(kernel, txEngine, options.withTimeout(timeout));
+    }
+
+    /**
+     * 声明需要开启全新独立事务（Spring 集成引擎下对应 {@code PROPAGATION_REQUIRES_NEW}，会挂起外层
+     * {@code @Transactional} 并单独提交/回滚；纯 JDBC 引擎每次 {@code tx()} 本身即独立连接事务）。
+     */
+    public TxStarter requiresNew() {
+        return new TxStarter(kernel, txEngine, options.withRequiresNew(true));
     }
 
     /**
@@ -70,7 +75,7 @@ public final class TxStarter {
      * 期间注册的 {@link Tx#afterCompletion} 仅在最终尝试完成时触发一次。
      */
     public TxStarter retryOnDeadlock(int maxAttempts) {
-        return new TxStarter(kernel, txEngine, options.withRetryAttempts(maxAttempts), entityLifecycle);
+        return new TxStarter(kernel, txEngine, options.withRetryAttempts(maxAttempts));
     }
 
     // ===== 终端操作 =====
@@ -84,7 +89,7 @@ public final class TxStarter {
     private TxImpl open() {
         TxSession session = txEngine.open(kernel, options);
         try {
-            return new TxImpl(kernel, session, entityLifecycle);
+            return new TxImpl(kernel, session);
         } catch (Throwable wrapFailure) {
             try {
                 session.close();

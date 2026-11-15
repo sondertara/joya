@@ -74,10 +74,9 @@ class ArchitectureGuardTest {
     }
 
     @Test
-    void listenerMayOnlyDependOnListenerAndKernelOrdered() throws IOException {
+    void listenerMayNotDependOnAnyOtherProjectPackage() throws IOException {
         assertOnlyAllowedImports(corePackage("listener"), Set.of(
-                "com.sondertara.joya.core.listener",
-                "com.sondertara.joya.core.kernel.support.Ordered"
+                "com.sondertara.joya.core.listener"
         ));
     }
 
@@ -239,7 +238,6 @@ class ArchitectureGuardTest {
                 "com.sondertara.joya.core.JoyaSettings",
                 "com.sondertara.joya.core.SqlOps",
                 "com.sondertara.joya.core.kernel",
-                "com.sondertara.joya.core.listener",
                 "com.sondertara.joya.core.query.dsl.Query",
                 "com.sondertara.joya.utils",
                 "com.sondertara.joya.exceptions"

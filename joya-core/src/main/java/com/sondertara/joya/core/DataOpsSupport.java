@@ -4,7 +4,6 @@ import com.sondertara.joya.core.kernel.ExecutionKernel;
 import com.sondertara.joya.core.kernel.connection.ConnectionCallback;
 import com.sondertara.joya.core.kernel.statement.DbType;
 import com.sondertara.joya.core.kernel.statement.SqlStatement;
-import com.sondertara.joya.core.listener.EntityLifecycle;
 import com.sondertara.joya.core.mapper.JdkMapperProxy;
 import com.sondertara.joya.core.query.dsl.Query;
 
@@ -28,7 +27,6 @@ public final class DataOpsSupport {
 
     private final DataOps owner;
     private final ExecutionKernel kernel;
-    private final EntityLifecycle entityLifecycle;
     private final JoyaSettings settings;
     private final boolean concurrent;
     private final Runnable accessGuard;
@@ -37,12 +35,10 @@ public final class DataOpsSupport {
 
     private DataOpsSupport(DataOps owner,
                            ExecutionKernel kernel,
-                           EntityLifecycle entityLifecycle,
                            boolean concurrent,
                            Runnable accessGuard) {
         this.owner = Objects.requireNonNull(owner, "owner must not be null");
         this.kernel = Objects.requireNonNull(kernel, "kernel must not be null");
-        this.entityLifecycle = entityLifecycle == null ? EntityLifecycle.EMPTY : entityLifecycle;
         this.settings = JoyaSettings.of(kernel.executionOptions(), kernel.namingPolicy());
         this.concurrent = concurrent;
         this.accessGuard = accessGuard == null ? NOOP : accessGuard;
@@ -53,16 +49,15 @@ public final class DataOpsSupport {
     }
 
     /** 创建多线程共享的客户端门面委托。 */
-    public static DataOpsSupport concurrent(DataOps owner, ExecutionKernel kernel, EntityLifecycle entityLifecycle) {
-        return new DataOpsSupport(owner, kernel, entityLifecycle, true, NOOP);
+    public static DataOpsSupport concurrent(DataOps owner, ExecutionKernel kernel) {
+        return new DataOpsSupport(owner, kernel, true, NOOP);
     }
 
     /** 创建单线程独占的事务门面委托（所有入口调用前先触发 {@code accessGuard}）。 */
     public static DataOpsSupport singleThread(DataOps owner,
                                               ExecutionKernel kernel,
-                                              EntityLifecycle entityLifecycle,
                                               Runnable accessGuard) {
-        return new DataOpsSupport(owner, kernel, entityLifecycle, false, accessGuard);
+        return new DataOpsSupport(owner, kernel, false, accessGuard);
     }
 
     public <T> Query<T> from(Class<T> entityType) {
@@ -78,7 +73,7 @@ public final class DataOpsSupport {
             opsCache = new HashMap<>(4);
         }
         return (EntityOps<T>) opsCache.computeIfAbsent(entityType,
-                type -> EntityOps.of(kernel, (Class<Object>) type, entityLifecycle));
+                type -> EntityOps.of(kernel, (Class<Object>) type));
     }
 
     public SqlOps sql(String sql, Object... args) {

@@ -110,6 +110,45 @@ final class JoyaDataSourceFactory {
         }
     }
 
+    /**
+     * 校验复用容器既有 {@link DataSource} Bean 时不得同时配置自建连接/连接池属性，避免语义歧义。
+     */
+    static void validateBeanReference(String propertyPath, JoyaDataSourceProperties props) {
+        List<String> conflicts = new ArrayList<>();
+        if (Strings.isNotBlank(props.getUrl())) {
+            conflicts.add(propertyPath + ".url");
+        }
+        if (Strings.isNotBlank(props.getUsername())) {
+            conflicts.add(propertyPath + ".username");
+        }
+        if (Strings.isNotBlank(props.getPassword())) {
+            conflicts.add(propertyPath + ".password");
+        }
+        if (Strings.isNotBlank(props.getDriverClassName())) {
+            conflicts.add(propertyPath + ".driver-class-name");
+        }
+        if (props.getType() != null) {
+            conflicts.add(propertyPath + ".type");
+        }
+        if (Strings.isNotBlank(props.getJndiName())) {
+            conflicts.add(propertyPath + ".jndi-name");
+        }
+        if (props.getHikari() != null && !props.getHikari().isEmpty()) {
+            conflicts.add(propertyPath + ".hikari");
+        }
+        DataSourceProperties.Xa xa = props.getXa();
+        if (xa != null && (Strings.isNotBlank(xa.getDataSourceClassName())
+                || (xa.getProperties() != null && !xa.getProperties().isEmpty()))) {
+            conflicts.add(propertyPath + ".xa");
+        }
+        if (!conflicts.isEmpty()) {
+            throw new IllegalStateException(
+                    "Conflicting Joya DataSource configuration under '" + propertyPath + "': "
+                            + "'data-source-bean' cannot be combined with connection/pool properties ("
+                            + String.join(", ", conflicts) + ").");
+        }
+    }
+
     static boolean hasCustomConnectionConfig(PrimaryDataSourceProperties props) {
         return Strings.isNotBlank(props.getUrl())
                 || Strings.isNotBlank(props.getUsername())

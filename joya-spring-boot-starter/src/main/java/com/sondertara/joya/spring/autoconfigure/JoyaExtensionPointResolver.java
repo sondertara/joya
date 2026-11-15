@@ -22,9 +22,10 @@ import java.util.Set;
 /**
  * Joya 扩展点 Bean 发现与路由：
  * <ul>
- *   <li>多值扩展点（{@code SqlRewriter} / {@code SqlExecutionListener} / {@code EntityListener}）：
+ *   <li>多值扩展点（{@code SqlRewriter} / {@code SqlExecutionListener}）：
  *       无 {@code @Qualifier} 的全局 Bean + 限定为 {@code @Qualifier(clientName)} 的 Bean；</li>
- *   <li>单值扩展点（{@code RowMapperFactory} / {@code SqlExceptionTranslator}）：
+ *   <li>单值扩展点（{@code RowMapperFactory} / {@code SqlExceptionTranslator} /
+ *       {@code TableNameResolver} / {@code Executor.Factory}）：
  *       限定名优先，同一级别多个候选启动失败；</li>
  *   <li>Bean 正在创建（循环依赖）时返回惰性代理，排序在首次执行时进行。</li>
  * </ul>

@@ -88,7 +88,9 @@ public final class SpringTxEngine implements TxEngine {
         Objects.requireNonNull(rootKernel, "rootKernel must not be null");
         Objects.requireNonNull(options, "options must not be null");
 
-        boolean existingTxForDataSource = TransactionSynchronizationManager.getResource(dataSource) != null
+        boolean requiresNew = options.requiresNew();
+        boolean existingTxForDataSource = !requiresNew
+                && TransactionSynchronizationManager.getResource(dataSource) != null
                 && TransactionSynchronizationManager.isActualTransactionActive();
         if (existingTxForDataSource && options.hasExplicitIsolation()) {
             Integer currentIso = TransactionSynchronizationManager.getCurrentTransactionIsolationLevel();
@@ -102,7 +104,10 @@ public final class SpringTxEngine implements TxEngine {
             throw new TxException("Cannot enforce readOnly=true when joining an existing read-write Spring transaction.");
         }
 
-        DefaultTransactionDefinition def = new DefaultTransactionDefinition(TransactionDefinition.PROPAGATION_REQUIRED);
+        int propagation = requiresNew
+                ? TransactionDefinition.PROPAGATION_REQUIRES_NEW
+                : TransactionDefinition.PROPAGATION_REQUIRED;
+        DefaultTransactionDefinition def = new DefaultTransactionDefinition(propagation);
         if (options.hasExplicitIsolation()) {
             def.setIsolationLevel(options.isolation().getValue());
         }
@@ -116,7 +121,7 @@ public final class SpringTxEngine implements TxEngine {
         TransactionStatus status = null;
         try {
             status = transactionManager.getTransaction(def);
-            return new SpringTxSession(rootKernel, transactionManager, status, options);
+            return new SpringTxSession(rootKernel, dataSource, transactionManager, status, options);
         } catch (Throwable beginFailure) {
             if (status != null) {
                 try {
@@ -173,6 +178,7 @@ public final class SpringTxEngine implements TxEngine {
     private static final class SpringTxSession implements TxSession {
 
         private final ExecutionKernel rootKernel;
+        private final DataSource dataSource;
         private final PlatformTransactionManager txManager;
         private final TransactionStatus status;
         private final boolean synchronizationActiveAtStart;
@@ -183,9 +189,10 @@ public final class SpringTxEngine implements TxEngine {
         private boolean completed;
         private boolean closed;
 
-        SpringTxSession(ExecutionKernel rootKernel, PlatformTransactionManager txManager,
+        SpringTxSession(ExecutionKernel rootKernel, DataSource dataSource, PlatformTransactionManager txManager,
                         TransactionStatus status, TxOptions options) {
             this.rootKernel = rootKernel;
+            this.dataSource = dataSource;
             this.txManager = txManager;
             this.status = status;
             this.synchronizationActiveAtStart = TransactionSynchronizationManager.isActualTransactionActive();
@@ -225,7 +232,24 @@ public final class SpringTxEngine implements TxEngine {
 
         @Override
         public OptionalInt queryTimeoutSeconds() {
-            return support.resolveQueryTimeoutSeconds(TxSessionSupport.resolveDefaultQueryTimeout(rootKernel));
+            return minPositive(deadlineTimeoutSeconds(), TxSessionSupport.resolveDefaultQueryTimeout(rootKernel));
+        }
+
+        @Override
+        public OptionalInt deadlineTimeoutSeconds() {
+            OptionalInt ownDeadline = support.resolveQueryTimeoutSeconds(OptionalInt.empty());
+            OptionalInt holderDeadline = SpringConnectionProvider.currentTransactionDeadlineSeconds(dataSource);
+            return minPositive(ownDeadline, holderDeadline);
+        }
+
+        private static OptionalInt minPositive(OptionalInt a, OptionalInt b) {
+            if (a == null || a.isEmpty()) {
+                return b != null ? b : OptionalInt.empty();
+            }
+            if (b == null || b.isEmpty()) {
+                return a;
+            }
+            return OptionalInt.of(Math.min(a.getAsInt(), b.getAsInt()));
         }
 
         @Override

@@ -3,6 +3,7 @@ package com.sondertara.joya.core.tx;
 import com.sondertara.joya.core.kernel.connection.ConnectionProvider;
 
 import java.sql.SQLException;
+import java.util.OptionalInt;
 import java.util.function.Consumer;
 
 /**
@@ -57,6 +58,11 @@ public interface TxSession extends ConnectionProvider, AutoCloseable {
      */
     default boolean isPhysicalRollbackConfirmed() {
         return false;
+    }
+
+    /** 事务自身截止时间对应的语句超时秒数（仅事务级 deadline；不含客户端默认语句超时）。 */
+    default OptionalInt deadlineTimeoutSeconds() {
+        return OptionalInt.empty();
     }
 
     @Override

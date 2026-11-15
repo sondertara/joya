@@ -1,8 +1,6 @@
 package com.sondertara.joya.core;
 
 import com.sondertara.joya.core.jdbc.resultset.mapper.DefaultRowMapperFactory;
-import com.sondertara.joya.core.listener.EntityLifecycle;
-import com.sondertara.joya.core.listener.EntityListener;
 import com.sondertara.joya.core.kernel.connection.ConnectionCallback;
 import com.sondertara.joya.core.kernel.statement.DbType;
 import com.sondertara.joya.core.kernel.ExecutionKernel;
@@ -27,6 +25,7 @@ import java.io.Reader;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.function.UnaryOperator;
 
 /**
  * Joya 统一客户端门面 —— 实现 {@link DataOps}（1 {@code JoyaClient} = 1 {@link DataSource}）：
@@ -44,11 +43,16 @@ public final class JoyaClient implements DataOps {
 
     private final ExecutionKernel kernel;
     private final TxEngine txEngine;
-    private final EntityLifecycle entityLifecycle;
     private final DataOpsSupport dataOps;
 
     public JoyaClient(DataSource dataSource) {
         this(builder(dataSource));
+    }
+
+    private JoyaClient(ExecutionKernel kernel, TxEngine txEngine) {
+        this.kernel = Objects.requireNonNull(kernel, "kernel must not be null");
+        this.txEngine = Objects.requireNonNull(txEngine, "txEngine must not be null");
+        this.dataOps = DataOpsSupport.concurrent(this, kernel);
     }
 
     private JoyaClient(Builder builder) {
@@ -78,9 +82,6 @@ public final class JoyaClient implements DataOps {
                             + ") cannot be paired with TxEngine.JDBC; configure a matching TxEngine (e.g. SpringTxEngine)");
         }
         this.txEngine.validateConfiguration(builder.dataSource, effectiveConnections);
-        this.entityLifecycle = builder.entityListeners.isEmpty()
-                ? EntityLifecycle.EMPTY
-                : new EntityLifecycle(builder.entityListeners);
         this.kernel = new ExecutionKernel(new ExecutionKernel.Config(
                 builder.rewriters,
                 builder.executionListeners,
@@ -91,7 +92,7 @@ public final class JoyaClient implements DataOps {
                 builder.rowMapperFactory,
                 builder.exceptionTranslator,
                 builder.executorFactory));
-        this.dataOps = DataOpsSupport.concurrent(this, kernel, entityLifecycle);
+        this.dataOps = DataOpsSupport.concurrent(this, kernel);
     }
 
     /** 快捷创建客户端。 */
@@ -137,7 +138,7 @@ public final class JoyaClient implements DataOps {
      * 开启事务配置与执行向导 {@link TxStarter}（需自定义隔离级别、只读、超时或死锁重试时使用）。
      */
     public TxStarter tx() {
-        return new TxStarter(kernel, txEngine, TxOptions.DEFAULT, entityLifecycle);
+        return new TxStarter(kernel, txEngine, TxOptions.DEFAULT);
     }
 
     /**
@@ -184,6 +185,21 @@ public final class JoyaClient implements DataOps {
         return dataOps.settings();
     }
 
+    /**
+     * 基于当前客户端配置派生一个新的轻量级 {@link JoyaClient} 视图（共享数据源、连接来源、扩展链与事务引擎）。
+     */
+    @Override
+    public JoyaClient withSettings(UnaryOperator<JoyaSettings> customizer) {
+        Objects.requireNonNull(customizer, "customizer must not be null");
+        JoyaSettings current = dataOps.settings();
+        JoyaSettings next = Objects.requireNonNull(customizer.apply(current),
+                "settings customizer must not return null");
+        if (next.equals(current)) {
+            return this;
+        }
+        return new JoyaClient(kernel.withSettings(next.executionOptions(), next.namingPolicy()), txEngine);
+    }
+
     @Override
     public DbType dbType() {
         return dataOps.dbType();
@@ -195,7 +211,6 @@ public final class JoyaClient implements DataOps {
         private final DataSource dataSource;
         private final List<SqlRewriter> rewriters = new ArrayList<>();
         private final List<SqlExecutionListener> executionListeners = new ArrayList<>();
-        private final List<EntityListener> entityListeners = new ArrayList<>();
         private ConnectionProvider connectionProvider;
         private TxEngine txEngine;
         private DialectStrategy dialectStrategy;
@@ -255,20 +270,6 @@ public final class JoyaClient implements DataOps {
             return this;
         }
 
-        /** 注册全局实体生命周期监听器（审计、日志等）。 */
-        public Builder entityListener(EntityListener listener) {
-            this.entityListeners.add(Objects.requireNonNull(listener, "entityListener must not be null"));
-            return this;
-        }
-
-        /** 批量注册全局实体生命周期监听器。 */
-        public Builder entityListeners(List<EntityListener> listeners) {
-            if (listeners != null) {
-                this.entityListeners.addAll(listeners);
-            }
-            return this;
-        }
-
         /** 设置默认查询超时秒数（{@code <= 0} 表示不限制；直接合并至当前 {@link JoyaSettings}）。 */
         public Builder queryTimeoutSeconds(int queryTimeoutSeconds) {
             this.settings = this.settings.withQueryTimeoutSeconds(queryTimeoutSeconds);
@@ -309,6 +310,14 @@ public final class JoyaClient implements DataOps {
         /** 设置实例级客户端配置。 */
         public Builder settings(JoyaSettings settings) {
             this.settings = Objects.requireNonNull(settings, "settings must not be null");
+            return this;
+        }
+
+        /** 基于当前配置增量定制实例级客户端配置。 */
+        public Builder settings(UnaryOperator<JoyaSettings> customizer) {
+            Objects.requireNonNull(customizer, "customizer must not be null");
+            this.settings = Objects.requireNonNull(customizer.apply(this.settings),
+                    "settings customizer must not return null");
             return this;
         }
 

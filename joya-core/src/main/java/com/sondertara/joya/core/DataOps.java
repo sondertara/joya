@@ -6,6 +6,7 @@ import com.sondertara.joya.core.kernel.statement.SqlStatement;
 import com.sondertara.joya.core.query.dsl.Query;
 
 import java.io.Reader;
+import java.util.function.UnaryOperator;
 
 /**
  * 数据操作入口 —— Joya 统一的数据操作门面：{@code 入口.from(实体)}（统一查询）、{@code 入口.of(实体)}（实体写与按主键读）
@@ -31,7 +32,7 @@ public interface DataOps {
     /** 实体域操作入口（实体级写操作、列级变更构建器、按主键快捷读）。 */
     <T> EntityOps<T> of(Class<T> entityType);
 
-    /** 裸 SQL 入口；占位符为 {@code ?}。 */
+    /** 参数化原生 SQL 入口（支持 {@code ?} 位置参数，或不传 {@code args} 时经 {@link SqlOps#bind} / {@link SqlOps#bindMap} / {@link SqlOps#bindBean} 绑定 {@code :name} 具名参数）。 */
     SqlOps sql(String sql, Object... args);
 
     /** 已构建 {@link SqlStatement} 执行入口（完整保留表名与操作类型元数据）。 */
@@ -75,6 +76,14 @@ public interface DataOps {
     default JoyaSettings settings() {
         return JoyaSettings.DEFAULT;
     }
+
+    /**
+     * 基于当前配置派生一个新的 {@link DataOps} 视图，仅调整部分 {@link JoyaSettings}（如动态表名解析器、查询超时、批大小等）。
+     *
+     * <p>派生视图共享底层连接来源语义与事务边界：在 {@link JoyaClient} 上返回新的 {@link JoyaClient}，
+     * 在 {@link com.sondertara.joya.core.tx.Tx} 上返回受同一事务状态与所有者线程约束的操作视图。
+     */
+    DataOps withSettings(UnaryOperator<JoyaSettings> customizer);
 
     /**
      * 获取当前数据操作上下文绑定的数据库方言类型（默认返回 {@link DbType#other}）。

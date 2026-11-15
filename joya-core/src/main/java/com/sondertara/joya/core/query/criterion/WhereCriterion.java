@@ -339,6 +339,43 @@ public class WhereCriterion implements OnPredicate {
         return between(columnName, leftValue, rightValue);
     }
 
+    /**
+     * 可选闭区间条件：两端均非空时生成 {@code BETWEEN min AND max}；仅左值非空时降级为 {@code >= min}；
+     * 仅右值非空时降级为 {@code <= max}；均为空时跳过。
+     */
+    public <T> WhereCriterion rangeIfPresent(IGetter<T, ?> fn,
+                                             @Nullable Object minInclusive,
+                                             @Nullable Object maxInclusive) {
+        if (minInclusive != null && maxInclusive != null) {
+            return between(fn, minInclusive, maxInclusive);
+        }
+        if (minInclusive != null) {
+            return gte(fn, minInclusive);
+        }
+        if (maxInclusive != null) {
+            return lte(fn, maxInclusive);
+        }
+        return this;
+    }
+
+    /**
+     * 按列名构建可选闭区间条件：两端均非空生成 {@code BETWEEN}；单端非空降级为 {@code >=} 或 {@code <=}；全空跳过。
+     */
+    public WhereCriterion rangeIfPresent(String columnName,
+                                         @Nullable Object minInclusive,
+                                         @Nullable Object maxInclusive) {
+        if (minInclusive != null && maxInclusive != null) {
+            return between(columnName, minInclusive, maxInclusive);
+        }
+        if (minInclusive != null) {
+            return gte(columnName, minInclusive);
+        }
+        if (maxInclusive != null) {
+            return lte(columnName, maxInclusive);
+        }
+        return this;
+    }
+
     public <T> WhereCriterion notBetween(IGetter<T, ?> fn, Object leftValue, Object rightValue) {
         return addBetween(
                 ColumnMetaProvider.fromGetter(fn),
@@ -559,17 +596,47 @@ public class WhereCriterion implements OnPredicate {
     }
 
     public <T> WhereCriterion notContainsIfNotBlank(IGetter<T, ?> fn, @Nullable Object value) {
-        if (value == null || Strings.isBlank(value.toString())) {
-            return this;
-        }
-        return notContains(fn, value);
+        return isNotBlankValue(value) ? notContains(fn, value) : this;
     }
 
     public WhereCriterion notContainsIfNotBlank(String columnName, @Nullable Object value) {
-        if (value == null || Strings.isBlank(value.toString())) {
-            return this;
-        }
-        return notContains(columnName, value);
+        return isNotBlankValue(value) ? notContains(columnName, value) : this;
+    }
+
+    public <T> WhereCriterion likeIfNotBlank(IGetter<T, ?> fn, @Nullable Object pattern) {
+        return isNotBlankValue(pattern) ? like(fn, pattern) : this;
+    }
+
+    public WhereCriterion likeIfNotBlank(String columnName, @Nullable Object pattern) {
+        return isNotBlankValue(pattern) ? like(columnName, pattern) : this;
+    }
+
+    public <T> WhereCriterion notLikeIfNotBlank(IGetter<T, ?> fn, @Nullable Object pattern) {
+        return isNotBlankValue(pattern) ? notLike(fn, pattern) : this;
+    }
+
+    public WhereCriterion notLikeIfNotBlank(String columnName, @Nullable Object pattern) {
+        return isNotBlankValue(pattern) ? notLike(columnName, pattern) : this;
+    }
+
+    public <T> WhereCriterion notStartsWithIfNotBlank(IGetter<T, ?> fn, @Nullable Object value) {
+        return isNotBlankValue(value) ? notStartsWith(fn, value) : this;
+    }
+
+    public WhereCriterion notStartsWithIfNotBlank(String columnName, @Nullable Object value) {
+        return isNotBlankValue(value) ? notStartsWith(columnName, value) : this;
+    }
+
+    public <T> WhereCriterion notEndsWithIfNotBlank(IGetter<T, ?> fn, @Nullable Object value) {
+        return isNotBlankValue(value) ? notEndsWith(fn, value) : this;
+    }
+
+    public WhereCriterion notEndsWithIfNotBlank(String columnName, @Nullable Object value) {
+        return isNotBlankValue(value) ? notEndsWith(columnName, value) : this;
+    }
+
+    private static boolean isNotBlankValue(@Nullable Object value) {
+        return value != null && !Strings.isBlank(value.toString());
     }
 
     // ==================== IN / NOT IN ====================
@@ -643,9 +710,9 @@ public class WhereCriterion implements OnPredicate {
     public WhereCriterion inChunked(String columnName, Collection<?> values) {
         if (CollectionUtils.isEmpty(values)) {
             throw new IllegalArgumentException(
-                    "WhereCriterion.inChunked values must not be null or empty (use inIfNotEmpty for optional filtering)");
+                    "WhereCriterion.inChunked values must not be null or empty (use inChunkedIfNotEmpty for optional filtering)");
         }
-        return addChunkedInCondition(ColumnMetaProvider.fromName(columnName), values);
+        return addChunkedInCondition(ColumnMetaProvider.fromName(columnName), values, false);
     }
 
     /**
@@ -655,9 +722,61 @@ public class WhereCriterion implements OnPredicate {
     public <T> WhereCriterion inChunked(IGetter<T, ?> fn, Collection<?> values) {
         if (CollectionUtils.isEmpty(values)) {
             throw new IllegalArgumentException(
-                    "WhereCriterion.inChunked values must not be null or empty (use inIfNotEmpty for optional filtering)");
+                    "WhereCriterion.inChunked values must not be null or empty (use inChunkedIfNotEmpty for optional filtering)");
         }
-        return addChunkedInCondition(ColumnMetaProvider.fromGetter(fn), values);
+        return addChunkedInCondition(ColumnMetaProvider.fromGetter(fn), values, false);
+    }
+
+    /**
+     * 显式分片 {@code NOT IN} 条件：当集合元素数量超过 {@value #MAX_IN_SIZE} 时，按 {@value #MAX_IN_SIZE} 拆分为
+     * {@code (col NOT IN (...) AND col NOT IN (...))} 括号子组（依据 De Morgan 定律保持否语义正确）。
+     */
+    public WhereCriterion notInChunked(String columnName, Collection<?> values) {
+        if (CollectionUtils.isEmpty(values)) {
+            throw new IllegalArgumentException(
+                    "WhereCriterion.notInChunked values must not be null or empty (use notInChunkedIfNotEmpty for optional filtering)");
+        }
+        return addChunkedInCondition(ColumnMetaProvider.fromName(columnName), values, true);
+    }
+
+    /**
+     * 显式分片类型安全 {@code NOT IN} 条件：超过 {@value #MAX_IN_SIZE} 时拆分为
+     * {@code (col NOT IN (...) AND col NOT IN (...))} 括号子组。
+     */
+    public <T> WhereCriterion notInChunked(IGetter<T, ?> fn, Collection<?> values) {
+        if (CollectionUtils.isEmpty(values)) {
+            throw new IllegalArgumentException(
+                    "WhereCriterion.notInChunked values must not be null or empty (use notInChunkedIfNotEmpty for optional filtering)");
+        }
+        return addChunkedInCondition(ColumnMetaProvider.fromGetter(fn), values, true);
+    }
+
+    public WhereCriterion inChunkedIfNotEmpty(String columnName, @Nullable Collection<?> values) {
+        if (CollectionUtils.isEmpty(values)) {
+            return this;
+        }
+        return addChunkedInCondition(ColumnMetaProvider.fromName(columnName), values, false);
+    }
+
+    public <T> WhereCriterion inChunkedIfNotEmpty(IGetter<T, ?> fn, @Nullable Collection<?> values) {
+        if (CollectionUtils.isEmpty(values)) {
+            return this;
+        }
+        return addChunkedInCondition(ColumnMetaProvider.fromGetter(fn), values, false);
+    }
+
+    public WhereCriterion notInChunkedIfNotEmpty(String columnName, @Nullable Collection<?> values) {
+        if (CollectionUtils.isEmpty(values)) {
+            return this;
+        }
+        return addChunkedInCondition(ColumnMetaProvider.fromName(columnName), values, true);
+    }
+
+    public <T> WhereCriterion notInChunkedIfNotEmpty(IGetter<T, ?> fn, @Nullable Collection<?> values) {
+        if (CollectionUtils.isEmpty(values)) {
+            return this;
+        }
+        return addChunkedInCondition(ColumnMetaProvider.fromGetter(fn), values, true);
     }
 
     public WhereCriterion inIfNotEmpty(String columnName, @Nullable Collection<?> values) {
@@ -890,22 +1009,25 @@ public class WhereCriterion implements OnPredicate {
         return this;
     }
 
-    private WhereCriterion addChunkedInCondition(ColumnMetaProvider provider, Collection<?> values) {
+    private WhereCriterion addChunkedInCondition(ColumnMetaProvider provider, Collection<?> values, boolean notIn) {
         if (values.size() <= MAX_IN_SIZE) {
-            return addInCondition(provider, values, false);
+            return addInCondition(provider, values, notIn);
         }
+        String methodName = notIn ? "notInChunked" : "inChunked";
         List<Object> snapshot = new ArrayList<>(values.size());
         for (Object val : values) {
             if (val == null) {
                 throw new IllegalArgumentException(
-                        "WhereCriterion.inChunked collection must not contain null elements (use isNull explicitly)");
+                        "WhereCriterion." + methodName + " collection must not contain null elements (use "
+                                + (notIn ? "isNotNull" : "isNull") + " explicitly)");
             }
             snapshot.add(val);
         }
-        WhereCriterion chunkGroup = new WhereCriterion(LinkType.OR);
+        // De Morgan 定律：col IN (A∪B) 等价于 (col IN A OR col IN B)；col NOT IN (A∪B) 等价于 (col NOT IN A AND col NOT IN B)
+        WhereCriterion chunkGroup = new WhereCriterion(notIn ? LinkType.AND : LinkType.OR);
         for (int start = 0; start < snapshot.size(); start += MAX_IN_SIZE) {
             int end = Math.min(start + MAX_IN_SIZE, snapshot.size());
-            chunkGroup.addInCondition(provider, snapshot.subList(start, end), false);
+            chunkGroup.addInCondition(provider, snapshot.subList(start, end), notIn);
         }
         return appendChild(chunkGroup, true);
     }

@@ -28,22 +28,22 @@ joya-parent                             父 POM，聚合以下模块
 
 ```
 core/
-├── DataOps.java                        统一数据操作契约：from(Class<T>) / of(Class<T>) / sql(...) / mapper(Class<M>) / withConnection / script（逃生舱在 JoyaClient 上用自动提交连接，在 Tx 上用事务连接）
+├── DataOps.java                        统一数据操作契约：from(Class<T>) / of(Class<T>) / sql(...) / mapper(Class<M>) / withSettings / withConnection / script（派生只读视图不污染原实例；逃生舱在 JoyaClient 上用自动提交连接，在 Tx 上用事务连接）
 ├── DataOpsSupport.java                 DataOps 公共装配委托（JoyaClient 并发缓存模式与 TxImpl 单线程 + I9 所有者线程守卫模式共用）
-├── JoyaClient.java                     单数据源客户端门面（1 JoyaClient = 1 DataSource；所有构造入口收敛于 Builder），暴露 from / of / sql / mapper / tx / txCall / script / withConnection
-├── JoyaSettings.java                   实例级客户端配置（组合 ExecutionOptions + NamingPolicy）
+├── JoyaClient.java                     单数据源客户端门面（1 JoyaClient = 1 DataSource；所有构造入口收敛于 Builder），暴露 from / of / sql / mapper / withSettings / tx / txCall / script / withConnection
+├── JoyaSettings.java                   实例级客户端配置（组合 ExecutionOptions + NamingPolicy，支持 toBuilder() 增量修改）
 ├── EntityOps.java                      实体域门面：命令式写（insert/update/patch/save/delete）+ 列级变更构建器（insert/update/delete）+ 按主键快捷读
 ├── EntityInsert.java                   实体流式插入构建器（value / values / ignoreNulls → execute）
 ├── EntityUpdate.java                   实体流式条件更新构建器（set / where / allowAll → execute）
 ├── EntityDelete.java                   实体流式条件删除构建器（where / allowAll → execute）
-├── SqlOps.java                         参数化原生 SQL 流式门面（list / listMap / one / first / value / count / page / stream / update / insert / batch）
+├── SqlOps.java                         参数化原生 SQL 流式门面（bind / bindMap / bindBean 具名参数绑定 + list / listMap / one / first / value / count / page / stream / update / insert / batch）
 ├── EntityFinder.java                   实体读取（findById / findByIds / findAll / existsById / count）
 ├── EntityDeleter.java                  实体删除（deleteById / deleteByIds / delete / deleteAll / truncate）
 ├── EntityWriter.java                   实体写执行器（insert / insertAll / update / patch / updateAll / patchAll；EntityOps 与 UpsertPlanner 共用）
 ├── UpsertPlanner.java                  先查后写 / 原生 upsert 策略（save / saveAll；依赖 EntityWriter + EntityFinder，不回调门面）
 ├── Partitions.java                     集合分片与 IN 子句上限（写/删/查共用一份）
 ├── mapper/                             Mapper 门面（JoyaMapper 接口 / JoyaRepository 基类 / JdkMapperProxy）
-├── listener/                           实体生命周期扩展（EntityListener 监听器契约 + EntityLifecycle 统一派发，与 JDBC 解耦）
+├── listener/                           实体级前置自监听契约（EntityListener：无参 prePersist / preUpdate，零项目内外部包依赖）
 ├── InsertPlan.java                     实体插入计划（单条/批量共用；每实体一次快照、列选择、校验、生成键回写）
 ├── UpdatePlan.java                     实体更新计划（单条/批量/部分列共用的执行入口）
 │
@@ -71,7 +71,7 @@ core/
 │   ├── TxImpl.java                     唯一的 Tx 实现（由 TxStarter 包装 TxSession 产出；构造时通过 kernel.bind(TransactionalConnectionProvider) 绑定事务视图）
 │   ├── TxSession.java                  底层事务会话 SPI（TxConnection 与 SpringTxSession 实现；屏蔽物理事务差异）
 │   ├── TxSessionSupport.java           事务会话公共支撑（I9 所有者线程守卫、deadline 计时与剩余秒数换算、泛型保存点栈）
-│   ├── TxStarter.java                  不可变事务配置与启动器：isolation / readOnly / timeout / retryOnDeadlock → run / call / begin
+│   ├── TxStarter.java                  不可变事务配置与启动器：isolation / readOnly / timeout / requiresNew / retryOnDeadlock → run / call / begin
 │   ├── TxConnection.java               单库物理连接状态机（实现 TxSession，组合 TxSessionSupport 管理保存点栈、deadline 超时与现场还原）
 │   ├── TxOptions.java                  不可变事务选项
 │   ├── TxEngine.java                   事务引擎扩展点 SPI：open(kernel, options) 只产出 TxSession，连接只经 ConnectionProvider 借还（TxEngine.JDBC / SpringTxEngine 实现）
@@ -154,6 +154,6 @@ core/
 4. **AST 改写无旁路与现代 Java 17 映射**：
    - `ExecutionKernel` 是所有 SQL 执行的唯一收口，所有常规查询、变更、原生 SQL 与批处理 100% 经过 `SqlRewriter`（仅框架生成的 AST）与 `SqlExecutionListener` 观测（`ctx.statement()` 为实际送入 JDBC 的物理语句，分页场景经 `ctx.logicalStatement()` / `offset()` / `limit()` 同步暴露逻辑视图与坐标），并携带完整 `StatementMetadata`；底层连接级逃生舱 `withConnection` 与轻量初始化脚本 `script` 显式旁路改写与观测管线；文本级 `SqlInterceptor` 已删除，避免静默错绑参数。
 5. **Spring Boot 3 旁路（Sidecar）与多数据源注册表（`joya-spring-boot-starter`）**：
-   - **主库复用与扩展库旁路隔离（`JoyaAutoConfiguration` → `JoyaClientRegistry`）**：主库通过 `joya.primary` 配置（默认 `use-spring=true` 复用 Spring 容器主 `DataSource`），扩展库通过 `joya.datasources` 数组独立初始化并登记到 `JoyaClientRegistry`（不注册全局 `DataSource` Bean，不干扰主 ORM）；`SqlRewriter` / `SqlExecutionListener` / `EntityListener` 自动发现并按 `@Qualifier("dsName")` 路由到指定数据源客户端（无限定符的 Bean 对所有客户端生效），`RowMapperFactory` / `SqlExceptionTranslator` 为单例型扩展点（限定本库优先，同级多个则启动失败）。
-   - **Spring 事务无缝融入（`SpringConnectionProvider` + `SpringTxEngine`）**：当容器中存在与主 `DataSource` 匹配的 `DataSourceTransactionManager` 或已显式绑定同一 `DataSource` 的 `JpaTransactionManager` 时，通过 `DataSourceUtils` 与其协同，使 `joya` 操作、`joya.tx(...)`（含 `savepoint`）与 `@Transactional` 及主 ORM 共享同一条事务连接；若无匹配的事务管理器（如未绑定 `DataSource` 的 JPA 管理器或资源键不一致），则输出启动告警并回退为纯 JDBC 事务引擎（`DataSourceConnectionProvider` + `TxEngine.JDBC`）。
+   - **主库复用与扩展库旁路隔离（`JoyaAutoConfiguration` → `JoyaClientRegistry` / `JoyaNamedClientsAutoConfiguration`）**：主库通过 `joya.primary` 配置（默认 `use-spring=true` 复用 Spring 容器主 `DataSource`），扩展库通过 `joya.datasources` 数组既支持自建旁路连接池（不注册全局 `DataSource` Bean），也支持通过 `data-source-bean` / `transaction-manager-bean` 复用容器既有 Bean 并登记到 `JoyaClientRegistry`；`JoyaNamedClientsAutoConfiguration` 按 `datasources` 自动注册带 `@Qualifier("<name>")` 的 `JoyaClient` Bean（非 `@Primary`，并与同名 `DataSource` Bean 避让）；`SqlRewriter` / `SqlExecutionListener` 自动发现并按 `@Qualifier("dsName")` 路由到指定数据源客户端（无限定符的 Bean 对所有客户端生效），`RowMapperFactory` / `SqlExceptionTranslator` / `TableNameResolver` / `Executor.Factory` 为单例型扩展点（限定本库优先，同级多个则启动失败；未自定义 `SqlExceptionTranslator` 时默认启用惰性 `SpringSqlExceptionTranslator`）。
+   - **Spring 事务无缝融入与可观测性（`SpringConnectionProvider` + `SpringTxEngine` + `JoyaActuatorAutoConfiguration`）**：当容器中存在与主库或 `data-source-bean` 匹配的 `DataSourceTransactionManager` / `JpaTransactionManager` 时，通过 `DataSourceUtils` 与其协同，使 `joya` 操作、`joya.tx(...)`（含 `savepoint`）与 `@Transactional` 及主 ORM 共享同一条事务连接，并支持 `tx().requiresNew()` 以 `PROPAGATION_REQUIRES_NEW` 挂起外层事务独立提交/回滚；若无匹配的事务管理器（如未绑定 `DataSource` 的 JPA 管理器或资源键不一致），则输出启动告警（扩展库安静回退）为纯 JDBC 事务引擎（`DataSourceConnectionProvider` + `TxEngine.JDBC`）；`joya.slow-sql-threshold-ms` 支持慢 SQL `WARN` 日志告警，`JoyaActuatorAutoConfiguration` 在存在 Actuator 时为自建旁路数据源自动暴露 `joyaHealthContributor`（无旁路库时返回轻量 `UP` 指标）。
    - **`JoyaMapper` 免扫描随取随用**：通过 `joya.mapper(XxxMapper.class)` / `tx.mapper(XxxMapper.class)` 直接按需获取绑定到对应客户端或事务上下文的 Mapper 代理，零包扫描开销。

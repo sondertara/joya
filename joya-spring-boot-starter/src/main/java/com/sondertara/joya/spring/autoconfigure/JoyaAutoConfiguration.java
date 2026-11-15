@@ -1,19 +1,25 @@
 package com.sondertara.joya.spring.autoconfigure;
 
 import com.sondertara.joya.core.JoyaClient;
-import com.sondertara.joya.core.kernel.observe.SqlExecutionContext;
 import com.sondertara.joya.core.kernel.observe.SqlExecutionListener;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
+import org.springframework.boot.autoconfigure.condition.ConditionMessage;
+import org.springframework.boot.autoconfigure.condition.ConditionOutcome;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.autoconfigure.condition.SpringBootCondition;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.boot.context.properties.bind.Binder;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.ConditionContext;
+import org.springframework.context.annotation.Conditional;
 import org.springframework.context.annotation.Primary;
+import org.springframework.core.type.AnnotatedTypeMetadata;
 import org.springframework.transaction.PlatformTransactionManager;
 
 import javax.sql.DataSource;
@@ -60,27 +66,28 @@ public class JoyaAutoConfiguration {
     }
 
     @Bean
-    @ConditionalOnProperty(prefix = "joya", name = "sql-log", havingValue = "true")
+    @ConditionalOnMissingBean(name = "joyaSqlLogListener")
+    @Conditional(OnSqlLogOrSlowThresholdCondition.class)
     public SqlExecutionListener joyaSqlLogListener(JoyaProperties properties) {
-        java.util.List<java.util.regex.Pattern> redactPatterns =
-                JoyaSqlLogSupport.compilePatterns(properties.getSqlLogRedactPatterns());
-        return new SqlExecutionListener() {
-            @Override
-            public void beforeExecute(SqlExecutionContext context) {
-                String pageSuffix = context.inPage()
-                        ? " | page=[" + context.offset() + "," + context.limit() + "]"
-                        : "";
-                if (context.batch()) {
-                    log.info("[Joya SQL] {} | batch rows={}{}", context.statement().sql(),
-                            context.attributes().get(SqlExecutionContext.ATTR_BATCH_ROWS), pageSuffix);
-                } else if (properties.isSqlLogPrintArgs()) {
-                    log.info("[Joya SQL] {} | args={}{}", context.statement().sql(),
-                            JoyaSqlLogSupport.maskedArgs(context.statement(), redactPatterns), pageSuffix);
-                } else {
-                    log.info("[Joya SQL] {} | paramCount={}{}", context.statement().sql(),
-                            context.statement().args().size(), pageSuffix);
-                }
+        return JoyaSqlLogSupport.createListener(log, properties);
+    }
+
+    static final class OnSqlLogOrSlowThresholdCondition extends SpringBootCondition {
+        @Override
+        public ConditionOutcome getMatchOutcome(ConditionContext context, AnnotatedTypeMetadata metadata) {
+            Binder binder = Binder.get(context.getEnvironment());
+            boolean sqlLog = binder.bind("joya.sql-log", Boolean.class).orElse(false);
+            if (sqlLog) {
+                return ConditionOutcome.match(ConditionMessage.forCondition("JoyaSqlLog")
+                        .found("property").items("joya.sql-log=true"));
             }
-        };
+            long slowThresholdMs = binder.bind("joya.slow-sql-threshold-ms", Long.class).orElse(0L);
+            if (slowThresholdMs > 0L) {
+                return ConditionOutcome.match(ConditionMessage.forCondition("JoyaSqlLog")
+                        .found("property").items("joya.slow-sql-threshold-ms=" + slowThresholdMs));
+            }
+            return ConditionOutcome.noMatch(ConditionMessage.forCondition("JoyaSqlLog")
+                    .didNotFind("enabled joya.sql-log or positive joya.slow-sql-threshold-ms").atAll());
+        }
     }
 }

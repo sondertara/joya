@@ -1,59 +1,32 @@
 package com.sondertara.joya.core.listener;
 
-import com.sondertara.joya.core.kernel.support.Ordered;
-
 /**
- * 实体生命周期监听器。
+ * 实体自实现的写前生命周期钩子（可由实体或项目公共 {@code BaseEntity} 实现，用于填充审计时间、雪花主键等默认值）。
  *
- * <p>既支持实体自身实现（历史用法），也支持通过 {@code JoyaClient.Builder.entityListener(...)}
- * 注册全局监听器；全局监听器可用 {@link #supports(Class)} 过滤实体类型。
- *
- * <p><b>触发边界</b>（框架不为了触发监听器而隐式 SELECT）：
- *
- * <table border="1">
- *   <caption>按入口的触发矩阵</caption>
- *   <tr><th>入口</th><th>persist 回调</th><th>update 回调</th><th>remove 回调</th></tr>
- *   <tr><td>{@code insert(entity)} / {@code insertAll}</td><td>✅ prePersist / postPersist</td><td>—</td><td>—</td></tr>
- *   <tr><td>{@code update(entity)} / {@code patch(entity)}</td><td>—</td><td>✅ preUpdate / postUpdate</td><td>—</td></tr>
- *   <tr><td>{@code updateAll} / {@code patchAll}</td><td>—</td><td>✅ 逐行 preUpdate / postUpdate</td><td>—</td></tr>
- *   <tr><td>{@code save} / {@code saveAll}</td><td>✅ 不存在分支</td><td>✅ 存在分支</td><td>—</td></tr>
- *   <tr><td>{@code delete(entity)} / {@code deleteAll}</td><td>—</td><td>—</td><td>✅ preRemove / postRemove</td></tr>
- *   <tr><td>{@code deleteById} / {@code deleteByIds} / {@code truncate}</td><td>—</td><td>—</td><td>❌ 不触发</td></tr>
- *   <tr><td>{@code EntityInsert.values(...)} 列级构建器</td><td>❌ 不触发</td><td>—</td><td>—</td></tr>
- *   <tr><td>{@code EntityUpdate} / {@code EntityDelete} 条件构建器</td><td>—</td><td>❌ 不触发</td><td>❌ 不触发</td></tr>
- * </table>
+ * <p>触发边界：
+ * <ul>
+ *   <li>{@code insert(entity)} / {@code insertAll} / {@code EntityInsert.values(entity).execute()}：
+ *       在快照与非空主键校验前触发 {@link #prePersist()}；</li>
+ *   <li>{@code update(entity)} / {@code patch(entity)} / {@code updateAll} / {@code patchAll}：
+ *       在主键校验与快照前触发 {@link #preUpdate()}；</li>
+ *   <li>{@code save} / {@code saveAll}：仅当实体实现 {@code EntityListener} 时按存在性触发
+ *       {@link #prePersist()} 或 {@link #preUpdate()}（未实现该接口的实体在原生 UPSERT 下零额外探测开销）；</li>
+ *   <li>列级/条件级构建器（无源实体）与删除操作不触发。</li>
+ * </ul>
  *
  * @author huangxiaohu
  */
-public interface EntityListener extends Ordered {
+public interface EntityListener {
 
     /**
-     * 是否处理指定实体类型；默认全部处理。
+     * 实体首次持久化写入前调用。
      */
-    default boolean supports(Class<?> entityType) {
-        return true;
+    default void prePersist() {
     }
 
-    @Override
-    default int order() {
-        return 0;
-    }
-
-    default void prePersist(Object entity) {
-    }
-
-    default void postPersist(Object entity) {
-    }
-
-    default void preUpdate(Object entity) {
-    }
-
-    default void postUpdate(Object entity) {
-    }
-
-    default void preRemove(Object entity) {
-    }
-
-    default void postRemove(Object entity) {
+    /**
+     * 实体更新写入前调用。
+     */
+    default void preUpdate() {
     }
 }

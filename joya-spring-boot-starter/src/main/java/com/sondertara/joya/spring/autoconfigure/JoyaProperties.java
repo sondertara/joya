@@ -37,6 +37,9 @@ public class JoyaProperties {
     private List<String> sqlLogRedactPatterns = new ArrayList<>(
             List.of("(?i).*(password|passwd|secret|token|credential).*"));
 
+    /** 慢 SQL 警告阈值（毫秒）；大于 0 时即便未开启全量 {@code sql-log}，耗时达到或超过该值的语句也会以 WARN 级别输出（{@code <= 0} 表示不启用）。 */
+    private long slowSqlThresholdMs = 0L;
+
     /** 默认查询超时秒数（{@code <= 0} 表示不限制）。 */
     private int queryTimeoutSeconds = 0;
 
@@ -102,6 +105,17 @@ public class JoyaProperties {
         this.sqlLogRedactPatterns = sqlLogRedactPatterns == null
                 ? new ArrayList<>()
                 : new ArrayList<>(sqlLogRedactPatterns);
+    }
+
+    public long getSlowSqlThresholdMs() {
+        return slowSqlThresholdMs;
+    }
+
+    public void setSlowSqlThresholdMs(long slowSqlThresholdMs) {
+        if (slowSqlThresholdMs < 0L) {
+            throw new IllegalArgumentException("slowSqlThresholdMs must not be negative: " + slowSqlThresholdMs);
+        }
+        this.slowSqlThresholdMs = slowSqlThresholdMs;
     }
 
     public int getQueryTimeoutSeconds() {
@@ -229,6 +243,12 @@ public class JoyaProperties {
         /** 单库 Hikari 连接池属性透传绑定（如 maximum-pool-size、minimum-idle）。 */
         private java.util.Map<String, Object> hikari = new java.util.LinkedHashMap<>();
 
+        /** 复用 Spring 容器中已存在的 {@link javax.sql.DataSource} Bean 名称（配置后不自建连接池）。 */
+        private String dataSourceBean;
+
+        /** 复用 Spring 容器中已存在的 {@link org.springframework.transaction.PlatformTransactionManager} Bean 名称。 */
+        private String transactionManagerBean;
+
         @Override
         public String getName() {
             return name;
@@ -318,6 +338,22 @@ public class JoyaProperties {
 
         public void setHikari(java.util.Map<String, Object> hikari) {
             this.hikari = hikari == null ? new java.util.LinkedHashMap<>() : new java.util.LinkedHashMap<>(hikari);
+        }
+
+        public String getDataSourceBean() {
+            return dataSourceBean;
+        }
+
+        public void setDataSourceBean(String dataSourceBean) {
+            this.dataSourceBean = dataSourceBean;
+        }
+
+        public String getTransactionManagerBean() {
+            return transactionManagerBean;
+        }
+
+        public void setTransactionManagerBean(String transactionManagerBean) {
+            this.transactionManagerBean = transactionManagerBean;
         }
     }
 

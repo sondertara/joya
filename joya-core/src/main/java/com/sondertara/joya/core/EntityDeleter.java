@@ -1,6 +1,5 @@
 package com.sondertara.joya.core;
 
-import com.sondertara.joya.core.listener.EntityLifecycle;
 import com.sondertara.joya.core.kernel.ExecutionKernel;
 import com.sondertara.joya.core.metadata.EntityMetadataContext;
 import com.sondertara.joya.core.result.MutationResult;
@@ -24,15 +23,11 @@ final class EntityDeleter<T> {
     private final Class<T> entityType;
     private final EntityMetadataContext meta;
     private final String primaryKey;
-    private final EntityLifecycle lifecycle;
-
-    EntityDeleter(ExecutionKernel kernel, Class<T> entityType, EntityMetadataContext meta, String primaryKey,
-                  EntityLifecycle lifecycle) {
+    EntityDeleter(ExecutionKernel kernel, Class<T> entityType, EntityMetadataContext meta, String primaryKey) {
         this.kernel = Objects.requireNonNull(kernel, "kernel must not be null");
         this.entityType = Objects.requireNonNull(entityType, "entityType must not be null");
         this.meta = Objects.requireNonNull(meta, "meta must not be null");
         this.primaryKey = primaryKey;
-        this.lifecycle = lifecycle == null ? EntityLifecycle.EMPTY : lifecycle;
     }
 
     MutationResult deleteById(Serializable id) {
@@ -68,10 +63,7 @@ final class EntityDeleter<T> {
             throw new IllegalArgumentException(
                     "Entity primary key must not be null for delete: " + entityType.getName());
         }
-        lifecycle.preRemove(entity);
-        MutationResult result = new EntityDelete<T>(kernel, meta).where(w -> w.eq(primaryKey, pkValue)).execute();
-        lifecycle.postRemove(entity);
-        return result;
+        return new EntityDelete<T>(kernel, meta).where(w -> w.eq(primaryKey, pkValue)).execute();
     }
 
     MutationResult deleteAll(Collection<? extends T> entities) {
@@ -80,7 +72,6 @@ final class EntityDeleter<T> {
             return MutationResult.EMPTY;
         }
         List<Serializable> ids = new ArrayList<>(entities.size());
-        List<T> validEntities = new ArrayList<>(entities.size());
         for (T entity : entities) {
             Objects.requireNonNull(entity, "Entity element in deleteAll must not be null");
             Object pkValue = meta.readFieldValue(entity, primaryKey);
@@ -89,16 +80,8 @@ final class EntityDeleter<T> {
                         "Entity primary key must not be null for deleteAll: " + entityType.getName());
             }
             ids.add(pkValue instanceof Serializable s ? s : pkValue.toString());
-            validEntities.add(entity);
         }
-        for (T entity : validEntities) {
-            lifecycle.preRemove(entity);
-        }
-        MutationResult result = deleteByIds(ids);
-        for (T entity : validEntities) {
-            lifecycle.postRemove(entity);
-        }
-        return result;
+        return deleteByIds(ids);
     }
 
     private void requirePrimaryKey() {

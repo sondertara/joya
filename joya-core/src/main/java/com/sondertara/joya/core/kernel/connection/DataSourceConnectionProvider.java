@@ -80,6 +80,14 @@ public final class DataSourceConnectionProvider implements ConnectionProvider {
         return queryTimeoutSeconds > 0 ? OptionalInt.of(queryTimeoutSeconds) : OptionalInt.empty();
     }
 
+    @Override
+    public ConnectionProvider withQueryTimeoutSeconds(int queryTimeoutSeconds) {
+        int normalized = Math.max(0, queryTimeoutSeconds);
+        return normalized == this.queryTimeoutSeconds
+                ? this
+                : new DataSourceConnectionProvider(dataSource, normalized);
+    }
+
     public DataSource dataSource() {
         return dataSource;
     }

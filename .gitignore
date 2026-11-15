@@ -41,3 +41,4 @@ target
 .codebuddy/
 .omp/
 .specify/
+.codegraph/

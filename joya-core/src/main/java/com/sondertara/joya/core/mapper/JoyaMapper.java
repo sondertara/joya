@@ -2,6 +2,7 @@ package com.sondertara.joya.core.mapper;
 
 import com.sondertara.joya.core.DataOps;
 import com.sondertara.joya.core.EntityOps;
+import com.sondertara.joya.core.EntityUpdate;
 import com.sondertara.joya.core.SqlOps;
 import com.sondertara.joya.core.function.IGetter;
 import com.sondertara.joya.core.query.PageResult;
@@ -15,6 +16,7 @@ import com.sondertara.joya.core.query.pagination.SortCondition;
 import java.io.Serializable;
 import java.util.Collection;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.function.UnaryOperator;
 
@@ -99,6 +101,17 @@ public interface JoyaMapper<T> {
     }
 
     /**
+     * 批量插入实体集合（按每个实体各自非 {@code null} 列动态选列写入；支持生成键自动回写）。
+     */
+    @SuppressWarnings("unchecked")
+    default <S extends T> int insertAllIgnoreNull(Collection<S> entities) {
+        if (entities == null || entities.isEmpty()) {
+            return 0;
+        }
+        return ops().insertAllIgnoreNull((Collection<T>) entities).affectedRowsInt();
+    }
+
+    /**
      * 按主键全量更新单个实体（包含 {@code null} 列）。
      */
     default int updateById(T entity) {
@@ -146,6 +159,16 @@ public interface JoyaMapper<T> {
     }
 
     /**
+     * 按流式条件构建器更新记录并返回影响行数（默认要求非空 WHERE 条件，全表更新须显式调用 {@code allowAll()}）。
+     */
+    default int updateByCondition(UnaryOperator<EntityUpdate<T>> func) {
+        Objects.requireNonNull(func, "update customizer must not be null");
+        EntityUpdate<T> updater = Objects.requireNonNull(func.apply(ops().update()),
+                "update customizer must return EntityUpdate");
+        return updater.execute().affectedRowsInt();
+    }
+
+    /**
      * 保存（插入或按主键更新）单个实体，生成键自动回写至 {@code entity}。
      */
     default int save(T entity) {
@@ -168,6 +191,17 @@ public interface JoyaMapper<T> {
             return 0;
         }
         return ops().saveAll((Collection<T>) entities).affectedRowsInt();
+    }
+
+    /**
+     * 批量保存（插入或按主键局部更新，忽略 {@code null} 列）实体集合。
+     */
+    @SuppressWarnings("unchecked")
+    default <S extends T> int saveAllIgnoreNull(Collection<S> entities) {
+        if (entities == null || entities.isEmpty()) {
+            return 0;
+        }
+        return ops().saveAllIgnoreNull((Collection<T>) entities).affectedRowsInt();
     }
 
     /*========================================select==============================================*/
@@ -297,7 +331,7 @@ public interface JoyaMapper<T> {
     }
 
     /**
-     * 删除指定实体（触发 {@code EntityListener} 回调）并返回影响行数。
+     * 删除指定实体并返回影响行数。
      */
     default int delete(T entity) {
         return ops().delete(entity).affectedRowsInt();

@@ -2,7 +2,6 @@ package com.sondertara.joya.core;
 
 import com.sondertara.joya.core.mapper.JoyaMapper;
 import com.sondertara.joya.core.kernel.statement.DbType;
-import com.sondertara.joya.core.kernel.PageSlice;
 import com.sondertara.joya.core.kernel.dialect.Dialect;
 import com.sondertara.joya.core.kernel.dialect.PaginationStyle;
 import com.sondertara.joya.core.kernel.dialect.QuoteStyle;
@@ -292,7 +291,6 @@ class DialectBatchAndMappingTest {
         private Long deptId;
 
         private transient int preUpdateCount;
-        private transient int postUpdateCount;
 
         public MapperAuditedUser() {
         }
@@ -304,13 +302,8 @@ class DialectBatchAndMappingTest {
         }
 
         @Override
-        public void preUpdate(Object entity) {
+        public void preUpdate() {
             preUpdateCount++;
-        }
-
-        @Override
-        public void postUpdate(Object entity) {
-            postUpdateCount++;
         }
     }
 
@@ -533,12 +526,11 @@ class DialectBatchAndMappingTest {
     }
 
     @Test
-    void mapperEntityUpdateShouldFirePostUpdateOnlyAfterSuccessfulUpdate() {
+    void mapperEntityUpdateShouldFirePreUpdateBeforeUpdate() {
         MapperAuditedUserMapper mapper = joya.mapper(MapperAuditedUserMapper.class);
         MapperAuditedUser success = new MapperAuditedUser(1L, "AliceAfterDerivedUpdate", 10L);
         assertEquals(1, mapper.updateById(success, 1L));
         assertEquals(1, success.preUpdateCount);
-        assertEquals(1, success.postUpdateCount);
         assertEquals(
                 "AliceAfterDerivedUpdate",
                 joya.of(ChainUser.class).findById(1L).orElseThrow().getUserName());
@@ -548,8 +540,7 @@ class DialectBatchAndMappingTest {
                 com.sondertara.joya.exceptions.DbException.class,
                 () -> mapper.updateById(failure, 2L));
         assertEquals(1, failure.preUpdateCount);
-        assertEquals(0, failure.postUpdateCount);
-        assertEquals(1, success.postUpdateCount, "不可缓存的实体更新绑定不得复用其他实体的回调");
+        assertEquals(1, success.preUpdateCount, "不可缓存的实体更新绑定不得复用其他实体的回调");
         assertEquals("Bob", joya.of(ChainUser.class).findById(2L).orElseThrow().getUserName());
     }
 

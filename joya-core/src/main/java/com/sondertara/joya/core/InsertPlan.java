@@ -1,6 +1,6 @@
 package com.sondertara.joya.core;
 
-import com.sondertara.joya.core.listener.EntityLifecycle;
+import com.sondertara.joya.core.listener.EntityListener;
 import com.sondertara.joya.core.kernel.executor.ExecutionOptions;
 import com.sondertara.joya.core.kernel.ExecutionKernel;
 import com.sondertara.joya.core.kernel.executor.BatchSlice;
@@ -40,10 +40,9 @@ final class InsertPlan<T> {
     private final List<T> entities;
     private final boolean ignoreNull;
     private final Map<String, Object> overrides;
-    private final EntityLifecycle lifecycle;
 
     InsertPlan(EntityMetadataContext meta, Collection<T> entities, boolean ignoreNull, String nullMessage,
-               Map<String, Object> overrides, EntityLifecycle lifecycle) {
+               Map<String, Object> overrides) {
         this.meta = Objects.requireNonNull(meta, "meta must not be null");
         Objects.requireNonNull(entities, "entities must not be null");
         this.entities = new ArrayList<>(entities.size());
@@ -54,7 +53,6 @@ final class InsertPlan<T> {
         this.overrides = (overrides == null || overrides.isEmpty())
                 ? Map.of()
                 : Collections.unmodifiableMap(new LinkedHashMap<>(overrides));
-        this.lifecycle = lifecycle == null ? EntityLifecycle.EMPTY : lifecycle;
     }
 
     /**
@@ -85,7 +83,9 @@ final class InsertPlan<T> {
         }
         List<InsertRun<T>> runs = new ArrayList<>();
         for (T entity : entities) {
-            lifecycle.prePersist(entity);
+            if (entity instanceof EntityListener listener) {
+                listener.prePersist();
+            }
             Map<String, Object> values = valuesOf(entity);
             List<String> cols = columnsFor(values, pk, pkGenerated);
             RowPlan<T> row = new RowPlan<>(entity, values, cols);
@@ -108,9 +108,6 @@ final class InsertPlan<T> {
                 result = insertBatch(kernel, run.rows(), run.cols(), wantKeys);
             }
             total = total.merge(result);
-            for (RowPlan<T> row : run.rows()) {
-                lifecycle.postPersist(row.entity());
-            }
         }
         return total;
     }
@@ -154,7 +151,7 @@ final class InsertPlan<T> {
                 kernel.namingPolicy());
         Object existingPkValue = pk == null ? null : row.values().get(pk);
         return executeSingleStatement(kernel, meta, InsertStatementFactory.create(ctx),
-                row.entity(), existingPkValue, false, lifecycle);
+                row.entity(), existingPkValue);
     }
 
     private MutationResult insertBatch(ExecutionKernel kernel, List<RowPlan<T>> rows,
@@ -217,29 +214,11 @@ final class InsertPlan<T> {
             EntityMetadataContext meta,
             SqlStatement statement,
             @Nullable T sourceEntity,
-            @Nullable Object existingPkValue,
-            boolean firePostPersist) {
-        return executeSingleStatement(kernel, meta, statement, sourceEntity, existingPkValue,
-                firePostPersist, EntityLifecycle.EMPTY);
-    }
-
-    static <T> MutationResult executeSingleStatement(
-            ExecutionKernel kernel,
-            EntityMetadataContext meta,
-            SqlStatement statement,
-            @Nullable T sourceEntity,
-            @Nullable Object existingPkValue,
-            boolean firePostPersist,
-            EntityLifecycle lifecycle) {
+            @Nullable Object existingPkValue) {
         var slice = kernel.insertExecute(statement);
         Object generatedKey = slice.generatedKey();
-        if (sourceEntity != null) {
-            if (existingPkValue == null && generatedKey != null) {
-                writeBackPrimaryKey(meta, sourceEntity, generatedKey);
-            }
-            if (firePostPersist) {
-                lifecycle.postPersist(sourceEntity);
-            }
+        if (sourceEntity != null && existingPkValue == null && generatedKey != null) {
+            writeBackPrimaryKey(meta, sourceEntity, generatedKey);
         }
         return MutationResult.ofInsert(slice.affectedRows(),
                 generatedKey != null ? generatedKey : existingPkValue);

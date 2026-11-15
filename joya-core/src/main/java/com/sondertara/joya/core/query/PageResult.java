@@ -1,9 +1,12 @@
 package com.sondertara.joya.core.query;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
+
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
+import java.util.function.Function;
 
 /**
  * 不可变分页响应结果（同时支持统计总数模式与 {@code needTotal = false} 免 COUNT 切片模式）。
@@ -60,6 +63,19 @@ public final class PageResult<T> {
         return new Builder<>(data);
     }
 
+    /** 将当前页数据逐条映射为目标类型，完整保留总数、页码、页大小与免 COUNT 模式的 {@code hasNext} 状态。 */
+    public <R> PageResult<R> map(Function<? super T, ? extends R> mapper) {
+        Objects.requireNonNull(mapper, "mapper must not be null");
+        if (items.isEmpty()) {
+            return new PageResult<>(List.of(), total, pageNum, pageSize, hasNextOverride);
+        }
+        List<R> mapped = new ArrayList<>(items.size());
+        for (T item : items) {
+            mapped.add(mapper.apply(item));
+        }
+        return new PageResult<>(mapped, total, pageNum, pageSize, hasNextOverride);
+    }
+
     /** 当前页数据列表（与 {@code kube-data-query} 协议一致）。 */
     public List<T> items() {
         return items;
@@ -70,7 +86,8 @@ public final class PageResult<T> {
         return items;
     }
 
-    /** 当前页数据列表。 */
+    /** 当前页数据列表（序列化时忽略，避免与 {@link #getItems()} 重复输出）。 */
+    @JsonIgnore
     public List<T> getData() {
         return items;
     }
@@ -100,7 +117,8 @@ public final class PageResult<T> {
         return pageNum;
     }
 
-    /** 0-based 当前页索引（第 1 页为 0）。 */
+    /** 0-based 当前页索引（第 1 页为 0；序列化时忽略，避免与 1-based {@link #getPageNum()} 混淆）。 */
+    @JsonIgnore
     public int getCurrentPage() {
         return pageNum - 1;
     }
@@ -159,6 +177,7 @@ public final class PageResult<T> {
         return hasNext();
     }
 
+    @JsonIgnore
     public boolean isEmpty() {
         return this.items.isEmpty();
     }

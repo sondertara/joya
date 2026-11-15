@@ -3,7 +3,7 @@ package com.sondertara.joya.core;
 import com.sondertara.joya.core.kernel.dialect.Dialect;
 import com.sondertara.joya.core.kernel.executor.ExecutionOptions;
 import com.sondertara.joya.core.kernel.ExecutionKernel;
-import com.sondertara.joya.core.listener.EntityLifecycle;
+import com.sondertara.joya.core.listener.EntityListener;
 import com.sondertara.joya.core.kernel.statement.Operation;
 import com.sondertara.joya.core.kernel.statement.TableRef;
 import com.sondertara.joya.core.kernel.statement.UpsertStyle;
@@ -46,18 +46,15 @@ final class UpsertPlanner<T> {
 
     private final ExecutionKernel kernel;
     private final EntityMetadataContext meta;
-    private final EntityLifecycle lifecycle;
     private final EntityWriter<T> writer;
     private final EntityFinder<T> finder;
 
     UpsertPlanner(ExecutionKernel kernel,
                   EntityMetadataContext meta,
-                  EntityLifecycle lifecycle,
                   EntityWriter<T> writer,
                   EntityFinder<T> finder) {
         this.kernel = Objects.requireNonNull(kernel, "kernel must not be null");
         this.meta = Objects.requireNonNull(meta, "meta must not be null");
-        this.lifecycle = lifecycle == null ? EntityLifecycle.EMPTY : lifecycle;
         this.writer = Objects.requireNonNull(writer, "writer must not be null");
         this.finder = Objects.requireNonNull(finder, "finder must not be null");
     }
@@ -66,11 +63,11 @@ final class UpsertPlanner<T> {
         Objects.requireNonNull(entity, "entity must not be null");
         String pk = meta.primaryKey();
         Object pkVal = pk == null ? null : meta.readFieldValue(entity, pk);
-        boolean hasListeners = lifecycle.hasListenersFor(entity);
+        boolean hasListener = entity instanceof EntityListener;
         if (pkVal instanceof Serializable) {
             Dialect dialect = kernel.dialect();
             if (!requiresGuardedFallback(dialect) && canUseNativeUpsert(dialect.upsertStyle())) {
-                MutationResult nativeResult = nativeUpsert(entity, ignoreNull, pkVal, hasListeners, dialect);
+                MutationResult nativeResult = nativeUpsert(entity, ignoreNull, pkVal, hasListener, dialect);
                 if (nativeResult != null) {
                     return nativeResult;
                 }
@@ -87,18 +84,18 @@ final class UpsertPlanner<T> {
     /**
      * 单条原生 upsert。返回 {@code null} 表示方言/数据不满足条件，调用方回退 select-then-write。
      */
-    private MutationResult nativeUpsert(T entity, boolean ignoreNull, Object pkVal, boolean hasListeners, Dialect dialect) {
+    private MutationResult nativeUpsert(T entity, boolean ignoreNull, Object pkVal, boolean hasListener, Dialect dialect) {
         String pk = meta.primaryKey();
         if (pk == null) {
             return null;
         }
-        boolean exists = false;
-        if (hasListeners) {
-            exists = finder.existsById((Serializable) pkVal);
+        if (hasListener) {
+            boolean exists = finder.existsById((Serializable) pkVal);
+            EntityListener listener = (EntityListener) entity;
             if (exists) {
-                lifecycle.preUpdate(entity);
+                listener.preUpdate();
             } else {
-                lifecycle.prePersist(entity);
+                listener.prePersist();
             }
         }
         Map<String, Object> values = EntitySnapshot.snapshot(meta, entity).values();
@@ -117,13 +114,6 @@ final class UpsertPlanner<T> {
                 kernel.namingPolicy());
         SqlStatement upsert = UpsertStatementFactory.create(ctx, columns, pk, dialect.upsertStyle(), dialect.dbType());
         int affected = kernel.update(upsert);
-        if (hasListeners) {
-            if (exists) {
-                lifecycle.postUpdate(entity);
-            } else {
-                lifecycle.postPersist(entity);
-            }
-        }
         return MutationResult.ofInsert(affected, pkVal);
     }
 
@@ -131,66 +121,47 @@ final class UpsertPlanner<T> {
                                              String pk,
                                              boolean ignoreNull,
                                              int batchSize,
-                                             EntityLifecycle lifecycle,
+                                             boolean hasListeners,
                                              Set<Object> existing,
                                              Dialect dialect) {
-        if (lifecycle != null) {
+        if (hasListeners) {
             for (T row : rows) {
-                boolean exists = existing.contains(normalizePrimaryKey(meta.readFieldValue(row, pk)));
-                if (exists) {
-                    lifecycle.preUpdate(row);
-                } else {
-                    lifecycle.prePersist(row);
+                if (row instanceof EntityListener listener) {
+                    boolean exists = existing.contains(normalizePrimaryKey(meta.readFieldValue(row, pk)));
+                    if (exists) {
+                        listener.preUpdate();
+                    } else {
+                        listener.prePersist();
+                    }
                 }
             }
         }
-        Map<List<String>, List<T>> groups = new LinkedHashMap<>();
+        Map<List<String>, List<Object[]>> groups = new LinkedHashMap<>();
+        List<String> candidateColumns = meta.insertableColumnsWithPrimaryKey();
         for (T row : rows) {
             Map<String, Object> values = EntitySnapshot.snapshot(meta, row).values();
-            List<String> columns = new ArrayList<>();
-            for (String column : meta.insertableColumnsWithPrimaryKey()) {
+            List<String> columns = new ArrayList<>(candidateColumns.size());
+            for (String column : candidateColumns) {
                 if (ignoreNull && values.get(column) == null && !column.equals(pk)) {
                     continue;
                 }
                 columns.add(column);
             }
-            groups.computeIfAbsent(List.copyOf(columns), key -> new ArrayList<>()).add(row);
-        }
-        MutationResult total = MutationResult.EMPTY;
-        for (Map.Entry<List<String>, List<T>> entry : groups.entrySet()) {
-            MutationResult part = nativeBatch(entry.getValue(), pk, entry.getKey(), batchSize, dialect);
-            if (part == null) {
-                return null;
-            }
-            if (lifecycle != null) {
-                for (T row : entry.getValue()) {
-                    boolean exists = existing.contains(normalizePrimaryKey(meta.readFieldValue(row, pk)));
-                    if (exists) {
-                        lifecycle.postUpdate(row);
-                    } else {
-                        lifecycle.postPersist(row);
-                    }
-                }
-            }
-            total = total.merge(part);
-        }
-        return total;
-    }
-
-    private MutationResult nativeBatch(List<T> rows, String pk, List<String> columns, int batchSize, Dialect dialect) {
-        List<Object[]> batchRows = new ArrayList<>(rows.size());
-        for (T row : rows) {
-            Map<String, Object> values = EntitySnapshot.snapshot(meta, row).values();
             Object[] args = new Object[columns.size()];
             for (int i = 0; i < columns.size(); i++) {
                 args[i] = values.get(columns.get(i));
             }
-            batchRows.add(args);
+            groups.computeIfAbsent(List.copyOf(columns), key -> new ArrayList<>()).add(args);
         }
-        BatchSqlStatement upsertBatch = UpsertStatementFactory.createBatch(
-                meta, columns, batchRows, kernel.namingPolicy(), batchSize, pk, dialect.upsertStyle(), dialect.dbType());
-        BatchSlice slice = kernel.batchExecute(upsertBatch);
-        return MutationResult.ofBatch(slice.batchCounts(), slice.generatedKeys());
+        MutationResult total = MutationResult.EMPTY;
+        for (Map.Entry<List<String>, List<Object[]>> entry : groups.entrySet()) {
+            BatchSqlStatement upsertBatch = UpsertStatementFactory.createBatch(
+                    meta, entry.getKey(), entry.getValue(), kernel.namingPolicy(),
+                    batchSize, pk, dialect.upsertStyle(), dialect.dbType());
+            BatchSlice slice = kernel.batchExecute(upsertBatch);
+            total = total.merge(MutationResult.ofBatch(slice.batchCounts(), slice.generatedKeys()));
+        }
+        return total;
     }
 
     MutationResult saveAll(Collection<T> entities, boolean ignoreNull) {
@@ -216,7 +187,7 @@ final class UpsertPlanner<T> {
         int configuredBatchSize = kernel.executionOptions().batchSize();
         int batchPartitionSize = configuredBatchSize > 0 ? configuredBatchSize : ExecutionOptions.DEFAULT_BATCH_SIZE;
 
-        boolean hasListeners = rows.stream().anyMatch(lifecycle::hasListenersFor);
+        boolean hasListeners = rows.stream().anyMatch(EntityListener.class::isInstance);
         if (primaryKeys.stream().allMatch(Objects::nonNull)) {
             Dialect dialect = kernel.dialect();
             if (!requiresGuardedFallback(dialect) && canUseNativeUpsert(dialect.upsertStyle())) {
@@ -224,7 +195,7 @@ final class UpsertPlanner<T> {
                         ? findExistingIds(kernel, meta, pk, primaryKeys)
                         : Set.of();
                 MutationResult nativeBatch = nativeBatchGroups(rows, pk, ignoreNull,
-                        batchPartitionSize, hasListeners ? lifecycle : null, existing, dialect);
+                        batchPartitionSize, hasListeners, existing, dialect);
                 if (nativeBatch != null) {
                     return nativeBatch;
                 }

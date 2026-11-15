@@ -98,8 +98,9 @@ public final class ExecutionObserver {
                 }
             });
         } catch (Throwable error) {
+            long elapsedNanos = System.nanoTime() - start;
             for (SqlExecutionListener listener : active) {
-                runListenerQuietly(() -> listener.onError(ctx, error), "onError");
+                runListenerQuietly(() -> listener.onError(ctx, error, elapsedNanos), "onError");
             }
             throw error;
         }
@@ -134,8 +135,9 @@ public final class ExecutionObserver {
             }
             return result;
         } catch (Throwable error) {
+            long elapsedNanos = System.nanoTime() - start;
             for (SqlExecutionListener listener : active) {
-                runListenerQuietly(() -> listener.onError(ctx, error), "onError");
+                runListenerQuietly(() -> listener.onError(ctx, error, elapsedNanos), "onError");
             }
             throw error;
         }

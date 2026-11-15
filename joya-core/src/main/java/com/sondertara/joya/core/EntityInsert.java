@@ -3,7 +3,6 @@ package com.sondertara.joya.core;
 import com.sondertara.joya.core.function.IGetter;
 import com.sondertara.joya.core.kernel.ExecutionKernel;
 import com.sondertara.joya.core.kernel.statement.SqlStatement;
-import com.sondertara.joya.core.listener.EntityLifecycle;
 import com.sondertara.joya.core.metadata.EntityMetadataContext;
 import com.sondertara.joya.core.metadata.EntitySnapshot;
 import com.sondertara.joya.core.statement.MutationContext;
@@ -27,16 +26,14 @@ public final class EntityInsert<T> {
 
     private final ExecutionKernel kernel;
     private final EntityMetadataContext meta;
-    private final EntityLifecycle lifecycle;
     private final Map<String, Object> values = new LinkedHashMap<>();
     private final Map<String, Object> explicitValues = new LinkedHashMap<>();
     private @Nullable T sourceEntity;
     private boolean ignoreNull;
 
-    EntityInsert(ExecutionKernel kernel, EntityMetadataContext meta, EntityLifecycle lifecycle) {
+    EntityInsert(ExecutionKernel kernel, EntityMetadataContext meta) {
         this.kernel = Objects.requireNonNull(kernel, "kernel must not be null");
         this.meta = Objects.requireNonNull(meta, "meta must not be null");
-        this.lifecycle = lifecycle == null ? EntityLifecycle.EMPTY : lifecycle;
     }
 
     /** 按 Lambda 属性引用设置列值。 */
@@ -112,14 +109,14 @@ public final class EntityInsert<T> {
     /** 执行插入并返回包含生成键与真实影响行数的 {@link MutationResult}。 */
     public MutationResult execute() {
         if (sourceEntity != null) {
-            // 实体模式统一交给 InsertPlan：prePersist 之后重新快照并重新选列，
-            // 监听器新增的字段（含生成主键）因此不会被漏掉。
+            // 实体模式统一交给 InsertPlan：prePersist() 之后重新快照并重新选列，
+            // 钩子新增的字段（含生成主键）因此不会被漏掉。
             return new InsertPlan<>(meta, List.of(sourceEntity), ignoreNull,
-                    "entity must not be null", explicitValues, lifecycle).execute(kernel);
+                    "entity must not be null", explicitValues).execute(kernel);
         }
         SqlStatement stmt = toSqlStatement();
         String pk = meta.primaryKey();
         Object existingPkVal = pk == null ? null : values.get(pk);
-        return InsertPlan.executeSingleStatement(kernel, meta, stmt, null, existingPkVal, false);
+        return InsertPlan.executeSingleStatement(kernel, meta, stmt, null, existingPkVal);
     }
 }

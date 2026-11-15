@@ -36,11 +36,16 @@ public record JoyaSettings(
         return new JoyaSettings(executionOptions, namingPolicy);
     }
 
+    public JoyaSettings withExecutionOptions(ExecutionOptions newExecutionOptions) {
+        return new JoyaSettings(newExecutionOptions, namingPolicy);
+    }
+
     public JoyaSettings withQueryTimeoutSeconds(int queryTimeoutSeconds) {
-        return new JoyaSettings(
-                executionOptions.withQueryTimeoutSeconds(queryTimeoutSeconds),
-                namingPolicy
-        );
+        return withExecutionOptions(executionOptions.withQueryTimeoutSeconds(queryTimeoutSeconds));
+    }
+
+    public JoyaSettings withBatchSize(int batchSize) {
+        return withExecutionOptions(executionOptions.withBatchSize(batchSize));
     }
 
     public JoyaSettings withNamingPolicy(NamingPolicy newNamingPolicy) {
@@ -56,6 +61,10 @@ public record JoyaSettings(
         return withNamingPolicy(namingPolicy.withQuotes(qs.openQuote(), qs.closeQuote()));
     }
 
+    public Builder toBuilder() {
+        return new Builder(this);
+    }
+
     public static Builder builder() {
         return new Builder();
     }
@@ -67,9 +76,22 @@ public record JoyaSettings(
         private boolean columnUppercase = false;
         private boolean tableUppercase = false;
         private TableNameResolver tableNameResolver = TableNameResolver.IDENTITY;
-        private QuoteStyle quoteStyle = QuoteStyle.NONE;
+        private char openQuote = NamingPolicy.DEFAULT.openQuote();
+        private char closeQuote = NamingPolicy.DEFAULT.closeQuote();
 
         private Builder() {
+        }
+
+        private Builder(JoyaSettings settings) {
+            Objects.requireNonNull(settings, "settings must not be null");
+            this.queryTimeoutSeconds = settings.executionOptions().queryTimeoutSeconds();
+            this.batchSize = settings.executionOptions().batchSize();
+            this.maxJoinTable = settings.namingPolicy().maxJoinTable();
+            this.columnUppercase = settings.namingPolicy().columnUppercase();
+            this.tableUppercase = settings.namingPolicy().tableUppercase();
+            this.tableNameResolver = settings.namingPolicy().tableNameResolver();
+            this.openQuote = settings.namingPolicy().openQuote();
+            this.closeQuote = settings.namingPolicy().closeQuote();
         }
 
         public Builder queryTimeoutSeconds(int queryTimeoutSeconds) {
@@ -105,7 +127,9 @@ public record JoyaSettings(
 
         /** 标识符转义风格（反引号 / 双引号 / 方括号）。 */
         public Builder quoteStyle(QuoteStyle quoteStyle) {
-            this.quoteStyle = Objects.requireNonNullElse(quoteStyle, QuoteStyle.NONE);
+            QuoteStyle effective = Objects.requireNonNullElse(quoteStyle, QuoteStyle.NONE);
+            this.openQuote = effective.openQuote();
+            this.closeQuote = effective.closeQuote();
             return this;
         }
 
@@ -117,8 +141,8 @@ public record JoyaSettings(
                             columnUppercase,
                             tableUppercase,
                             tableNameResolver,
-                            quoteStyle.openQuote(),
-                            quoteStyle.closeQuote())
+                            openQuote,
+                            closeQuote)
             );
         }
     }

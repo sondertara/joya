@@ -16,7 +16,8 @@ public interface SqlExecutionListener extends Ordered {
     default void afterExecute(SqlExecutionContext ctx, SqlExecutionResult result) {
     }
 
-    default void onError(SqlExecutionContext ctx, Throwable error) {
+    /** 执行阶段抛出异常时回调（携带自本次执行开始以来的耗时纳秒数）。 */
+    default void onError(SqlExecutionContext ctx, Throwable error, long elapsedNanos) {
     }
 
     /** Stream 生命周期真正结束时触发（与创建时的 afterExecute 区分）。 */

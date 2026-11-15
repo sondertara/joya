@@ -60,4 +60,93 @@ class JoyaSqlLogSupportTest {
         assertThrows(IllegalArgumentException.class,
                 () -> JoyaSqlLogSupport.compilePatterns(List.of(" ")));
     }
+
+    @Test
+    void createListener_logsElapsedTimeSlowWarnAndErrorsWithRedaction() {
+        List<String> logEntries = new java.util.ArrayList<>();
+        org.slf4j.Logger captureLog = (org.slf4j.Logger) java.lang.reflect.Proxy.newProxyInstance(
+                org.slf4j.Logger.class.getClassLoader(),
+                new Class<?>[]{org.slf4j.Logger.class},
+                (proxy, method, args) -> {
+                    String name = method.getName();
+                    if ("isInfoEnabled".equals(name) || "isWarnEnabled".equals(name) || "isErrorEnabled".equals(name)) {
+                        return true;
+                    }
+                    if ("info".equals(name) || "warn".equals(name) || "error".equals(name)) {
+                        StringBuilder line = new StringBuilder(name.toUpperCase(java.util.Locale.ROOT)).append(":");
+                        if (args != null) {
+                            for (Object arg : args) {
+                                if (arg instanceof Object[] varargs) {
+                                    line.append(java.util.Arrays.toString(varargs));
+                                } else {
+                                    line.append(arg).append('|');
+                                }
+                            }
+                        }
+                        logEntries.add(line.toString());
+                        return null;
+                    }
+                    return null;
+                });
+
+        JoyaProperties props = new JoyaProperties();
+        props.setSqlLog(true);
+        props.setSqlLogPrintArgs(true);
+        props.setSlowSqlThresholdMs(50L);
+
+        com.sondertara.joya.core.kernel.observe.SqlExecutionListener listener =
+                JoyaSqlLogSupport.createListener(captureLog, props);
+        com.sondertara.joya.core.kernel.statement.SqlStatement stmt = statement(
+                SqlParameter.of(1, "password", "secret123", ParameterSource.INSERT),
+                SqlParameter.of(2, "userName", "alice", ParameterSource.INSERT));
+        com.sondertara.joya.core.kernel.observe.SqlExecutionContext ctx =
+                new com.sondertara.joya.core.kernel.observe.SqlExecutionContext(stmt, false, java.util.Map.of());
+
+        // 1. 正常耗时 -> INFO（密码参数脱敏，显示 rows 与 elapsedMs）
+        listener.afterExecute(ctx,
+                com.sondertara.joya.core.kernel.observe.SqlExecutionResult.rows(2L).withElapsedNanos(5_000_000L));
+        org.junit.jupiter.api.Assertions.assertEquals(1, logEntries.size());
+        String normalLog = logEntries.get(0);
+        org.junit.jupiter.api.Assertions.assertTrue(normalLog.startsWith("INFO:[Joya SQL]"), normalLog);
+        org.junit.jupiter.api.Assertions.assertTrue(normalLog.contains("5.00"), normalLog);
+        org.junit.jupiter.api.Assertions.assertTrue(normalLog.contains("***") && normalLog.contains("alice"), normalLog);
+        org.junit.jupiter.api.Assertions.assertTrue(normalLog.contains("rows=2"), normalLog);
+
+        // 2. 达到慢 SQL 阈值 -> WARN
+        logEntries.clear();
+        listener.afterExecute(ctx,
+                com.sondertara.joya.core.kernel.observe.SqlExecutionResult.affected(1L).withElapsedNanos(60_000_000L));
+        String slowLog = logEntries.get(0);
+        org.junit.jupiter.api.Assertions.assertTrue(slowLog.startsWith("WARN:[Joya SQL SLOW]"), slowLog);
+        org.junit.jupiter.api.Assertions.assertTrue(slowLog.contains("60.00") && slowLog.contains("50"), slowLog);
+        org.junit.jupiter.api.Assertions.assertTrue(slowLog.contains("affected=1"), slowLog);
+
+        // 3. 异常 -> ERROR（保留耗时与异常信息）
+        logEntries.clear();
+        listener.onError(ctx, new IllegalStateException("boom"), 12_340_000L);
+        String errorLog = logEntries.get(0);
+        org.junit.jupiter.api.Assertions.assertTrue(errorLog.startsWith("ERROR:[Joya SQL ERROR]"), errorLog);
+        org.junit.jupiter.api.Assertions.assertTrue(errorLog.contains("12.34") && errorLog.contains("IllegalStateException: boom"),
+                errorLog);
+
+        // 4. 生产慢查询独立模式（sqlLog=false, slowSqlThresholdMs=50）：快查询与快错误零输出，仅慢查询/慢异常输出
+        JoyaProperties slowOnlyProps = new JoyaProperties();
+        slowOnlyProps.setSqlLog(false);
+        slowOnlyProps.setSlowSqlThresholdMs(50L);
+        com.sondertara.joya.core.kernel.observe.SqlExecutionListener slowOnlyListener =
+                JoyaSqlLogSupport.createListener(captureLog, slowOnlyProps);
+
+        logEntries.clear();
+        slowOnlyListener.afterExecute(ctx,
+                com.sondertara.joya.core.kernel.observe.SqlExecutionResult.rows(1L).withElapsedNanos(5_000_000L));
+        slowOnlyListener.onError(ctx, new IllegalStateException("fast-fail"), 5_000_000L);
+        org.junit.jupiter.api.Assertions.assertTrue(logEntries.isEmpty(), "仅开启慢 SQL 阈值时快请求不得产生日志");
+
+        slowOnlyListener.afterExecute(ctx,
+                com.sondertara.joya.core.kernel.observe.SqlExecutionResult.rows(1L).withElapsedNanos(55_000_000L));
+        slowOnlyListener.onError(ctx, new IllegalStateException("slow-timeout"), 65_000_000L);
+        org.junit.jupiter.api.Assertions.assertEquals(2, logEntries.size());
+        org.junit.jupiter.api.Assertions.assertTrue(logEntries.get(0).startsWith("WARN:[Joya SQL SLOW]"));
+        org.junit.jupiter.api.Assertions.assertTrue(logEntries.get(1).startsWith("ERROR:[Joya SQL ERROR]"));
+    }
 }

@@ -24,9 +24,9 @@ Observe   SqlExecutionListener     →  日志 / 指标 / 慢查询
 | 分表 / schema 切换 | `NamingPolicy.tableNameResolver` | ✅ | ✅ | 配置期唯一表名机制；`SqlRewriter` 不得改表名 |
 | 租户过滤 | `SqlRewriter` | ✅ | ✅（INSERT 常量列） | 改 WHERE / 追加列；**仅当本实体/本表命中 `SELECT` / `INSERT` / `UPDATE` 任一改写器**时 `save` / `saveAll` 才回退受 `WHERE` 保护路径（拒绝内层 `Insert` 静默并入无条件冲突分支），三者均未命中时保留原生 UPSERT；回退模式需整批原子性时请用 `joya.tx(...)` |
 | 软删 | `EntityDeleter` / `SqlRewriter` | ✅ | ⏳ | DELETE → UPDATE 应在语句构建期建模，不在 rewriter 偷换节点类型 |
-| 审计字段 | `EntityListener`（经 `EntityLifecycle`） | ✅ | ✅ | 实体字段赋值，pre 阶段；仅实体入口触发，`deleteById*` 与 `EntityUpdate`/`EntityDelete` 条件构建器不触发（见 `EntityListener` 触发矩阵） |
-| SQL 日志 / 耗时 / 指标 | `SqlExecutionListener` | ✅ | ✅ | before / after / onError / onStreamClosed |
-| 错误分类 / 重试 | `SqlExceptionTranslator` | ✅ | ✅ | SQLState → 语义异常 |
+| 审计字段 | `EntityListener` / `SqlRewriter` | ✅ | ✅ | `EntityListener` 仅保留实体自身无参前置回调 `prePersist()` / `preUpdate()`（已移除 `EntityLifecycle` 与全局监听器）；跨表全局审计列推荐使用 `SqlRewriter` |
+| SQL 日志 / 耗时 / 指标 | `SqlExecutionListener` | ✅ | ✅ | before / after / onError（含 `elapsedNanos`）/ onStreamClosed |
+| 错误分类 / 重试 | `SqlExceptionTranslator` | ✅ | ✅ | SQLState → 语义异常；Spring Starter 默认装配惰性 `SpringSqlExceptionTranslator`（翻译为 Spring `DataAccessException` 并保留原因 `SQLException` 供死锁重试识别） |
 | 动态筛选协议 | `QueryCustomizer` | ✅ | — | 查询构建期 |
 | 结果映射 | `RowMapperFactory` | ✅ | ✅ | 可由 `JoyaClient.Builder` 注入 |
 | 多数据源 | `ConnectionProvider` / `JoyaClientRegistry` | ✅ | ✅ | 连接层 |
@@ -39,7 +39,6 @@ Observe   SqlExecutionListener     →  日志 / 指标 / 慢查询
 JoyaClient.builder(dataSource)
     .rewriter(new TenantRewriter("tenant_id"))
     .executionListener(new SlowSqlListener())
-    .entityListener(new AuditListener())
     .exceptionTranslator(new SqlStateTranslator())
     .rowMapperFactory(customFactory)
     .build();
@@ -51,16 +50,16 @@ JoyaClient.builder(dataSource)
 
 | 扩展点 | 类型 | 路由规则 |
 |---|---|---|
-| `SqlRewriter` / `SqlExecutionListener` / `EntityListener` | 多值 | 无 `@Qualifier` → 所有客户端；`@Qualifier("order")` → 仅 `order` 客户端；两者叠加生效 |
-| `RowMapperFactory` / `SqlExceptionTranslator` | 单值 | 限定为本客户端的 Bean 优先，否则取全局 Bean；同一级别出现多个候选时启动失败并给出明确提示 |
+| `SqlRewriter` / `SqlExecutionListener` | 多值 | 无 `@Qualifier` → 所有客户端；`@Qualifier("order")` → 仅 `order` 客户端；两者叠加生效 |
+| `RowMapperFactory` / `SqlExceptionTranslator` / `TableNameResolver` / `Executor.Factory` | 单值 | 限定为本客户端的 Bean 优先，否则取全局 Bean；同一级别出现多个候选时启动失败并给出明确提示；未自定义 `SqlExceptionTranslator` 时默认使用 `SpringSqlExceptionTranslator` |
 
 装配发生在 `JoyaClientCustomizer` 之前，customizer 仍可对 `Builder` 做最后覆盖。
 
 > **FactoryBean 形式的扩展点**：类型探测允许 eager init（`getBeanNamesForType(type, false, true)`），
 > 以 `FactoryBean` 声明、`getObjectType()` 依赖初始化才能确定的实现同样会被发现；单值扩展点在 Bean 正在创建时返回惰性代理。
 
-> **SQL 明文日志脱敏**：同时开启 `joya.sql-log` 与 `joya.sql-log-print-args` 时，参数值会按逻辑名匹配
-> `joya.sql-log-redact-patterns`（默认覆盖 password / passwd / secret / token / credential）后替换为 `***`；
+> **SQL 日志与慢 SQL 脱敏观测**：开启 `joya.sql-log=true` 或配置 `joya.slow-sql-threshold-ms > 0` 后，内置 `joyaSqlLogListener` 在 `afterExecute` / `onError` 统一观测耗时（`elapsed=xx.xxms`）：
+> 开启 `sql-log=true` 时输出全量 `INFO` 日志与 `ERROR` 日志；仅配置 `slow-sql-threshold-ms > 0` 时对快请求零开销，仅对达到慢阈值的请求输出 `WARN` 告警（慢异常以 `ERROR` 输出）。同时开启 `joya.sql-log-print-args` 时，参数值会按逻辑名匹配 `joya.sql-log-redact-patterns`（默认覆盖 password / passwd / secret / token / credential）后替换为 `***`；
 > 非法正则在启动期直接失败，不会带着未脱敏日志运行。
 
 所有扩展点实现 `Ordered`：`order()` 升序，同值按 `Class.getName()` 字典序；排序在首次执行时惰性完成一次。
@@ -86,6 +85,6 @@ JoyaClient.builder(dataSource)
 | `SqlInterceptor` 做租户/软删/分表 | `SqlRewriter` | **已删除文本拦截层**；结构变更全部迁移到 AST |
 | `SqlInterceptor` 做日志 | `SqlExecutionListener` | starter 的 SQL 日志已改为 listener |
 | `TableNameResolver` 与拦截器都改表名 | `TableNameResolver` 唯一 | `SqlRewriter` 不提供改表 API |
-| `EntityListener` 10 处 `instanceof` | `EntityLifecycle` | 实体自身实现接口仍有效 |
+| `EntityListener` 10 处 `instanceof` | 实体自身实现无参 `prePersist()` / `preUpdate()` | 已移除 `EntityLifecycle` 与全局监听器，全局跨表审计统一归口 `SqlRewriter` |
 | 无执行观测 | `SqlExecutionListener` | 新增 |
-| 无异常分类 | `SqlExceptionTranslator` | 新增 |
+| 无异常分类 | `SqlExceptionTranslator` | Spring Boot 起步依赖默认启用 `SpringSqlExceptionTranslator` |

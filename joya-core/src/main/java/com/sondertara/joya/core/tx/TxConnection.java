@@ -192,6 +192,11 @@ public final class TxConnection implements TxSession {
         return support.resolveQueryTimeoutSeconds(fallback);
     }
 
+    @Override
+    public OptionalInt deadlineTimeoutSeconds() {
+        return support.resolveQueryTimeoutSeconds(OptionalInt.empty());
+    }
+
     // ===== 状态查询 =====
 
     @Override

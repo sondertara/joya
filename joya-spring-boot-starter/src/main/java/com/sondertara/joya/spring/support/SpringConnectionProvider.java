@@ -75,11 +75,30 @@ public final class SpringConnectionProvider implements ConnectionProvider {
 
     @Override
     public OptionalInt queryTimeoutSeconds() {
+        OptionalInt txDeadline = currentTransactionDeadlineSeconds(dataSource);
+        if (txDeadline.isPresent()) {
+            int txRemaining = txDeadline.getAsInt();
+            return OptionalInt.of(defaultTimeoutSeconds > 0
+                    ? Math.min(txRemaining, defaultTimeoutSeconds)
+                    : txRemaining);
+        }
+        return defaultTimeoutSeconds > 0 ? OptionalInt.of(defaultTimeoutSeconds) : OptionalInt.empty();
+    }
+
+    static OptionalInt currentTransactionDeadlineSeconds(DataSource dataSource) {
         Object resource = TransactionSynchronizationManager.getResource(dataSource);
         if (resource instanceof ConnectionHolder holder && holder.hasTimeout()) {
             return OptionalInt.of(Math.max(1, holder.getTimeToLiveInSeconds()));
         }
-        return defaultTimeoutSeconds > 0 ? OptionalInt.of(defaultTimeoutSeconds) : OptionalInt.empty();
+        return OptionalInt.empty();
+    }
+
+    @Override
+    public ConnectionProvider withQueryTimeoutSeconds(int queryTimeoutSeconds) {
+        int normalized = Math.max(0, queryTimeoutSeconds);
+        return normalized == this.defaultTimeoutSeconds
+                ? this
+                : new SpringConnectionProvider(dataSource, normalized);
     }
 
     @Override

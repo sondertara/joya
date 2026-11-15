@@ -2,7 +2,6 @@ package com.sondertara.joya.spring;
 
 import com.sondertara.joya.core.JoyaClient;
 import com.sondertara.joya.core.jdbc.resultset.mapper.DefaultRowMapperFactory;
-import com.sondertara.joya.core.listener.EntityListener;
 import com.sondertara.joya.core.kernel.error.SqlExceptionTranslator;
 import com.sondertara.joya.core.kernel.executor.ResultType;
 import com.sondertara.joya.core.kernel.executor.RowMapper;
@@ -10,7 +9,6 @@ import com.sondertara.joya.core.kernel.executor.RowMapperFactory;
 import com.sondertara.joya.core.kernel.interceptor.SqlRewriter;
 import com.sondertara.joya.core.kernel.observe.SqlExecutionContext;
 import com.sondertara.joya.core.kernel.observe.SqlExecutionListener;
-import com.sondertara.joya.exceptions.DbException;
 import com.sondertara.joya.spring.autoconfigure.JoyaClientRegistry;
 import com.sondertara.joya.spring.test.order.OrderRecord;
 import com.sondertara.joya.spring.test.user.UserAccount;
@@ -21,6 +19,8 @@ import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.dao.DataAccessException;
+import org.springframework.jdbc.BadSqlGrammarException;
 
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -32,9 +32,9 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Spring 起步依赖对统一扩展点（{@code SqlRewriter} / {@code SqlExecutionListener} / {@code EntityListener} /
- * {@code RowMapperFactory} / {@code SqlExceptionTranslator}）的自动发现与按客户端路由：
- * 无 {@code @Qualifier} 的 Bean 对所有客户端生效，带 {@code @Qualifier("name")} 的只对同名客户端生效。
+ * Spring 起步依赖对统一扩展点（{@code SqlRewriter} / {@code SqlExecutionListener} /
+ * {@code RowMapperFactory} / {@code SqlExceptionTranslator} / {@code TableNameResolver} / {@code Executor.Factory}）
+ * 的自动发现与按客户端路由：无 {@code @Qualifier} 的 Bean 对所有客户端生效，带 {@code @Qualifier("name")} 的只对同名客户端生效。
  */
 class JoyaSpringExtensionPointsTest {
 
@@ -52,7 +52,6 @@ class JoyaSpringExtensionPointsTest {
         static final List<String> LISTENER_LOG = new CopyOnWriteArrayList<>();
         static final AtomicInteger GLOBAL_REWRITES = new AtomicInteger();
         static final AtomicInteger ORDER_REWRITES = new AtomicInteger();
-        static final List<String> PERSISTED = new CopyOnWriteArrayList<>();
         static final AtomicInteger MAPPER_FACTORY_CALLS = new AtomicInteger();
 
         @Bean
@@ -90,16 +89,6 @@ class JoyaSpringExtensionPointsTest {
             return (node, ctx) -> {
                 ORDER_REWRITES.incrementAndGet();
                 return node;
-            };
-        }
-
-        @Bean
-        EntityListener globalEntityListener() {
-            return new EntityListener() {
-                @Override
-                public void prePersist(Object entity) {
-                    PERSISTED.add(entity.getClass().getSimpleName());
-                }
             };
         }
 
@@ -156,7 +145,6 @@ class JoyaSpringExtensionPointsTest {
         ExtensionConfig.LISTENER_LOG.clear();
         ExtensionConfig.GLOBAL_REWRITES.set(0);
         ExtensionConfig.ORDER_REWRITES.set(0);
-        ExtensionConfig.PERSISTED.clear();
         ExtensionConfig.MAPPER_FACTORY_CALLS.set(0);
     }
 
@@ -192,15 +180,13 @@ class JoyaSpringExtensionPointsTest {
             assertTrue(ExtensionConfig.GLOBAL_REWRITES.get() > globalAfterPrimary, "全局改写器同样作用于 order");
             assertTrue(ExtensionConfig.ORDER_REWRITES.get() > 0, "限定 order 的改写器作用于 order");
 
-            // ---- EntityListener：全局生效（两库共用）----
+            // ---- 插入与批量都经过 SqlExecutionListener ----
             UserAccount user = new UserAccount();
             user.setId(1L);
             user.setUserName("ext");
             user.setAge(1);
             primary.of(UserAccount.class).insert(user);
-            assertEquals(List.of("UserAccount"), ExtensionConfig.PERSISTED);
 
-            // ---- 批量也经过 listener ----
             ExtensionConfig.LISTENER_LOG.clear();
             UserAccount u2 = new UserAccount();
             u2.setId(2L);
@@ -218,13 +204,14 @@ class JoyaSpringExtensionPointsTest {
             primary.from(UserAccount.class).list();
             assertTrue(ExtensionConfig.MAPPER_FACTORY_CALLS.get() > 0, "自定义 RowMapperFactory 生效");
 
-            // ---- SqlExceptionTranslator：限定 order，primary 仍是默认 DbException ----
+            // ---- SqlExceptionTranslator：限定 order，primary 默认使用 SpringSqlExceptionTranslator ----
             Throwable orderFailure = org.junit.jupiter.api.Assertions.assertThrows(RuntimeException.class,
                     () -> order.sql("DELETE FROM no_such_table").update());
             assertInstanceOf(OrderDbFailure.class, orderFailure);
             Throwable primaryFailure = org.junit.jupiter.api.Assertions.assertThrows(RuntimeException.class,
                     () -> primary.sql("DELETE FROM no_such_table").update());
-            assertInstanceOf(DbException.class, primaryFailure);
+            assertInstanceOf(DataAccessException.class, primaryFailure);
+            assertInstanceOf(BadSqlGrammarException.class, primaryFailure);
             assertNotNull(primaryFailure.getMessage());
         });
     }
@@ -248,15 +235,15 @@ class JoyaSpringExtensionPointsTest {
         static final List<String> ORDER_LOG = new CopyOnWriteArrayList<>();
 
         @Bean
-        EntityListener clientInjectingEntityListener(JoyaClient joyaClient) {
-            return new EntityListener() {
+        SqlExecutionListener clientInjectingExecutionListener(JoyaClient joyaClient) {
+            return new SqlExecutionListener() {
                 @Override
                 public int order() {
                     return 20;
                 }
 
                 @Override
-                public void prePersist(Object entity) {
+                public void beforeExecute(SqlExecutionContext ctx) {
                     assertNotNull(joyaClient.settings());
                     ORDER_LOG.add("lazy-20");
                 }
@@ -264,15 +251,15 @@ class JoyaSpringExtensionPointsTest {
         }
 
         @Bean
-        EntityListener plainEntityListener() {
-            return new EntityListener() {
+        SqlExecutionListener plainExecutionListener() {
+            return new SqlExecutionListener() {
                 @Override
                 public int order() {
                     return 10;
                 }
 
                 @Override
-                public void prePersist(Object entity) {
+                public void beforeExecute(SqlExecutionContext ctx) {
                     ORDER_LOG.add("eager-10");
                 }
             };
@@ -284,10 +271,11 @@ class JoyaSpringExtensionPointsTest {
         CircularListenerConfig.ORDER_LOG.clear();
         runner(CircularListenerConfig.class).run(context -> {
             assertEquals(null, context.getStartupFailure(),
-                    "多个 EntityListener 且其一注入 JoyaClient 时不应在构造期触发 BeanCurrentlyInCreationException");
+                    "多个 SqlExecutionListener 且其一注入 JoyaClient 时不应在构造期触发 BeanCurrentlyInCreationException");
             JoyaClient primary = context.getBean(JoyaClient.class);
             primary.sql("CREATE TABLE IF NOT EXISTS t_user_account "
                     + "(id BIGINT PRIMARY KEY, user_name VARCHAR(64) NOT NULL, age INT NOT NULL)").update();
+            CircularListenerConfig.ORDER_LOG.clear();
             UserAccount user = new UserAccount();
             user.setId(88L);
             user.setUserName("lazy-ext");

@@ -1,5 +1,6 @@
 package com.sondertara.joya.core.tx;
 
+import com.sondertara.joya.core.DataOps;
 import com.sondertara.joya.core.DataOpsSupport;
 import com.sondertara.joya.core.EntityOps;
 import com.sondertara.joya.core.JoyaSettings;
@@ -10,7 +11,6 @@ import com.sondertara.joya.core.kernel.connection.ConnectionProvider;
 import com.sondertara.joya.core.kernel.executor.ResultSetSpliterator;
 import com.sondertara.joya.core.kernel.statement.DbType;
 import com.sondertara.joya.core.kernel.statement.SqlStatement;
-import com.sondertara.joya.core.listener.EntityLifecycle;
 import com.sondertara.joya.core.query.dsl.Query;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -26,6 +26,7 @@ import java.util.Objects;
 import java.util.OptionalInt;
 import java.util.Set;
 import java.util.function.Consumer;
+import java.util.function.UnaryOperator;
 
 /**
  * {@link Tx} 的统一实现：绑定一个底层 {@link TxSession}（纯 JDBC {@link TxConnection} 或 Spring 事务会话）
@@ -48,12 +49,12 @@ public final class TxImpl implements Tx {
     private boolean deferCompletionCallbacks;
     private boolean completionCallbacksFired;
 
-    public TxImpl(ExecutionKernel rootKernel, TxSession session, EntityLifecycle entityLifecycle) {
+    public TxImpl(ExecutionKernel rootKernel, TxSession session) {
         this.session = Objects.requireNonNull(session, "session must not be null");
         this.ownerThread = Thread.currentThread();
         this.kernel = Objects.requireNonNull(rootKernel, "rootKernel must not be null")
-                .bind(new TransactionalConnectionProvider(session));
-        this.dataOps = DataOpsSupport.singleThread(this, kernel, entityLifecycle, this::checkActive);
+                .bind(new TransactionalConnectionProvider(session, -1));
+        this.dataOps = DataOpsSupport.singleThread(this, kernel, this::checkActive);
     }
 
     public boolean isCompleted() {
@@ -113,6 +114,25 @@ public final class TxImpl implements Tx {
     @Override
     public DbType dbType() {
         return dataOps.dbType();
+    }
+
+    @Override
+    public DataOps withSettings(UnaryOperator<JoyaSettings> customizer) {
+        checkActive();
+        return deriveSettingsView(kernel, dataOps.settings(), customizer, this);
+    }
+
+    private DataOps deriveSettingsView(ExecutionKernel baseKernel,
+                                       JoyaSettings current,
+                                       UnaryOperator<JoyaSettings> customizer,
+                                       DataOps sameView) {
+        Objects.requireNonNull(customizer, "customizer must not be null");
+        JoyaSettings next = Objects.requireNonNull(customizer.apply(current),
+                "settings customizer must not return null");
+        if (next.equals(current)) {
+            return sameView;
+        }
+        return new TxSettingsView(baseKernel.withSettings(next.executionOptions(), next.namingPolicy()));
     }
 
     // ===== 保存点（Savepoint） =====
@@ -363,11 +383,74 @@ public final class TxImpl implements Tx {
         }
     }
 
+    private final class TxSettingsView implements DataOps {
+        private final ExecutionKernel viewKernel;
+        private final DataOpsSupport viewDataOps;
+
+        private TxSettingsView(ExecutionKernel viewKernel) {
+            this.viewKernel = Objects.requireNonNull(viewKernel, "viewKernel must not be null");
+            this.viewDataOps = DataOpsSupport.singleThread(this, viewKernel, TxImpl.this::checkActive);
+        }
+
+        @Override
+        public <T> Query<T> from(Class<T> entityType) {
+            return viewDataOps.from(entityType);
+        }
+
+        @Override
+        public <T> EntityOps<T> of(Class<T> entityType) {
+            return viewDataOps.of(entityType);
+        }
+
+        @Override
+        public SqlOps sql(String sql, Object... args) {
+            return viewDataOps.sql(sql, args);
+        }
+
+        @Override
+        public SqlOps sql(SqlStatement statement) {
+            return viewDataOps.sql(statement);
+        }
+
+        @Override
+        public <M> M mapper(Class<M> mapperType) {
+            return viewDataOps.mapper(mapperType);
+        }
+
+        @Override
+        public <T> T withConnection(ConnectionCallback<T> action) {
+            return viewDataOps.withConnection(action);
+        }
+
+        @Override
+        public void script(Reader reader) {
+            viewDataOps.script(reader);
+        }
+
+        @Override
+        public JoyaSettings settings() {
+            return viewDataOps.settings();
+        }
+
+        @Override
+        public DbType dbType() {
+            return viewDataOps.dbType();
+        }
+
+        @Override
+        public DataOps withSettings(UnaryOperator<JoyaSettings> customizer) {
+            checkActive();
+            return deriveSettingsView(viewKernel, viewDataOps.settings(), customizer, this);
+        }
+    }
+
     private final class TransactionalConnectionProvider implements ConnectionProvider, ResultSetSpliterator.StreamAccess {
         private final TxSession delegate;
+        private final int overrideTimeoutSeconds;
 
-        private TransactionalConnectionProvider(TxSession delegate) {
+        private TransactionalConnectionProvider(TxSession delegate, int overrideTimeoutSeconds) {
             this.delegate = delegate;
+            this.overrideTimeoutSeconds = overrideTimeoutSeconds;
         }
 
         @Override
@@ -388,7 +471,22 @@ public final class TxImpl implements Tx {
 
         @Override
         public OptionalInt queryTimeoutSeconds() {
-            return delegate.queryTimeoutSeconds();
+            if (overrideTimeoutSeconds < 0) {
+                return delegate.queryTimeoutSeconds();
+            }
+            OptionalInt deadline = delegate.deadlineTimeoutSeconds();
+            if (overrideTimeoutSeconds == 0) {
+                return deadline != null ? deadline : OptionalInt.empty();
+            }
+            if (deadline != null && deadline.isPresent()) {
+                return OptionalInt.of(Math.min(deadline.getAsInt(), overrideTimeoutSeconds));
+            }
+            return OptionalInt.of(overrideTimeoutSeconds);
+        }
+
+        @Override
+        public ConnectionProvider withQueryTimeoutSeconds(int queryTimeoutSeconds) {
+            return new TransactionalConnectionProvider(delegate, Math.max(0, queryTimeoutSeconds));
         }
 
         @Override

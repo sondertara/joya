@@ -326,7 +326,7 @@ class KernelIntegrationTest {
                     }
 
                     @Override
-                    public void onError(SqlExecutionContext ctx, Throwable error) {
+                    public void onError(SqlExecutionContext ctx, Throwable error, long elapsedNanos) {
                         errorEvents.add("onError");
                     }
                 }),

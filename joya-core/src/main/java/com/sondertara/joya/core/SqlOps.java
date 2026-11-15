@@ -8,6 +8,7 @@ import com.sondertara.joya.core.kernel.ExecutionKernel;
 import com.sondertara.joya.core.kernel.PageSlice;
 import com.sondertara.joya.core.kernel.statement.BatchSqlStatement;
 import com.sondertara.joya.core.kernel.statement.DbType;
+import com.sondertara.joya.core.kernel.statement.NamedSqlCompiler;
 import com.sondertara.joya.core.kernel.statement.Operation;
 import com.sondertara.joya.core.kernel.statement.SqlFormatUtils;
 import com.sondertara.joya.core.kernel.statement.SqlRenderer;
@@ -16,9 +17,19 @@ import com.sondertara.joya.core.kernel.statement.StatementMetadata;
 import com.sondertara.joya.core.query.PageResult;
 import com.sondertara.joya.core.query.pagination.PageRequest;
 import com.sondertara.joya.core.result.MutationResult;
+import com.sondertara.joya.utils.Strings;
+import org.jspecify.annotations.Nullable;
 
+import java.beans.IntrospectionException;
+import java.beans.Introspector;
+import java.beans.PropertyDescriptor;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
+import java.lang.reflect.RecordComponent;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -38,6 +49,7 @@ public final class SqlOps {
     private final String sql;
     private final Object[] args;
     private final SqlStatement presetStatement;
+    private Map<String, Object> namedBindings;
     private DbType explicitDbType;
     private DbType resolvedDbType;
 
@@ -61,8 +73,79 @@ public final class SqlOps {
         return this;
     }
 
+    /**
+     * 绑定单个命名参数（对应 SQL 中的 {@code :name} 占位符；集合值自动展开为 {@code ?, ?, ...}）。
+     *
+     * <p>不可与构造器传入的位置参数 {@code args}、预构建 {@link SqlStatement} 或 {@code batch(...)} 混用。
+     */
+    public SqlOps bind(String name, @Nullable Object value) {
+        if (Strings.isBlank(name) || name.startsWith(":")) {
+            throw new IllegalArgumentException(
+                    "Named SQL parameter name must not be blank or start with ':': " + name);
+        }
+        ensureNamedBindingAllowed();
+        namedBindings.put(name, value);
+        return this;
+    }
+
+    /**
+     * 从 {@link Map} 批量绑定命名参数（允许传入比 SQL 占位符更多的键，后绑定同名键覆盖前者）。
+     */
+    public SqlOps bindMap(@Nullable Map<String, ?> params) {
+        ensureNamedBindingAllowed();
+        if (params != null && !params.isEmpty()) {
+            for (Map.Entry<String, ?> entry : params.entrySet()) {
+                String key = entry.getKey();
+                if (Strings.isBlank(key) || key.startsWith(":")) {
+                    throw new IllegalArgumentException(
+                            "Named SQL parameter name in map must not be blank or start with ':': " + key);
+                }
+                namedBindings.put(key, entry.getValue());
+            }
+        }
+        return this;
+    }
+
+    /**
+     * 从 JavaBean、Java {@code record} 或普通 DTO 对象提取属性并绑定为命名参数（Map 请改用 {@link #bindMap}）。
+     */
+    public SqlOps bindBean(Object bean) {
+        Objects.requireNonNull(bean, "bean must not be null");
+        if (bean instanceof Map<?, ?>) {
+            throw new IllegalArgumentException("Use bindMap(Map) for Map values instead of bindBean(Object)");
+        }
+        Class<?> type = bean.getClass();
+        if (bean instanceof Iterable<?> || type.isArray() || ResultType.classify(type) == ResultType.SCALAR) {
+            throw new IllegalArgumentException(
+                    "bindBean(Object) requires a JavaBean or record instance, not scalar/collection/array: "
+                            + type.getName());
+        }
+        ensureNamedBindingAllowed();
+        extractBeanProperties(bean, namedBindings);
+        return this;
+    }
+
+    private void ensureNamedBindingAllowed() {
+        if (presetStatement != null) {
+            throw new IllegalStateException("Cannot bind named parameters on a pre-built SqlStatement");
+        }
+        if (args.length > 0) {
+            throw new IllegalStateException(
+                    "Cannot combine positional arguments with named parameter bindings (.bind/.bindMap/.bindBean)");
+        }
+        if (namedBindings == null) {
+            namedBindings = new LinkedHashMap<>();
+        }
+    }
+
     private SqlStatement selectStmt() {
-        return withCurrentDbType(presetStatement != null ? presetStatement : SqlStatement.select(sql, args));
+        if (presetStatement != null) {
+            return withCurrentDbType(presetStatement);
+        }
+        if (namedBindings != null) {
+            return NamedSqlCompiler.compile(sql, namedBindings, Operation.SELECT, currentDbType());
+        }
+        return withCurrentDbType(SqlStatement.select(sql, args));
     }
 
     private SqlStatement withCurrentDbType(SqlStatement statement) {
@@ -232,8 +315,14 @@ public final class SqlOps {
 
     /** 执行 INSERT 语句，返回包含生成键与真实影响行数的 {@link MutationResult}。 */
     public MutationResult insert() {
-        SqlStatement stmt = withCurrentDbType(
-                presetStatement != null ? presetStatement : SqlStatement.insert(sql, args));
+        SqlStatement stmt;
+        if (presetStatement != null) {
+            stmt = withCurrentDbType(presetStatement);
+        } else if (namedBindings != null) {
+            stmt = NamedSqlCompiler.compile(sql, namedBindings, Operation.INSERT, currentDbType());
+        } else {
+            stmt = withCurrentDbType(SqlStatement.insert(sql, args));
+        }
         var slice = kernel.insertExecute(stmt);
         return MutationResult.ofInsert(slice.affectedRows(), slice.generatedKey());
     }
@@ -259,6 +348,10 @@ public final class SqlOps {
      * 使用当前 SQL 模板并按指定分片大小执行批量参数更新，返回折算受影响行数的 {@link MutationResult}。
      */
     public MutationResult batchResult(List<Object[]> batchArgs, int batchSize) {
+        if (namedBindings != null) {
+            throw new IllegalStateException(
+                    "Named parameter bindings (.bind/.bindMap/.bindBean) are not supported with positional batch()");
+        }
         DbType dbType = currentDbType();
         SqlStatement batchTemplate = withCurrentDbType(presetStatement != null
                 ? presetStatement
@@ -279,6 +372,9 @@ public final class SqlOps {
     private SqlStatement dmlStmt(String sql, Object[] args) {
         DbType dbType = currentDbType();
         Operation op = SqlFormatUtils.inferDmlOperation(sql, dbType);
+        if (namedBindings != null) {
+            return NamedSqlCompiler.compile(sql, namedBindings, op, dbType);
+        }
         SqlStatement stmt = switch (op) {
             case INSERT -> SqlStatement.insert(sql, args);
             case DELETE -> SqlStatement.delete(sql, args);
@@ -331,5 +427,42 @@ public final class SqlOps {
     private <T> RowMapper<T> mapperForType(Class<T> type) {
         Objects.requireNonNull(type, "result type must not be null");
         return kernel.mapperFor(ResultType.classify(type), type);
+    }
+
+    private static void extractBeanProperties(Object bean, Map<String, Object> target) {
+        Class<?> type = bean.getClass();
+        try {
+            if (type.isRecord()) {
+                for (RecordComponent component : type.getRecordComponents()) {
+                    Method accessor = component.getAccessor();
+                    accessor.trySetAccessible();
+                    target.put(component.getName(), accessor.invoke(bean));
+                }
+                return;
+            }
+            PropertyDescriptor[] descriptors = Introspector.getBeanInfo(type, Object.class).getPropertyDescriptors();
+            for (PropertyDescriptor pd : descriptors) {
+                Method readMethod = pd.getReadMethod();
+                if (readMethod != null) {
+                    readMethod.trySetAccessible();
+                    target.put(pd.getName(), readMethod.invoke(bean));
+                }
+            }
+            Class<?> cursor = type;
+            while (cursor != null && cursor != Object.class && !cursor.getName().startsWith("java.")) {
+                for (Field field : cursor.getDeclaredFields()) {
+                    if (!Modifier.isStatic(field.getModifiers())
+                            && !field.isSynthetic()
+                            && !target.containsKey(field.getName())
+                            && field.trySetAccessible()) {
+                        target.put(field.getName(), field.get(bean));
+                    }
+                }
+                cursor = cursor.getSuperclass();
+            }
+        } catch (ReflectiveOperationException | IntrospectionException e) {
+            throw new IllegalArgumentException(
+                    "Failed to extract properties for bindBean() from " + type.getName(), e);
+        }
     }
 }

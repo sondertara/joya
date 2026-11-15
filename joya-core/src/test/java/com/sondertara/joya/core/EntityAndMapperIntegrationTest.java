@@ -14,7 +14,6 @@ import com.sondertara.joya.core.kernel.statement.StatementMetadata;
 import com.sondertara.joya.core.kernel.statement.TableRef;
 import com.sondertara.joya.core.kernel.observe.SqlExecutionContext;
 import com.sondertara.joya.core.kernel.observe.SqlExecutionListener;
-import com.sondertara.joya.core.kernel.observe.SqlExecutionResult;
 import com.sondertara.joya.core.metadata.EntityMetadataContext;
 import com.sondertara.joya.core.naming.NamingPolicy;
 import com.sondertara.joya.core.query.criterion.WhereCriterion;
@@ -37,14 +36,9 @@ import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLFeatureNotSupportedException;
 import java.sql.Time;
-import java.sql.Timestamp;
-import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
-import java.time.OffsetDateTime;
-import java.time.ZoneId;
-import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -318,7 +312,7 @@ class EntityAndMapperIntegrationTest {
         @Column(name = "id")
         private Long id;
 
-        private transient boolean postUpdateCalled;
+        private transient boolean preUpdateCalled;
 
         public EmptyUpdateEntity() {
         }
@@ -328,8 +322,8 @@ class EntityAndMapperIntegrationTest {
         }
 
         @Override
-        public void postUpdate(Object entity) {
-            this.postUpdateCalled = true;
+        public void preUpdate() {
+            this.preUpdateCalled = true;
         }
     }
 
@@ -790,11 +784,7 @@ class EntityAndMapperIntegrationTest {
     @Table(name = "t_dept")
     public static class AuditedDept extends Dept implements EntityListener {
         private transient boolean persistCalled;
-        private transient boolean postPersistCalled;
         private transient boolean updateCalled;
-        private transient boolean postUpdateCalled;
-        private transient boolean preRemoveCalled;
-        private transient boolean postRemoveCalled;
 
         public AuditedDept() {
         }
@@ -804,7 +794,7 @@ class EntityAndMapperIntegrationTest {
         }
 
         @Override
-        public void prePersist(Object entity) {
+        public void prePersist() {
             this.persistCalled = true;
             if (getDeptName() == null) {
                 setDeptName("DEFAULT_DEPT");
@@ -812,28 +802,8 @@ class EntityAndMapperIntegrationTest {
         }
 
         @Override
-        public void postPersist(Object entity) {
-            this.postPersistCalled = true;
-        }
-
-        @Override
-        public void preUpdate(Object entity) {
+        public void preUpdate() {
             this.updateCalled = true;
-        }
-
-        @Override
-        public void postUpdate(Object entity) {
-            this.postUpdateCalled = true;
-        }
-
-        @Override
-        public void preRemove(Object entity) {
-            this.preRemoveCalled = true;
-        }
-
-        @Override
-        public void postRemove(Object entity) {
-            this.postRemoveCalled = true;
         }
     }
 
@@ -849,26 +819,26 @@ class EntityAndMapperIntegrationTest {
 
         AuditedDept first = new AuditedDept(1L, "Existing");
         joya.of(AuditedDept.class).insert(first);
-        assertTrue(first.persistCalled && first.postPersistCalled);
+        assertTrue(first.persistCalled);
 
         AuditedDept existing = new AuditedDept(1L, "ExistingUpdated");
         AuditedDept fresh = new AuditedDept(2L, null);
         joya.of(AuditedDept.class).saveAll(List.of(existing, fresh));
 
-        assertTrue(existing.updateCalled && existing.postUpdateCalled, "已存在实体在 saveAll 中应触发 preUpdate 和 postUpdate");
+        assertTrue(existing.updateCalled, "已存在实体在 saveAll 中应触发 preUpdate");
         assertFalse(existing.persistCalled);
-        assertTrue(fresh.persistCalled && fresh.postPersistCalled, "新增实体在 saveAll 中应触发 prePersist 和 postPersist");
+        assertTrue(fresh.persistCalled, "新增实体在 saveAll 中应触发 prePersist");
         assertFalse(fresh.updateCalled);
         assertEquals("DEFAULT_DEPT", joya.of(AuditedDept.class).findById(2L).orElseThrow().getDeptName());
 
         joya.of(AuditedDept.class).delete(fresh);
-        assertTrue(fresh.preRemoveCalled && fresh.postRemoveCalled, "delete(entity) 应触发 preRemove 和 postRemove");
+        assertTrue(joya.of(AuditedDept.class).findById(2L).isEmpty());
 
         assertSame(BeanRowMapper.of(Account.class), BeanRowMapper.of(Account.class));
     }
 
     @Test
-    void delete_validatesWholeInputBeforeListenersAndSql() {
+    void delete_validatesWholeInputBeforeSql() {
         joya.sql("""
                 DROP TABLE IF EXISTS t_dept;
                 CREATE TABLE t_dept (
@@ -883,21 +853,16 @@ class EntityAndMapperIntegrationTest {
         executedStatements.clear();
 
         assertThrows(IllegalArgumentException.class, () -> ops.deleteAll(List.of(valid, missingKey)));
-        assertFalse(valid.preRemoveCalled || valid.postRemoveCalled);
-        assertFalse(missingKey.preRemoveCalled || missingKey.postRemoveCalled);
         assertTrue(executedStatements.isEmpty(), "deleteAll 主键预检失败前不得触发 SQL");
 
         assertThrows(NullPointerException.class, () -> ops.deleteAll(Arrays.asList(valid, null)));
-        assertFalse(valid.preRemoveCalled || valid.postRemoveCalled);
         assertTrue(executedStatements.isEmpty(), "deleteAll 元素预检失败前不得触发 SQL");
 
         assertThrows(IllegalArgumentException.class, () -> ops.delete(missingKey));
-        assertFalse(missingKey.preRemoveCalled || missingKey.postRemoveCalled);
         assertTrue(executedStatements.isEmpty(), "delete 主键预检失败前不得触发 SQL");
         assertEquals(2L, ops.count());
 
         ops.delete(valid);
-        assertTrue(valid.preRemoveCalled && valid.postRemoveCalled);
         assertEquals(1L, ops.count());
     }
 

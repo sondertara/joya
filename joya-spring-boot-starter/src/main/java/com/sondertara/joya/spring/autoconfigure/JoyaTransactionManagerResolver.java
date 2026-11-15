@@ -38,32 +38,9 @@ final class JoyaTransactionManagerResolver {
             return null;
         }
 
-        List<PlatformTransactionManager> exact = managers.stream()
-                .filter(tm -> tm instanceof ResourceTransactionManager rtm
-                        && SpringTxEngine.matchesDataSource(rtm.getResourceFactory(), primaryDataSource))
-                .toList();
-        if (exact.size() > 1) {
-            throw new IllegalStateException("Multiple Spring transaction managers match the primary DataSource ("
-                    + primaryDataSource + "): " + exact + ". Configure a single @Primary transaction manager.");
-        }
-        if (exact.size() == 1) {
-            return exact.get(0);
-        }
-
-        List<PlatformTransactionManager> jpaBound = managers.stream()
-                .filter(JpaTransactionManagerSupport::isJpa)
-                .filter(tm -> {
-                    DataSource jpaDataSource = JpaTransactionManagerSupport.dataSource(tm);
-                    return jpaDataSource != null
-                            && SpringTxEngine.matchesDataSource(jpaDataSource, primaryDataSource);
-                })
-                .toList();
-        if (jpaBound.size() > 1) {
-            throw new IllegalStateException("Multiple JpaTransactionManagers are bound to the primary DataSource ("
-                    + primaryDataSource + "): " + jpaBound + ". Configure a single one.");
-        }
-        if (jpaBound.size() == 1) {
-            return jpaBound.get(0);
+        PlatformTransactionManager matched = findMatchingManager(managers, primaryDataSource, "the primary DataSource");
+        if (matched != null) {
+            return matched;
         }
 
         for (PlatformTransactionManager tm : managers) {
@@ -86,5 +63,50 @@ final class JoyaTransactionManagerResolver {
             }
         }
         return null;
+    }
+
+    /**
+     * 扩展数据源可选事务管理器解析：仅当容器存在明确匹配该 {@link DataSource} 的事务管理器时返回；无匹配时安静返回 {@code null}。
+     */
+    static PlatformTransactionManager resolveOptional(DataSource dataSource,
+                                                      ObjectProvider<PlatformTransactionManager> txManagerProvider) {
+        if (dataSource == null || txManagerProvider == null) {
+            return null;
+        }
+        List<PlatformTransactionManager> managers = txManagerProvider.orderedStream().toList();
+        if (managers.isEmpty()) {
+            return null;
+        }
+        return findMatchingManager(managers, dataSource, "DataSource");
+    }
+
+    private static PlatformTransactionManager findMatchingManager(List<PlatformTransactionManager> managers,
+                                                                    DataSource targetDataSource,
+                                                                    String targetLabel) {
+        List<PlatformTransactionManager> exact = managers.stream()
+                .filter(tm -> tm instanceof ResourceTransactionManager rtm
+                        && SpringTxEngine.matchesDataSource(rtm.getResourceFactory(), targetDataSource))
+                .toList();
+        if (exact.size() > 1) {
+            throw new IllegalStateException("Multiple Spring transaction managers match " + targetLabel + " ("
+                    + targetDataSource + "): " + exact + ". Configure a single transaction manager or specify transaction-manager-bean.");
+        }
+        if (exact.size() == 1) {
+            return exact.get(0);
+        }
+
+        List<PlatformTransactionManager> jpaBound = managers.stream()
+                .filter(JpaTransactionManagerSupport::isJpa)
+                .filter(tm -> {
+                    DataSource jpaDataSource = JpaTransactionManagerSupport.dataSource(tm);
+                    return jpaDataSource != null
+                            && SpringTxEngine.matchesDataSource(jpaDataSource, targetDataSource);
+                })
+                .toList();
+        if (jpaBound.size() > 1) {
+            throw new IllegalStateException("Multiple JpaTransactionManagers are bound to " + targetLabel + " ("
+                    + targetDataSource + "): " + jpaBound + ". Configure a single one or specify transaction-manager-bean.");
+        }
+        return jpaBound.size() == 1 ? jpaBound.get(0) : null;
     }
 }

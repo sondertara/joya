@@ -1,6 +1,5 @@
 package com.sondertara.joya.core;
 
-import com.sondertara.joya.core.listener.EntityLifecycle;
 import com.sondertara.joya.core.kernel.ExecutionKernel;
 import com.sondertara.joya.core.metadata.EntityMetadataContext;
 import com.sondertara.joya.core.result.MutationResult;
@@ -19,43 +18,41 @@ final class EntityWriter<T> {
 
     private final ExecutionKernel kernel;
     private final EntityMetadataContext meta;
-    private final EntityLifecycle lifecycle;
 
-    EntityWriter(ExecutionKernel kernel, EntityMetadataContext meta, EntityLifecycle lifecycle) {
+    EntityWriter(ExecutionKernel kernel, EntityMetadataContext meta) {
         this.kernel = Objects.requireNonNull(kernel, "kernel must not be null");
         this.meta = Objects.requireNonNull(meta, "meta must not be null");
-        this.lifecycle = lifecycle == null ? EntityLifecycle.EMPTY : lifecycle;
     }
 
     MutationResult insert(T entity, boolean ignoreNull) {
         return new InsertPlan<>(meta, List.of(Objects.requireNonNull(entity, "entity must not be null")),
-                ignoreNull, "entity must not be null", Map.of(), lifecycle).execute(kernel);
+                ignoreNull, "entity must not be null", Map.of()).execute(kernel);
     }
 
     MutationResult insertAll(Collection<T> entities, boolean ignoreNull) {
         String message = ignoreNull
                 ? "Entity element in insertAllIgnoreNull must not be null"
                 : "Entity element in insertAll must not be null";
-        return new InsertPlan<>(meta, entities, ignoreNull, message, Map.of(), lifecycle).execute(kernel);
+        return new InsertPlan<>(meta, entities, ignoreNull, message, Map.of()).execute(kernel);
     }
 
     MutationResult updateByPrimaryKey(T entity, boolean ignoreNull) {
-        return UpdatePlan.byPrimaryKey(meta, entity, ignoreNull, requirePrimaryKey(), lifecycle).execute(kernel);
+        return UpdatePlan.byPrimaryKey(meta, entity, ignoreNull, requirePrimaryKey()).execute(kernel);
     }
 
     MutationResult updateAll(Collection<T> entities) {
         String pk = requirePrimaryKey();
         List<String> setColumns = new ArrayList<>(meta.updatableColumns());
         setColumns.remove(pk);
-        return UpdatePlan.executeUpdateAll(kernel, meta, entities, setColumns, pk, lifecycle);
+        return UpdatePlan.executeUpdateAll(kernel, meta, entities, setColumns, pk);
     }
 
     MutationResult updateAllByColumns(Collection<T> entities, Collection<String> columns) {
-        return UpdatePlan.executeUpdateAllByColumns(kernel, meta, entities, columns, requirePrimaryKey(), lifecycle);
+        return UpdatePlan.executeUpdateAllByColumns(kernel, meta, entities, columns, requirePrimaryKey());
     }
 
     MutationResult patchAll(Collection<T> entities) {
-        return UpdatePlan.executePatchAll(kernel, meta, entities, requirePrimaryKey(), lifecycle);
+        return UpdatePlan.executePatchAll(kernel, meta, entities, requirePrimaryKey());
     }
 
     String requirePrimaryKey() {

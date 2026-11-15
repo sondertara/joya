@@ -1,5 +1,8 @@
 package com.sondertara.joya.core.query.pagination;
 
+import com.sondertara.joya.core.function.IGetter;
+import com.sondertara.joya.utils.LambdaUtils;
+
 import java.io.Serializable;
 import java.util.Objects;
 
@@ -28,8 +31,16 @@ public final class SortCondition implements Serializable {
         return new SortCondition(field, SortDirection.ASC);
     }
 
+    public static <T> SortCondition asc(IGetter<T, ?> getter) {
+        return asc(LambdaUtils.getPropertyName(Objects.requireNonNull(getter, "getter must not be null")));
+    }
+
     public static SortCondition desc(String field) {
         return new SortCondition(field, SortDirection.DESC);
+    }
+
+    public static <T> SortCondition desc(IGetter<T, ?> getter) {
+        return desc(LambdaUtils.getPropertyName(Objects.requireNonNull(getter, "getter must not be null")));
     }
 
     public String getField() {

@@ -2,7 +2,6 @@ package com.sondertara.joya.core.kernel;
 
 import com.sondertara.joya.core.kernel.connection.ConnectionCallback;
 import com.sondertara.joya.core.kernel.connection.ConnectionProvider;
-import com.sondertara.joya.core.kernel.connection.DataSourceConnectionProvider;
 import com.sondertara.joya.core.kernel.dialect.Dialect;
 import com.sondertara.joya.core.kernel.dialect.DialectStrategy;
 import com.sondertara.joya.core.kernel.error.SqlExceptionTranslator;
@@ -94,10 +93,8 @@ public final class ExecutionKernel {
             dialectStrategy = Objects.requireNonNull(dialectStrategy, "dialectStrategy must not be null");
             executionOptions = executionOptions == null ? ExecutionOptions.DEFAULT : executionOptions;
             if (executionOptions.queryTimeoutSeconds() > 0
-                    && !(connections instanceof ResultSetSpliterator.StreamAccess)
-                    && !(connections instanceof DataSourceConnectionProvider)) {
-                connections = ConnectionProvider.withFallbackQueryTimeout(
-                        connections, executionOptions.queryTimeoutSeconds());
+                    && !(connections instanceof ResultSetSpliterator.StreamAccess)) {
+                connections = connections.withQueryTimeoutSeconds(executionOptions.queryTimeoutSeconds());
             }
             namingPolicy = namingPolicy == null ? NamingPolicy.DEFAULT : namingPolicy;
             rowMapperFactory = rowMapperFactory == null ? RowMapperFactory.DEFAULT : rowMapperFactory;
@@ -132,6 +129,29 @@ public final class ExecutionKernel {
                 dialectStrategy,
                 executionOptions,
                 namingPolicy,
+                rowMapperFactory,
+                config.exceptionTranslator(),
+                config.executorFactory()
+        ));
+    }
+
+    /**
+     * 派生一个使用新执行选项与命名策略的内核视图（共享连接来源语义、改写器、监听器与扩展端口）。
+     * <p>若语句超时秒数发生变化，会通过 {@link ConnectionProvider#withQueryTimeoutSeconds(int)} 派生新的连接提供者并重建执行器。
+     */
+    public ExecutionKernel withSettings(ExecutionOptions newExecutionOptions, NamingPolicy newNamingPolicy) {
+        ExecutionOptions effectiveOptions = newExecutionOptions == null ? executionOptions : newExecutionOptions;
+        NamingPolicy effectiveNaming = newNamingPolicy == null ? namingPolicy : newNamingPolicy;
+        ConnectionProvider updatedConnections = effectiveOptions.queryTimeoutSeconds() == executionOptions.queryTimeoutSeconds()
+                ? connections
+                : connections.withQueryTimeoutSeconds(effectiveOptions.queryTimeoutSeconds());
+        return new ExecutionKernel(new Config(
+                preparer.rewriters(),
+                observer.listeners(),
+                updatedConnections,
+                dialectStrategy,
+                effectiveOptions,
+                effectiveNaming,
                 rowMapperFactory,
                 config.exceptionTranslator(),
                 config.executorFactory()

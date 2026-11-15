@@ -88,6 +88,14 @@ public interface ConnectionProvider {
     }
 
     /**
+     * 派生一个应用指定默认语句超时秒数（{@code <= 0} 表示取消覆盖/清除默认超时）的连接提供者。
+     */
+    default ConnectionProvider withQueryTimeoutSeconds(int queryTimeoutSeconds) {
+        ConnectionProvider base = unwrap();
+        return queryTimeoutSeconds > 0 ? withFallbackQueryTimeout(base, queryTimeoutSeconds) : base;
+    }
+
+    /**
      * 为未声明自身语句超时的 {@link ConnectionProvider} 补充默认回退超时（{@code fallbackSeconds <= 0} 时原样返回）。
      *
      * <p>每次调用动态优先读取委托提供者的 {@link #queryTimeoutSeconds()}，仅在其返回空值时回退到 {@code fallbackSeconds}。

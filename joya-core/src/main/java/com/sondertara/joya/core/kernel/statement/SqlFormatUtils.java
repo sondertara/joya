@@ -301,7 +301,7 @@ public final class SqlFormatUtils {
         return sql.substring(start, end + 1);
     }
 
-    private static boolean isIdentifierPart(char value) {
+    static boolean isIdentifierPart(char value) {
         return value == '_' || Character.isLetterOrDigit(value);
     }
 

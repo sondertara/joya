@@ -106,7 +106,6 @@ class SilentFailureRegressionTest {
         private Long id;
         @Column(name = "name")
         private String name;
-        private transient boolean postPersistCalled;
 
         ListenerEntity() {
         }
@@ -125,7 +124,7 @@ class SilentFailureRegressionTest {
         }
 
         @Override
-        public void prePersist(Object entity) {
+        public void prePersist() {
             if (id == null) {
                 id = 7L;
             }
@@ -135,15 +134,10 @@ class SilentFailureRegressionTest {
         }
 
         @Override
-        public void preUpdate(Object entity) {
+        public void preUpdate() {
             if (name == null) {
                 name = "updated-by-listener";
             }
-        }
-
-        @Override
-        public void postPersist(Object entity) {
-            postPersistCalled = true;
         }
     }
 
@@ -278,7 +272,6 @@ class SilentFailureRegressionTest {
 
         ListenerEntity stored = joya.of(ListenerEntity.class).findById(7L).orElseThrow();
         assertEquals("pre", stored.getName(), "prePersist 新增的主键列与 name 列都必须写入");
-        assertTrue(entity.postPersistCalled);
     }
 
     @Test

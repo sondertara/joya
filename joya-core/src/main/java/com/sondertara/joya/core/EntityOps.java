@@ -1,7 +1,6 @@
 package com.sondertara.joya.core;
 
 import com.sondertara.joya.core.metadata.LocalTableMetaCache;
-import com.sondertara.joya.core.listener.EntityLifecycle;
 import com.sondertara.joya.core.function.IGetter;
 import com.sondertara.joya.core.kernel.ExecutionKernel;
 import com.sondertara.joya.core.metadata.EntityMetadataContext;
@@ -25,26 +24,23 @@ public final class EntityOps<T> {
     private final ExecutionKernel kernel;
     private final Class<T> entityType;
     private final EntityMetadataContext meta;
-    private final EntityLifecycle lifecycle;
     private final EntityFinder<T> finder;
     private final EntityDeleter<T> deleter;
     private final EntityWriter<T> writer;
     private final UpsertPlanner<T> upsert;
 
-    EntityOps(ExecutionKernel kernel, Class<T> entityType, EntityLifecycle lifecycle) {
+    EntityOps(ExecutionKernel kernel, Class<T> entityType) {
         this.kernel = Objects.requireNonNull(kernel, "kernel must not be null");
         this.entityType = Objects.requireNonNull(entityType, "entityType must not be null");
         this.meta = LocalTableMetaCache.getMetadataContext(entityType);
         this.finder = new EntityFinder<>(kernel, entityType, meta.primaryKey());
-        EntityLifecycle effectiveLifecycle = lifecycle == null ? EntityLifecycle.EMPTY : lifecycle;
-        this.lifecycle = effectiveLifecycle;
-        this.deleter = new EntityDeleter<>(kernel, entityType, meta, meta.primaryKey(), effectiveLifecycle);
-        this.writer = new EntityWriter<>(kernel, meta, effectiveLifecycle);
-        this.upsert = new UpsertPlanner<>(kernel, meta, effectiveLifecycle, writer, finder);
+        this.deleter = new EntityDeleter<>(kernel, entityType, meta, meta.primaryKey());
+        this.writer = new EntityWriter<>(kernel, meta);
+        this.upsert = new UpsertPlanner<>(kernel, meta, writer, finder);
     }
 
-    public static <T> EntityOps<T> of(ExecutionKernel kernel, Class<T> entityType, EntityLifecycle lifecycle) {
-        return new EntityOps<>(kernel, entityType, lifecycle);
+    public static <T> EntityOps<T> of(ExecutionKernel kernel, Class<T> entityType) {
+        return new EntityOps<>(kernel, entityType);
     }
 
     public MutationResult insert(T entity) {
@@ -145,7 +141,7 @@ public final class EntityOps<T> {
     }
 
     public EntityInsert<T> insert() {
-        return new EntityInsert<>(kernel, meta, lifecycle);
+        return new EntityInsert<>(kernel, meta);
     }
 
     public EntityUpdate<T> update() {

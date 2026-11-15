@@ -1,6 +1,6 @@
 package com.sondertara.joya.core;
 
-import com.sondertara.joya.core.listener.EntityLifecycle;
+import com.sondertara.joya.core.listener.EntityListener;
 import com.sondertara.joya.core.kernel.executor.ExecutionOptions;
 import com.sondertara.joya.core.kernel.ExecutionKernel;
 import com.sondertara.joya.core.kernel.executor.BatchSlice;
@@ -37,35 +37,29 @@ final class UpdatePlan<T> {
     private final Set<String> declared;
     private final boolean ignoreNull;
     private final boolean allowAll;
-    private final @Nullable T sourceEntity;
-    private final EntityLifecycle lifecycle;
 
     private UpdatePlan(EntityMetadataContext meta,
                        Map<String, Object> values,
                        @Nullable WhereCriterion where,
                        Set<String> declared,
                        boolean ignoreNull,
-                       boolean allowAll,
-                       @Nullable T sourceEntity,
-                       EntityLifecycle lifecycle) {
+                       boolean allowAll) {
         this.meta = Objects.requireNonNull(meta, "meta must not be null");
         this.values = Objects.requireNonNull(values, "values must not be null");
         this.where = where;
         this.declared = Objects.requireNonNull(declared, "declared columns must not be null");
         this.ignoreNull = ignoreNull;
         this.allowAll = allowAll;
-        this.sourceEntity = sourceEntity;
-        this.lifecycle = lifecycle == null ? EntityLifecycle.EMPTY : lifecycle;
     }
 
     /**
-     * 按实体主键更新：先触发 {@code preUpdate} 与主键校验，再对实体做快照。
+     * 按实体主键更新：若实体实现了 {@link EntityListener} 则先触发 {@code preUpdate()}，再做主键校验与快照。
      */
-    static <T> UpdatePlan<T> byPrimaryKey(EntityMetadataContext meta, T entity, boolean ignoreNull,
-                                          String pk, EntityLifecycle lifecycle) {
+    static <T> UpdatePlan<T> byPrimaryKey(EntityMetadataContext meta, T entity, boolean ignoreNull, String pk) {
         Objects.requireNonNull(entity, "entity must not be null");
-        EntityLifecycle effectiveLifecycle = lifecycle == null ? EntityLifecycle.EMPTY : lifecycle;
-        effectiveLifecycle.preUpdate(entity);
+        if (entity instanceof EntityListener listener) {
+            listener.preUpdate();
+        }
         Object pkValue = meta.readFieldValue(entity, pk);
         if (pkValue == null) {
             throw new IllegalArgumentException(
@@ -75,16 +69,16 @@ final class UpdatePlan<T> {
         List<String> setColumns = new ArrayList<>(meta.updatableColumns());
         setColumns.remove(pk);
         return new UpdatePlan<>(meta, values, WhereCriterion.create().eq(pk, pkValue),
-                new LinkedHashSet<>(setColumns), ignoreNull, false, entity, effectiveLifecycle);
+                new LinkedHashSet<>(setColumns), ignoreNull, false);
     }
 
     /**
-     * 显式条件更新：值与 WHERE 由调用方提供，不触发实体监听器。
+     * 显式条件更新：值与 WHERE 由调用方提供，不触发实体写前钩子。
      */
     static UpdatePlan<Void> explicit(EntityMetadataContext meta, Map<String, Object> values,
                                      @Nullable WhereCriterion where, boolean allowAll) {
         return new UpdatePlan<>(meta, values, where, new LinkedHashSet<>(values.keySet()),
-                false, allowAll, null, EntityLifecycle.EMPTY);
+                false, allowAll);
     }
 
     SqlStatement toSqlStatement(ExecutionKernel kernel) {
@@ -95,9 +89,6 @@ final class UpdatePlan<T> {
 
     MutationResult execute(ExecutionKernel kernel) {
         long affected = kernel.update(toSqlStatement(kernel));
-        if (sourceEntity != null) {
-            lifecycle.postUpdate(sourceEntity);
-        }
         return MutationResult.ofAffected(affected);
     }
 
@@ -111,29 +102,22 @@ final class UpdatePlan<T> {
                                                EntityMetadataContext meta,
                                                Collection<T> entities,
                                                List<String> setColumns,
-                                               String pk,
-                                               EntityLifecycle lifecycle) {
+                                               String pk) {
         if (entities == null || entities.isEmpty()) {
             return MutationResult.EMPTY;
         }
-        EntityLifecycle effectiveLifecycle = lifecycle == null ? EntityLifecycle.EMPTY : lifecycle;
         List<UpdateRowPlan<T>> plans = new ArrayList<>(entities.size());
         for (T row : entities) {
-            plans.add(prepareUpdateRow(meta, row, pk, effectiveLifecycle));
+            plans.add(prepareUpdateRow(meta, row, pk));
         }
-        MutationResult result = executeBatch(kernel, buildUpdateBatch(kernel, meta, plans, setColumns, pk));
-        for (UpdateRowPlan<T> plan : plans) {
-            effectiveLifecycle.postUpdate(plan.entity());
-        }
-        return result;
+        return executeBatch(kernel, buildUpdateBatch(kernel, meta, plans, setColumns, pk));
     }
 
     static <T> MutationResult executeUpdateAllByColumns(ExecutionKernel kernel,
                                                         EntityMetadataContext meta,
                                                         Collection<T> entities,
                                                         Collection<String> columns,
-                                                        String pk,
-                                                        EntityLifecycle lifecycle) {
+                                                        String pk) {
         if (columns == null || columns.isEmpty()) {
             throw new IllegalArgumentException("At least one column must be specified for selective updateAll");
         }
@@ -152,25 +136,23 @@ final class UpdatePlan<T> {
         if (uniqueCols.isEmpty()) {
             throw new IllegalArgumentException("Update columns must contain at least one non-primary-key column");
         }
-        return executeUpdateAll(kernel, meta, entities, new ArrayList<>(uniqueCols), pk, lifecycle);
+        return executeUpdateAll(kernel, meta, entities, new ArrayList<>(uniqueCols), pk);
     }
 
     static <T> MutationResult executePatchAll(ExecutionKernel kernel,
                                               EntityMetadataContext meta,
                                               Collection<T> entities,
-                                              String pk,
-                                              EntityLifecycle lifecycle) {
+                                              String pk) {
         if (entities == null || entities.isEmpty()) {
             return MutationResult.EMPTY;
         }
-        EntityLifecycle effectiveLifecycle = lifecycle == null ? EntityLifecycle.EMPTY : lifecycle;
         record UpdateRun<E>(List<String> cols, List<UpdateRowPlan<E>> rows) {
         }
         List<String> candidateCols = new ArrayList<>(meta.updatableColumns());
         candidateCols.remove(pk);
         List<UpdateRun<T>> runs = new ArrayList<>();
         for (T row : entities) {
-            UpdateRowPlan<T> plan = prepareUpdateRow(meta, row, pk, effectiveLifecycle);
+            UpdateRowPlan<T> plan = prepareUpdateRow(meta, row, pk);
             List<String> nonNullCols = new ArrayList<>(candidateCols.size());
             for (String col : candidateCols) {
                 if (plan.values().get(col) != null) {
@@ -193,9 +175,6 @@ final class UpdatePlan<T> {
         for (UpdateRun<T> run : runs) {
             result = result.merge(executeBatch(
                     kernel, buildUpdateBatch(kernel, meta, run.rows(), run.cols(), pk)));
-            for (UpdateRowPlan<T> plan : run.rows()) {
-                effectiveLifecycle.postUpdate(plan.entity());
-            }
         }
         return result;
     }
@@ -239,10 +218,11 @@ final class UpdatePlan<T> {
                 : MutationResult.ofBatch(slice.batchCounts(), slice.generatedKeys());
     }
 
-    private static <T> UpdateRowPlan<T> prepareUpdateRow(EntityMetadataContext meta, T row, String pk,
-                                                         EntityLifecycle lifecycle) {
+    private static <T> UpdateRowPlan<T> prepareUpdateRow(EntityMetadataContext meta, T row, String pk) {
         Objects.requireNonNull(row, "Entity element in updateAll/patchAll must not be null");
-        lifecycle.preUpdate(row);
+        if (row instanceof EntityListener listener) {
+            listener.preUpdate();
+        }
         Object pkVal = meta.readFieldValue(row, pk);
         if (pkVal == null) {
             throw new IllegalArgumentException(

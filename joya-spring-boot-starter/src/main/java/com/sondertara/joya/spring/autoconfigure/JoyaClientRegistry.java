@@ -4,6 +4,7 @@ import com.sondertara.joya.core.JoyaClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.sql.DataSource;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -37,16 +38,20 @@ public final class JoyaClientRegistry implements AutoCloseable {
     private final String primaryName;
     private final Map<String, JoyaClient> clients;
     private final List<AutoCloseable> managedResources;
+    private final Map<String, DataSource> sidecarDataSources;
 
     public JoyaClientRegistry(Map<String, JoyaClient> clients) {
-        this(PRIMARY, clients, List.of());
+        this(PRIMARY, clients, List.of(), Map.of());
     }
 
     public JoyaClientRegistry(String primaryName, Map<String, JoyaClient> clients) {
-        this(primaryName, clients, List.of());
+        this(primaryName, clients, List.of(), Map.of());
     }
 
-    JoyaClientRegistry(String primaryName, Map<String, JoyaClient> clients, List<AutoCloseable> managedResources) {
+    JoyaClientRegistry(String primaryName,
+                       Map<String, JoyaClient> clients,
+                       List<AutoCloseable> managedResources,
+                       Map<String, DataSource> sidecarDataSources) {
         Objects.requireNonNull(primaryName, "primaryName must not be null");
         Objects.requireNonNull(clients, "clients must not be null");
         if (clients.isEmpty()) {
@@ -59,6 +64,9 @@ public final class JoyaClientRegistry implements AutoCloseable {
         this.primaryName = primaryName;
         this.clients = Collections.unmodifiableMap(new LinkedHashMap<>(clients));
         this.managedResources = managedResources == null ? List.of() : List.copyOf(managedResources);
+        this.sidecarDataSources = sidecarDataSources == null || sidecarDataSources.isEmpty()
+                ? Map.of()
+                : Collections.unmodifiableMap(new LinkedHashMap<>(sidecarDataSources));
     }
 
     /**
@@ -93,6 +101,11 @@ public final class JoyaClientRegistry implements AutoCloseable {
      */
     public Set<String> names() {
         return clients.keySet();
+    }
+
+    /** 返回由 Joya 自身创建并托管的旁路数据源映射（不含复用 Spring 容器的 DataSource Bean）。 */
+    Map<String, DataSource> sidecarDataSources() {
+        return sidecarDataSources;
     }
 
     @Override

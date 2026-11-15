@@ -497,20 +497,14 @@ class AliasAndColumnCompareTest {
     public static class ListenedSeqItem extends BatchSeqItem
             implements com.sondertara.joya.core.listener.EntityListener {
         private transient boolean preCalled;
-        private transient boolean postCalled;
 
         public ListenedSeqItem(String title, String tag) {
             super(title, tag);
         }
 
         @Override
-        public void prePersist(Object entity) {
+        public void prePersist() {
             this.preCalled = true;
-        }
-
-        @Override
-        public void postPersist(Object entity) {
-            this.postCalled = true;
         }
     }
 
@@ -529,7 +523,6 @@ class AliasAndColumnCompareTest {
         ListenedSeqItem listened = new ListenedSeqItem("EntityInsertListener", null);
         var insertRes = joya.of(ListenedSeqItem.class).insert().values(listened).ignoreNulls().execute();
         assertTrue(listened.preCalled);
-        assertTrue(listened.postCalled);
         assertNotNull(listened.getId());
         assertEquals(listened.getId(), insertRes.getGeneratedKey(Long.class));
 

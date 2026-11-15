@@ -11,22 +11,25 @@ import java.time.Duration;
  *
  * <p>用户通常不直接接触本类，而是通过 {@link TxStarter} 的流式方法配置。
  *
- * <p>没有"传播行为"选项：事务是显式值，"加入外层"就是把外层 {@link Tx} 传下去，
- * "新开独立事务"就是再调一次 {@code tx().run(...)}；同一事务内的局部回滚用 {@link Tx#savepoint}。
+ * <p>纯 JDBC 引擎下每次 {@code tx().run(...)} 本身就新建独立物理连接事务；Spring 集成场景默认加入外层
+ * {@code @Transactional}（{@code PROPAGATION_REQUIRED}），如需挂起外层事务开启全新独立事务可使用
+ * {@link TxStarter#requiresNew()}；同一事务内的局部回滚用 {@link Tx#savepoint}。
  *
  * @param isolation     隔离级别；{@link Isolation#DEFAULT} 表示沿用连接默认值
  * @param readOnly      只读事务
  * @param timeout       事务超时；{@code null} 表示不限制。超时后后续语句抛 {@link TxTimeoutException}
  * @param retryAttempts 死锁 / 序列化失败（SQLState 40xxx）的最大尝试次数；{@code <=1} 表示不重试
+ * @param requiresNew   是否强制开启独立新事务（Spring 事务下对应 {@code PROPAGATION_REQUIRES_NEW}）
  */
 public record TxOptions(
         Isolation isolation,
         boolean readOnly,
         Duration timeout,
-        int retryAttempts
+        int retryAttempts,
+        boolean requiresNew
 ) {
 
-    public static final TxOptions DEFAULT = new TxOptions(Isolation.DEFAULT, false, null, 0);
+    public static final TxOptions DEFAULT = new TxOptions(Isolation.DEFAULT, false, null, 0, false);
 
     public TxOptions {
         isolation = isolation == null ? Isolation.DEFAULT : isolation;
@@ -36,19 +39,23 @@ public record TxOptions(
     }
 
     public TxOptions withIsolation(Isolation isolation) {
-        return new TxOptions(isolation, readOnly, timeout, retryAttempts);
+        return new TxOptions(isolation, readOnly, timeout, retryAttempts, requiresNew);
     }
 
     public TxOptions withReadOnly(boolean readOnly) {
-        return new TxOptions(isolation, readOnly, timeout, retryAttempts);
+        return new TxOptions(isolation, readOnly, timeout, retryAttempts, requiresNew);
     }
 
     public TxOptions withTimeout(Duration timeout) {
-        return new TxOptions(isolation, readOnly, timeout, retryAttempts);
+        return new TxOptions(isolation, readOnly, timeout, retryAttempts, requiresNew);
     }
 
     public TxOptions withRetryAttempts(int retryAttempts) {
-        return new TxOptions(isolation, readOnly, timeout, retryAttempts);
+        return new TxOptions(isolation, readOnly, timeout, retryAttempts, requiresNew);
+    }
+
+    public TxOptions withRequiresNew(boolean requiresNew) {
+        return new TxOptions(isolation, readOnly, timeout, retryAttempts, requiresNew);
     }
 
     /** 是否需要在开启事务时主动设置隔离级别。 */
