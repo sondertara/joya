@@ -16,11 +16,13 @@ import com.sondertara.joya.spring.support.SpringConnectionProvider;
 import com.sondertara.joya.spring.support.SpringSqlExceptionTranslator;
 import com.sondertara.joya.spring.support.SpringTxEngine;
 import com.sondertara.joya.utils.Strings;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
+import org.springframework.core.env.Environment;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.ResourceTransactionManager;
 
@@ -38,16 +40,19 @@ final class JoyaClientAssembler {
     private static final Logger log = LoggerFactory.getLogger(JoyaClientAssembler.class);
 
     private final JoyaProperties properties;
+    private final @Nullable Environment environment;
     private final ObjectProvider<DataSource> springDataSourceProvider;
     private final ObjectProvider<PlatformTransactionManager> txManagerProvider;
     private final ConfigurableListableBeanFactory beanFactory;
     private final JoyaExtensionPointResolver extensionResolver;
 
     JoyaClientAssembler(JoyaProperties properties,
+                        @Nullable Environment environment,
                         ObjectProvider<DataSource> springDataSourceProvider,
                         ObjectProvider<PlatformTransactionManager> txManagerProvider,
                         ConfigurableListableBeanFactory beanFactory) {
         this.properties = properties;
+        this.environment = environment;
         this.springDataSourceProvider = springDataSourceProvider;
         this.txManagerProvider = txManagerProvider;
         this.beanFactory = beanFactory;
@@ -69,14 +74,14 @@ final class JoyaClientAssembler {
             PlatformTransactionManager primaryTxManager;
             if (primaryProps.isUseSpring()) {
                 if (Strings.isNotBlank(primaryProps.getDataSourceBean())) {
-                    JoyaDataSourceFactory.validateBeanReference("joya.primary", primaryProps);
+                    JoyaDataSourceFactory.validateBeanReference("joya.primary", primaryProps, environment);
                     primaryDataSource = resolveDataSourceBean("joya.primary", primaryProps.getDataSourceBean());
                     primaryTxManager = resolveExplicitOrOptionalTxManager(
                             "joya.primary", primaryProps, primaryDataSource, false);
                 } else {
-                    if (JoyaDataSourceFactory.hasCustomConnectionConfig(primaryProps)) {
-                        log.warn("[Joya] 'joya.primary.use-spring' is true: custom connection properties under 'joya.primary' "
-                                + "(url/username/password/driver-class-name) will be ignored and Spring's native DataSource will be used instead. "
+                    if (JoyaDataSourceFactory.hasCustomConnectionConfig(primaryProps, environment)) {
+                        log.warn("[Joya] 'joya.primary.use-spring' is true: custom connection/pool properties under 'joya.primary' "
+                                + "(url/username/password/driver-class-name/type/hikari) will be ignored and Spring's native DataSource will be used instead. "
                                 + "Set 'joya.primary.use-spring=false' if you want to use the custom primary datasource.");
                     }
                     primaryDataSource = JoyaDataSourceFactory.resolvePrimary(
@@ -86,7 +91,7 @@ final class JoyaClientAssembler {
                             : JoyaTransactionManagerResolver.resolve(primaryDataSource, txManagerProvider);
                 }
             } else if (Strings.isNotBlank(primaryProps.getDataSourceBean())) {
-                JoyaDataSourceFactory.validateBeanReference("joya.primary", primaryProps);
+                JoyaDataSourceFactory.validateBeanReference("joya.primary", primaryProps, environment);
                 primaryDataSource = resolveDataSourceBean("joya.primary", primaryProps.getDataSourceBean());
                 primaryTxManager = resolveExplicitOrOptionalTxManager(
                         "joya.primary", primaryProps, primaryDataSource, true);
@@ -97,7 +102,7 @@ final class JoyaClientAssembler {
                                     + "'transaction-manager-bean' cannot be used with self-managed primary DataSource; "
                                     + "set 'use-spring=true' or specify 'data-source-bean'.");
                 }
-                JoyaDataSourceFactory.validateSelfManaged("joya.primary", primaryProps);
+                JoyaDataSourceFactory.validateSelfManaged("joya.primary", primaryProps, environment);
                 primaryDataSource = JoyaDataSourceFactory.buildSelfManaged("joya.primary", primaryProps);
                 if (primaryDataSource instanceof AutoCloseable closeable) {
                     managedResources.add(closeable);
@@ -123,7 +128,7 @@ final class JoyaClientAssembler {
                 DataSource extraDataSource;
                 PlatformTransactionManager extraTxManager;
                 if (Strings.isNotBlank(dsProps.getDataSourceBean())) {
-                    JoyaDataSourceFactory.validateBeanReference(propertyPath, dsProps);
+                    JoyaDataSourceFactory.validateBeanReference(propertyPath, dsProps, environment);
                     extraDataSource = resolveDataSourceBean(propertyPath, dsProps.getDataSourceBean());
                     extraTxManager = resolveExplicitOrOptionalTxManager(
                             propertyPath, dsProps, extraDataSource, true);
@@ -133,7 +138,7 @@ final class JoyaClientAssembler {
                                 "Conflicting Joya DataSource configuration under '" + propertyPath + "': "
                                         + "'transaction-manager-bean' requires 'data-source-bean' to be specified.");
                     }
-                    JoyaDataSourceFactory.validateSelfManaged(propertyPath, dsProps);
+                    JoyaDataSourceFactory.validateSelfManaged(propertyPath, dsProps, environment);
                     extraDataSource = JoyaDataSourceFactory.buildSelfManaged(propertyPath, dsProps);
                     if (extraDataSource instanceof AutoCloseable closeable) {
                         managedResources.add(closeable);
@@ -236,6 +241,7 @@ final class JoyaClientAssembler {
 
         // 扩展点按类型 + @Qualifier(clientName) 路由：无限定符的 Bean 对所有客户端生效，带限定符的只对同名客户端生效
         JoyaClient.Builder builder = JoyaClient.builder(dataSource)
+                .clientName(clientName)
                 .settings(settings)
                 .dialectStrategy(dialectStrategy)
                 .rewriters(extensionResolver.forClient(SqlRewriter.class, clientName))

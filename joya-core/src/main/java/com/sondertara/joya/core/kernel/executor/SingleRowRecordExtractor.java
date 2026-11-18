@@ -1,7 +1,5 @@
 package com.sondertara.joya.core.kernel.executor;
 
-import com.sondertara.joya.exceptions.DbException;
-
 import java.sql.ResultSet;
 import java.sql.SQLException;
 
@@ -18,13 +16,9 @@ public class SingleRowRecordExtractor<T> implements ResultSetExtractor<T> {
     }
 
     @Override
-    public T extract(ResultSet record) {
-        try {
-            if (record.next()) {
-                return rowMapper.map(record);
-            }
-        } catch (SQLException e) {
-            throw new DbException(e);
+    public T extract(ResultSet record) throws SQLException {
+        if (record.next()) {
+            return rowMapper.forResultSet(record).map(record);
         }
         return null;
     }

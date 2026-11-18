@@ -75,12 +75,13 @@ final class JoyaSqlLogSupport {
                 }
                 String elapsedMs = formatElapsedMs(elapsedNanos);
                 String details = formatExecutionDetails(context, result, printArgs, redactPatterns);
+                String tag = clientTag(context);
                 if (slow) {
-                    log.warn("[Joya SQL SLOW] {} | elapsed={}ms (>={}ms) | {}",
-                            context.statement().sql(), elapsedMs, thresholdMs, details);
+                    log.warn("[Joya SQL SLOW]{} {} | elapsed={}ms (>={}ms) | {}",
+                            tag, context.statement().sql(), elapsedMs, thresholdMs, details);
                 } else {
-                    log.info("[Joya SQL] {} | elapsed={}ms | {}",
-                            context.statement().sql(), elapsedMs, details);
+                    log.info("[Joya SQL]{} {} | elapsed={}ms | {}",
+                            tag, context.statement().sql(), elapsedMs, details);
                 }
             }
 
@@ -98,10 +99,15 @@ final class JoyaSqlLogSupport {
                 String errorSummary = error == null
                         ? "unknown"
                         : error.getClass().getSimpleName() + ": " + error.getMessage();
-                log.error("[Joya SQL ERROR] {} | elapsed={}ms | {} | error={}",
-                        context.statement().sql(), elapsedMs, details, errorSummary);
+                log.error("[Joya SQL ERROR]{} {} | elapsed={}ms | {} | error={}",
+                        clientTag(context), context.statement().sql(), elapsedMs, details, errorSummary);
             }
         };
+    }
+
+    private static String clientTag(com.sondertara.joya.core.kernel.observe.SqlExecutionContext context) {
+        String name = context.clientName();
+        return (name == null || name.isEmpty()) ? "" : "[" + name + "]";
     }
 
     private static String formatElapsedMs(long elapsedNanos) {
@@ -115,8 +121,7 @@ final class JoyaSqlLogSupport {
             List<Pattern> redactPatterns) {
         StringBuilder sb = new StringBuilder();
         if (context.batch()) {
-            sb.append("batch rows=").append(
-                    context.attributes().get(com.sondertara.joya.core.kernel.observe.SqlExecutionContext.ATTR_BATCH_ROWS));
+            sb.append("batch rows=").append(context.batchRows() >= 0 ? context.batchRows() : "?");
             if (result != null && result.batchCounts().length > 0) {
                 long totalAffected = 0L;
                 boolean hasKnown = false;

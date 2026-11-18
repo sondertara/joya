@@ -59,7 +59,7 @@ class JoyaSpringExtensionPointsTest {
             return new SqlExecutionListener() {
                 @Override
                 public void beforeExecute(SqlExecutionContext ctx) {
-                    LISTENER_LOG.add("G:" + (ctx.batch() ? "batch" : "single"));
+                    LISTENER_LOG.add("G:" + ctx.clientName() + ":" + (ctx.batch() ? "batch:" + ctx.batchRows() : "single"));
                 }
             };
         }
@@ -70,7 +70,7 @@ class JoyaSpringExtensionPointsTest {
             return new SqlExecutionListener() {
                 @Override
                 public void beforeExecute(SqlExecutionContext ctx) {
-                    LISTENER_LOG.add("O:" + (ctx.batch() ? "batch" : "single"));
+                    LISTENER_LOG.add("O:" + ctx.clientName() + ":" + (ctx.batch() ? "batch:" + ctx.batchRows() : "single"));
                 }
             };
         }
@@ -162,13 +162,15 @@ class JoyaSpringExtensionPointsTest {
                     + "(id BIGINT PRIMARY KEY, order_no VARCHAR(64) NOT NULL, amount INT NOT NULL)").update();
             ExtensionConfig.LISTENER_LOG.clear();
 
-            // ---- SqlExecutionListener：全局对两个库生效，限定 order 的只对 order 生效 ----
+            // ---- SqlExecutionListener：全局对两个库生效且携带各自 clientName，限定 order 的只对 order 生效 ----
+            assertEquals("primary", primary.clientName());
+            assertEquals("order", order.clientName());
             primary.sql("SELECT 1").value(Integer.class);
-            assertEquals(List.of("G:single"), ExtensionConfig.LISTENER_LOG, "primary 只命中全局监听器");
+            assertEquals(List.of("G:primary:single"), ExtensionConfig.LISTENER_LOG, "primary 只命中全局监听器并带 primary 标签");
             ExtensionConfig.LISTENER_LOG.clear();
-            order.sql("SELECT 1").value(Integer.class);
-            assertTrue(ExtensionConfig.LISTENER_LOG.containsAll(List.of("G:single", "O:single")),
-                    "order 同时命中全局与限定监听器: " + ExtensionConfig.LISTENER_LOG);
+            order.tx(tx -> tx.sql("SELECT 1").value(Integer.class));
+            assertTrue(ExtensionConfig.LISTENER_LOG.containsAll(List.of("G:order:single", "O:order:single")),
+                    "order 事务内同样携带 order 客户端标签并同时命中全局与限定监听器: " + ExtensionConfig.LISTENER_LOG);
             assertEquals(2, ExtensionConfig.LISTENER_LOG.size());
 
             // ---- SqlRewriter：只对框架生成（带 AST）的语句生效，并按客户端路由 ----
@@ -197,7 +199,7 @@ class JoyaSpringExtensionPointsTest {
             u3.setUserName("c");
             u3.setAge(3);
             primary.of(UserAccount.class).insertAll(List.of(u2, u3));
-            assertTrue(ExtensionConfig.LISTENER_LOG.contains("G:batch"), ExtensionConfig.LISTENER_LOG.toString());
+            assertTrue(ExtensionConfig.LISTENER_LOG.contains("G:primary:batch:2"), ExtensionConfig.LISTENER_LOG.toString());
 
             // ---- RowMapperFactory：全局单例被所有客户端使用 ----
             ExtensionConfig.MAPPER_FACTORY_CALLS.set(0);
@@ -283,5 +285,38 @@ class JoyaSpringExtensionPointsTest {
             primary.of(UserAccount.class).insert(user);
             assertEquals(List.of("eager-10", "lazy-20"), CircularListenerConfig.ORDER_LOG);
         });
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableAutoConfiguration
+    static class CustomSqlLogListenerConfig {
+        static final List<String> CUSTOM_TAGS = new CopyOnWriteArrayList<>();
+
+        @Bean(name = "joyaSqlLogListener")
+        SqlExecutionListener customSqlLogListener() {
+            return new SqlExecutionListener() {
+                @Override
+                public void beforeExecute(SqlExecutionContext ctx) {
+                    CUSTOM_TAGS.add(ctx.clientName() + ":" + ctx.statement().sql());
+                }
+            };
+        }
+    }
+
+    @Test
+    void customJoyaSqlLogListenerBean_backsOffDefaultAndReceivesClientNamesWithoutDuplication() {
+        CustomSqlLogListenerConfig.CUSTOM_TAGS.clear();
+        runner(CustomSqlLogListenerConfig.class)
+                .withPropertyValues("joya.sql-log=true")
+                .run(context -> {
+                    assertEquals(null, context.getStartupFailure());
+                    assertEquals(1, context.getBeansOfType(SqlExecutionListener.class).size(),
+                            "用户定义同名 joyaSqlLogListener 时默认监听器必须退让，不产生双挂载");
+                    JoyaClientRegistry registry = context.getBean(JoyaClientRegistry.class);
+                    registry.primary().sql("SELECT 1").value(Integer.class);
+                    registry.get("order").sql("SELECT 2").value(Integer.class);
+                    assertEquals(List.of("primary:SELECT 1", "order:SELECT 2"),
+                            CustomSqlLogListenerConfig.CUSTOM_TAGS);
+                });
     }
 }

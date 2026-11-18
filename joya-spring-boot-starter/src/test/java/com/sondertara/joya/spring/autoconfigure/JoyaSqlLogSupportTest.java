@@ -100,7 +100,7 @@ class JoyaSqlLogSupportTest {
                 SqlParameter.of(1, "password", "secret123", ParameterSource.INSERT),
                 SqlParameter.of(2, "userName", "alice", ParameterSource.INSERT));
         com.sondertara.joya.core.kernel.observe.SqlExecutionContext ctx =
-                new com.sondertara.joya.core.kernel.observe.SqlExecutionContext(stmt, false, java.util.Map.of());
+                new com.sondertara.joya.core.kernel.observe.SqlExecutionContext(stmt, false);
 
         // 1. 正常耗时 -> INFO（密码参数脱敏，显示 rows 与 elapsedMs）
         listener.afterExecute(ctx,
@@ -148,5 +148,69 @@ class JoyaSqlLogSupportTest {
         org.junit.jupiter.api.Assertions.assertEquals(2, logEntries.size());
         org.junit.jupiter.api.Assertions.assertTrue(logEntries.get(0).startsWith("WARN:[Joya SQL SLOW]"));
         org.junit.jupiter.api.Assertions.assertTrue(logEntries.get(1).startsWith("ERROR:[Joya SQL ERROR]"));
+    }
+
+    @Test
+    void createListener_formatsClientNameTagAndBatchRows() {
+        List<String> logEntries = new java.util.ArrayList<>();
+        org.slf4j.Logger captureLog = (org.slf4j.Logger) java.lang.reflect.Proxy.newProxyInstance(
+                org.slf4j.Logger.class.getClassLoader(),
+                new Class<?>[]{org.slf4j.Logger.class},
+                (proxy, method, args) -> {
+                    String name = method.getName();
+                    if ("isInfoEnabled".equals(name) || "isWarnEnabled".equals(name) || "isErrorEnabled".equals(name)) {
+                        return true;
+                    }
+                    if (("info".equals(name) || "warn".equals(name) || "error".equals(name))
+                            && args != null && args.length >= 2 && args[0] instanceof String fmt
+                            && args[1] instanceof Object[] params) {
+                        String rendered = fmt;
+                        for (Object param : params) {
+                            int idx = rendered.indexOf("{}");
+                            if (idx >= 0) {
+                                rendered = rendered.substring(0, idx) + param + rendered.substring(idx + 2);
+                            }
+                        }
+                        logEntries.add(name.toUpperCase(java.util.Locale.ROOT) + ":" + rendered);
+                    }
+                    return null;
+                });
+
+        JoyaProperties props = new JoyaProperties();
+        props.setSqlLog(true);
+        props.setSlowSqlThresholdMs(50L);
+        com.sondertara.joya.core.kernel.observe.SqlExecutionListener listener =
+                JoyaSqlLogSupport.createListener(captureLog, props);
+
+        SqlStatement stmt = SqlStatement.select("SELECT 1");
+        var singleOrderCtx = new com.sondertara.joya.core.kernel.observe.SqlExecutionContext(
+                stmt, false, -1, "order");
+        var batchPrimaryCtx = new com.sondertara.joya.core.kernel.observe.SqlExecutionContext(
+                stmt, true, 3, "primary");
+
+        listener.afterExecute(singleOrderCtx,
+                com.sondertara.joya.core.kernel.observe.SqlExecutionResult.rows(1L).withElapsedNanos(2_000_000L));
+        listener.afterExecute(singleOrderCtx,
+                com.sondertara.joya.core.kernel.observe.SqlExecutionResult.rows(1L).withElapsedNanos(80_000_000L));
+        listener.onError(singleOrderCtx, new IllegalStateException("fail"), 3_000_000L);
+        listener.afterExecute(batchPrimaryCtx,
+                new com.sondertara.joya.core.kernel.observe.SqlExecutionResult(-1L, -1L, new int[]{1, 1, 1}, List.of(), 4_000_000L));
+
+        org.junit.jupiter.api.Assertions.assertEquals(4, logEntries.size());
+        org.junit.jupiter.api.Assertions.assertTrue(logEntries.get(0).startsWith("INFO:[Joya SQL][order] SELECT 1 |"), logEntries.get(0));
+        org.junit.jupiter.api.Assertions.assertTrue(logEntries.get(1).startsWith("WARN:[Joya SQL SLOW][order] SELECT 1 |"), logEntries.get(1));
+        org.junit.jupiter.api.Assertions.assertTrue(logEntries.get(2).startsWith("ERROR:[Joya SQL ERROR][order] SELECT 1 |"), logEntries.get(2));
+        org.junit.jupiter.api.Assertions.assertTrue(
+                logEntries.get(3).startsWith("INFO:[Joya SQL][primary] SELECT 1 |")
+                        && logEntries.get(3).contains("batch rows=3, affected=3"),
+                logEntries.get(3));
+
+        // 便捷二参构造 batch=true 时未知行数统一以 -1 哨兵表达，日志输出 batch rows=?
+        var unknownRowsBatchCtx = new com.sondertara.joya.core.kernel.observe.SqlExecutionContext(stmt, true);
+        assertEquals(-1, unknownRowsBatchCtx.batchRows());
+        logEntries.clear();
+        listener.afterExecute(unknownRowsBatchCtx,
+                new com.sondertara.joya.core.kernel.observe.SqlExecutionResult(-1L, -1L, new int[0], List.of(), 1_000_000L));
+        org.junit.jupiter.api.Assertions.assertTrue(logEntries.get(0).contains("batch rows=?"), logEntries.get(0));
     }
 }

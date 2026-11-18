@@ -5,6 +5,7 @@ import com.sondertara.joya.core.kernel.observe.SqlExecutionListener;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.config.BeanDefinition;
 import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionMessage;
@@ -18,7 +19,9 @@ import org.springframework.boot.context.properties.bind.Binder;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.ConditionContext;
 import org.springframework.context.annotation.Conditional;
+import org.springframework.context.annotation.ConfigurationCondition;
 import org.springframework.context.annotation.Primary;
+import org.springframework.core.env.Environment;
 import org.springframework.core.type.AnnotatedTypeMetadata;
 import org.springframework.transaction.PlatformTransactionManager;
 
@@ -27,7 +30,8 @@ import javax.sql.DataSource;
 /**
  * Joya Spring Boot 自动配置入口（旁路模式）：
  * <ul>
- *   <li>主库通过 {@code joya.primary} 配置（默认 {@code use-spring=true} 复用 Spring 原生 {@link DataSource}）；</li>
+ *   <li>主库通过 {@code joya.primary} 配置（默认 {@code use-spring=true} 复用 Spring 原生 {@link DataSource}；
+ *       若容器无任何 {@link DataSource} Bean 且未显式配置自管数据源，自动退让以兼容无库微服务）；</li>
  *   <li>扩展库通过 {@code joya.datasources} 数组配置并纳入 {@link JoyaClientRegistry}，不污染全局 DataSource Bean；</li>
  *   <li>装配细节分别委托 {@link JoyaClientAssembler} / {@link JoyaDataSourceFactory} /
  *       {@link JoyaTransactionManagerResolver} / {@link JoyaExtensionPointResolver}。</li>
@@ -41,6 +45,7 @@ import javax.sql.DataSource;
 })
 @ConditionalOnClass({DataSource.class, JoyaClient.class})
 @ConditionalOnProperty(prefix = "joya", name = "enabled", havingValue = "true", matchIfMissing = true)
+@Conditional(JoyaAutoConfiguration.OnJoyaDataSourceAvailableCondition.class)
 @EnableConfigurationProperties(JoyaProperties.class)
 public class JoyaAutoConfiguration {
 
@@ -52,15 +57,16 @@ public class JoyaAutoConfiguration {
             ObjectProvider<DataSource> springDataSourceProvider,
             ObjectProvider<PlatformTransactionManager> txManagerProvider,
             JoyaProperties properties,
+            Environment environment,
             ConfigurableListableBeanFactory beanFactory,
             ObjectProvider<JoyaClientCustomizer> customizersProvider) {
-        return new JoyaClientAssembler(properties, springDataSourceProvider, txManagerProvider, beanFactory)
+        return new JoyaClientAssembler(properties, environment, springDataSourceProvider, txManagerProvider, beanFactory)
                 .assemble(customizersProvider.orderedStream().toList());
     }
 
     @Bean
     @Primary
-    @ConditionalOnMissingBean
+    @Conditional(OnMissingPrimaryJoyaClientCondition.class)
     public JoyaClient joyaClient(JoyaClientRegistry registry) {
         return registry.primary();
     }
@@ -70,6 +76,95 @@ public class JoyaAutoConfiguration {
     @Conditional(OnSqlLogOrSlowThresholdCondition.class)
     public SqlExecutionListener joyaSqlLogListener(JoyaProperties properties) {
         return JoyaSqlLogSupport.createListener(log, properties);
+    }
+
+    /**
+     * 数据源可用性条件（运行于 {@link ConfigurationPhase#REGISTER_BEAN} 阶段，确保在 {@code DataSourceAutoConfiguration}
+     * 注册完主库 {@link DataSource} BeanDefinition 后求值）：排除数据源自动配置的无库子服务在零配置下安静退让；
+     * 一旦配置了自建主库、显式 {@code data-source-bean}、扩展库或错配了连接项，则正常进入装配以兑现校验提示。
+     */
+    static final class OnJoyaDataSourceAvailableCondition extends SpringBootCondition implements ConfigurationCondition {
+
+        @Override
+        public ConfigurationPhase getConfigurationPhase() {
+            return ConfigurationPhase.REGISTER_BEAN;
+        }
+
+        @Override
+        public ConditionOutcome getMatchOutcome(ConditionContext context, AnnotatedTypeMetadata metadata) {
+            Binder binder = Binder.get(context.getEnvironment());
+            boolean useSpring = binder.bind("joya.primary.use-spring", Boolean.class).orElse(true);
+            if (!useSpring) {
+                return ConditionOutcome.match(ConditionMessage.forCondition("JoyaDataSource")
+                        .found("self-managed primary").items("joya.primary.use-spring=false"));
+            }
+            String dsBean = binder.bind("joya.primary.data-source-bean", String.class).orElse("");
+            if (!dsBean.isBlank()) {
+                return ConditionOutcome.match(ConditionMessage.forCondition("JoyaDataSource")
+                        .found("explicit data-source-bean").items(dsBean));
+            }
+            ConfigurableListableBeanFactory bf = context.getBeanFactory();
+            if (bf != null && bf.getBeanNamesForType(DataSource.class, true, false).length > 0) {
+                return ConditionOutcome.match(ConditionMessage.forCondition("JoyaDataSource")
+                        .found("Spring DataSource bean").atAll());
+            }
+            if (hasExplicitDatasourceConfig(binder)) {
+                return ConditionOutcome.match(ConditionMessage.forCondition("JoyaDataSource")
+                        .found("explicit joya datasource properties").atAll());
+            }
+            return ConditionOutcome.noMatch(ConditionMessage.forCondition("JoyaDataSource")
+                    .didNotFind("any Spring DataSource bean or explicit Joya DataSource configuration").atAll());
+        }
+
+        private static boolean hasExplicitDatasourceConfig(Binder binder) {
+            return binder.bind("joya.primary.url", String.class).isBound()
+                    || binder.bind("joya.primary.jndi-name", String.class).isBound()
+                    || binder.bind("joya.datasources[0].name", String.class).isBound()
+                    || binder.bind("joya.datasources[0].url", String.class).isBound()
+                    || binder.bind("joya.datasources[0].data-source-bean", String.class).isBound();
+        }
+    }
+
+    /**
+     * 主 {@link JoyaClient} 退让条件：仅当容器已存在名为 {@code "joyaClient"}、标记 {@code @Primary}、
+     * 或未携带任何限定符的主 {@link JoyaClient} Bean 时才退让；用户仅声明带 {@code @Qualifier} 的副库客户端时，
+     * 保持注册默认 {@code @Primary} 主库客户端，杜绝未限定注入点静默落到副库。
+     */
+    static final class OnMissingPrimaryJoyaClientCondition extends SpringBootCondition implements ConfigurationCondition {
+
+        @Override
+        public ConfigurationPhase getConfigurationPhase() {
+            return ConfigurationPhase.REGISTER_BEAN;
+        }
+
+        @Override
+        public ConditionOutcome getMatchOutcome(ConditionContext context, AnnotatedTypeMetadata metadata) {
+            ConfigurableListableBeanFactory bf = context.getBeanFactory();
+            if (bf == null) {
+                return ConditionOutcome.match();
+            }
+            if (bf.containsBean("joyaClient")) {
+                return ConditionOutcome.noMatch(ConditionMessage.forCondition("PrimaryJoyaClient")
+                        .found("bean named 'joyaClient'").items("joyaClient"));
+            }
+            for (String beanName : bf.getBeanNamesForType(JoyaClient.class, true, false)) {
+                if (bf.containsBeanDefinition(beanName)) {
+                    BeanDefinition bd = bf.getMergedBeanDefinition(beanName);
+                    if (bd.isPrimary()) {
+                        return ConditionOutcome.noMatch(ConditionMessage.forCondition("PrimaryJoyaClient")
+                                .found("@Primary JoyaClient bean").items(beanName));
+                    }
+                }
+                JoyaExtensionPointResolver.QualifierMetadata qualifiers =
+                        JoyaExtensionPointResolver.extractQualifiers(bf, beanName);
+                if (!qualifiers.hasAnyQualifier()) {
+                    return ConditionOutcome.noMatch(ConditionMessage.forCondition("PrimaryJoyaClient")
+                            .found("unqualified JoyaClient bean").items(beanName));
+                }
+            }
+            return ConditionOutcome.match(ConditionMessage.forCondition("PrimaryJoyaClient")
+                    .didNotFind("primary or unqualified JoyaClient bean").atAll());
+        }
     }
 
     static final class OnSqlLogOrSlowThresholdCondition extends SpringBootCondition {

@@ -19,6 +19,7 @@ import com.sondertara.joya.core.tx.TxConsumer;
 import com.sondertara.joya.core.tx.TxEngine;
 import com.sondertara.joya.core.tx.TxOptions;
 import com.sondertara.joya.core.tx.TxStarter;
+import org.jspecify.annotations.Nullable;
 
 import javax.sql.DataSource;
 import java.io.Reader;
@@ -91,7 +92,8 @@ public final class JoyaClient implements DataOps {
                 builder.settings.namingPolicy(),
                 builder.rowMapperFactory,
                 builder.exceptionTranslator,
-                builder.executorFactory));
+                builder.executorFactory,
+                builder.clientName));
         this.dataOps = DataOpsSupport.concurrent(this, kernel);
     }
 
@@ -205,6 +207,11 @@ public final class JoyaClient implements DataOps {
         return dataOps.dbType();
     }
 
+    /** 获取当前客户端的逻辑标识名称（未配置时为 {@code null}）。 */
+    public @Nullable String clientName() {
+        return kernel.clientName();
+    }
+
     // ===== 构建器 =====
 
     public static final class Builder {
@@ -218,6 +225,7 @@ public final class JoyaClient implements DataOps {
         private RowMapperFactory rowMapperFactory = DefaultRowMapperFactory.INSTANCE;
         private SqlExceptionTranslator exceptionTranslator = SqlExceptionTranslator.DEFAULT;
         private Executor.Factory executorFactory;
+        private @Nullable String clientName;
 
         private Builder(DataSource dataSource) {
             this.dataSource = Objects.requireNonNull(dataSource, "dataSource must not be null");
@@ -318,6 +326,12 @@ public final class JoyaClient implements DataOps {
             Objects.requireNonNull(customizer, "customizer must not be null");
             this.settings = Objects.requireNonNull(customizer.apply(this.settings),
                     "settings customizer must not return null");
+            return this;
+        }
+
+        /** 设置客户端逻辑标识名称（如 {@code "primary"}、{@code "order"}），供执行观测监听器与日志区分多数据源。 */
+        public Builder clientName(@Nullable String clientName) {
+            this.clientName = (clientName == null || clientName.isBlank()) ? null : clientName.trim();
             return this;
         }
 

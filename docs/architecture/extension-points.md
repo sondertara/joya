@@ -58,11 +58,12 @@ JoyaClient.builder(dataSource)
 > **FactoryBean 形式的扩展点**：类型探测允许 eager init（`getBeanNamesForType(type, false, true)`），
 > 以 `FactoryBean` 声明、`getObjectType()` 依赖初始化才能确定的实现同样会被发现；单值扩展点在 Bean 正在创建时返回惰性代理。
 
-> **SQL 日志与慢 SQL 脱敏观测**：开启 `joya.sql-log=true` 或配置 `joya.slow-sql-threshold-ms > 0` 后，内置 `joyaSqlLogListener` 在 `afterExecute` / `onError` 统一观测耗时（`elapsed=xx.xxms`）：
+> **SQL 日志与慢 SQL 脱敏观测**：开启 `joya.sql-log=true` 或配置 `joya.slow-sql-threshold-ms > 0` 后，内置 `joyaSqlLogListener` 在 `afterExecute` / `onError` 统一观测耗时（`elapsed=xx.xxms`），并自动携带客户端标识前缀（如 `[Joya SQL][primary]`、`[Joya SQL SLOW][order]`）：
 > 开启 `sql-log=true` 时输出全量 `INFO` 日志与 `ERROR` 日志；仅配置 `slow-sql-threshold-ms > 0` 时对快请求零开销，仅对达到慢阈值的请求输出 `WARN` 告警（慢异常以 `ERROR` 输出）。同时开启 `joya.sql-log-print-args` 时，参数值会按逻辑名匹配 `joya.sql-log-redact-patterns`（默认覆盖 password / passwd / secret / token / credential）后替换为 `***`；
 > 非法正则在启动期直接失败，不会带着未脱敏日志运行。
 
 所有扩展点实现 `Ordered`：`order()` 升序，同值按 `Class.getName()` 字典序；排序在首次执行时惰性完成一次。
+Spring 环境下同时支持 `@Bean` 方法或组件类上的 `@org.springframework.core.annotation.Order` 以及 `org.springframework.core.Ordered`（若实现类显式覆写了 Joya `order()` 则以显式覆写优先）。
 这样容器启动期因循环依赖注入的惰性代理不会以伪造的 `order()` 参与排序。
 
 > **分页 / count 的双视图观测语义**：`COUNT(*)` 包装与 `LIMIT / OFFSET`（或 `OFFSET ... FETCH`）由 `Dialect` 在 `SqlRewriter` **之后**生成，
@@ -76,7 +77,7 @@ JoyaClient.builder(dataSource)
 - 逐行不同值的改写显式拒绝，抛 `SqlRewriteException`，避免静默错绑；
 - **批量与单条一样完整经过 `prepare` 管线**：注入 `dbType` → `SqlRewriter`，不存在旁路；
 - 批量 rewriter 只允许在列尾/参数尾追加；重排、删除或替换既有列与参数会被拒绝；
-- `SqlExecutionListener` 通过 `ctx.batch()` 识别批量，`ctx.attributes().get(SqlExecutionContext.ATTR_BATCH_ROWS)` 获取行数。
+- `SqlExecutionListener` 通过 `ctx.batch()` 识别批量，`ctx.batchRows()` 获取批量总行数，`ctx.clientName()` 获取所属客户端逻辑名称。
 
 ## 5. 与旧模型的关系
 

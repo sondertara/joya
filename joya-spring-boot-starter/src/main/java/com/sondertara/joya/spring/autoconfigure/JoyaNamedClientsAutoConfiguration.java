@@ -3,18 +3,17 @@ package com.sondertara.joya.spring.autoconfigure;
 import com.sondertara.joya.core.JoyaClient;
 import com.sondertara.joya.utils.Strings;
 import org.springframework.beans.BeansException;
-import org.springframework.beans.factory.BeanFactory;
-import org.springframework.beans.factory.BeanFactoryAware;
 import org.springframework.beans.factory.ListableBeanFactory;
 import org.springframework.beans.factory.annotation.AnnotatedBeanDefinition;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.config.BeanDefinition;
 import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
+import org.springframework.beans.factory.config.SingletonBeanRegistry;
 import org.springframework.beans.factory.support.AbstractBeanDefinition;
 import org.springframework.beans.factory.support.AutowireCandidateQualifier;
 import org.springframework.beans.factory.support.BeanDefinitionRegistry;
 import org.springframework.beans.factory.support.BeanDefinitionRegistryPostProcessor;
-import org.springframework.beans.factory.support.GenericBeanDefinition;
+import org.springframework.beans.factory.support.RootBeanDefinition;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -32,8 +31,8 @@ import java.util.Set;
 
 /**
  * 为 {@code joya.datasources} 中配置的每个命名扩展库按需注册 {@link JoyaClient} Bean（携带 {@link Qualifier}，
- * 绝不标记 {@code @Primary}，并与同名 {@link DataSource} Bean 避让命名冲突），使业务代码可直接
- * {@code @Qualifier("<name>") JoyaClient} 注入。
+ * 绝不标记 {@code @Primary}，采用 {@code factoryBeanName + factoryMethodName} 标准声明以原生兼容 Spring Boot 3 AOT，
+ * 并与同名 {@link DataSource} Bean 避让命名冲突），使业务代码可直接 {@code @Qualifier("<name>") JoyaClient} 注入。
  */
 @AutoConfiguration(after = JoyaAutoConfiguration.class)
 @ConditionalOnClass({DataSource.class, JoyaClient.class})
@@ -45,18 +44,12 @@ public class JoyaNamedClientsAutoConfiguration {
         return new NamedClientRegistrar(environment);
     }
 
-    private static final class NamedClientRegistrar implements BeanDefinitionRegistryPostProcessor, BeanFactoryAware {
+    private static final class NamedClientRegistrar implements BeanDefinitionRegistryPostProcessor {
 
         private final Environment environment;
-        private BeanFactory beanFactory;
 
         private NamedClientRegistrar(Environment environment) {
             this.environment = environment;
-        }
-
-        @Override
-        public void setBeanFactory(BeanFactory beanFactory) throws BeansException {
-            this.beanFactory = beanFactory;
         }
 
         @Override
@@ -83,7 +76,7 @@ public class JoyaNamedClientsAutoConfiguration {
             seen.add(primaryName);
             String registryBeanName = (registryBeanNames != null && registryBeanNames.length > 0)
                     ? registryBeanNames[0]
-                    : null;
+                    : "joyaClientRegistry";
 
             for (JoyaProperties.JoyaDataSourceProperties dsProps : properties.getDatasources()) {
                 String name = dsProps.getName() == null ? "" : dsProps.getName().trim();
@@ -94,17 +87,13 @@ public class JoyaNamedClientsAutoConfiguration {
                     continue;
                 }
                 String beanName = resolveUniqueBeanName(registry, name);
-                if (beanName == null) {
-                    continue;
-                }
-                GenericBeanDefinition bd = new GenericBeanDefinition();
-                bd.setBeanClass(JoyaClient.class);
+                RootBeanDefinition bd = new RootBeanDefinition(JoyaClient.class);
                 bd.setPrimary(false);
-                if (registryBeanName != null) {
-                    bd.setDependsOn(registryBeanName);
-                }
+                bd.setFactoryBeanName(registryBeanName);
+                bd.setFactoryMethodName("get");
+                bd.getConstructorArgumentValues().addIndexedArgumentValue(0, name);
+                bd.setDependsOn(registryBeanName);
                 bd.addQualifier(new AutowireCandidateQualifier(Qualifier.class, name));
-                bd.setInstanceSupplier(() -> beanFactory.getBean(JoyaClientRegistry.class).get(name));
                 registry.registerBeanDefinition(beanName, bd);
             }
         }
@@ -155,14 +144,23 @@ public class JoyaNamedClientsAutoConfiguration {
         }
 
         private static String resolveUniqueBeanName(BeanDefinitionRegistry registry, String clientName) {
-            if (!registry.containsBeanDefinition(clientName)) {
+            if (!isBeanNameTaken(registry, clientName)) {
                 return clientName;
             }
             String fallback = clientName + "JoyaClient";
-            if (!registry.containsBeanDefinition(fallback)) {
+            if (!isBeanNameTaken(registry, fallback)) {
                 return fallback;
             }
-            return null;
+            throw new IllegalStateException("Cannot register named JoyaClient bean for datasource '"
+                    + clientName + "': both candidate bean names ('" + clientName + "' and '" + fallback
+                    + "') are already in use in the Spring application context.");
+        }
+
+        private static boolean isBeanNameTaken(BeanDefinitionRegistry registry, String candidate) {
+            if (registry.containsBeanDefinition(candidate) || registry.isAlias(candidate)) {
+                return true;
+            }
+            return registry instanceof SingletonBeanRegistry sbr && sbr.containsSingleton(candidate);
         }
     }
 }

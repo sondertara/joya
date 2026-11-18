@@ -3,10 +3,18 @@ package com.sondertara.joya.spring.autoconfigure;
 import com.sondertara.joya.spring.autoconfigure.JoyaProperties.JoyaDataSourceProperties;
 import com.sondertara.joya.spring.autoconfigure.JoyaProperties.PrimaryDataSourceProperties;
 import com.sondertara.joya.utils.Strings;
+import org.jspecify.annotations.Nullable;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
-import org.springframework.boot.autoconfigure.jdbc.DataSourceProperties;
+import org.springframework.boot.context.properties.bind.BindHandler;
+import org.springframework.boot.context.properties.bind.Bindable;
+import org.springframework.boot.context.properties.bind.Binder;
+import org.springframework.boot.context.properties.bind.handler.NoUnboundElementsBindHandler;
+import org.springframework.boot.context.properties.source.ConfigurationPropertyName;
+import org.springframework.boot.context.properties.source.MapConfigurationPropertySource;
 import org.springframework.boot.jdbc.DataSourceBuilder;
+import org.springframework.boot.jdbc.DatabaseDriver;
+import org.springframework.core.env.Environment;
 
 import javax.sql.DataSource;
 import java.util.ArrayList;
@@ -53,10 +61,20 @@ final class JoyaDataSourceFactory {
     }
 
     /**
-     * 按配置构造独立数据源，并把 {@code hikari} 子属性绑定到实例上。
+     * 按配置构造独立数据源，并把 {@code hikari} 子属性严格绑定到实例上（未知或拼写错误的属性立即失败）。
      */
     static DataSource buildSelfManaged(String propertyPath, JoyaDataSourceProperties props) {
-        if (props.getType() == null && DataSourceBuilder.findType(props.getClassLoader()) == null) {
+        if (Strings.isBlank(props.getUrl())) {
+            throw new IllegalStateException(
+                    "Failed to create self-managed Joya DataSource under '" + propertyPath
+                            + "': '" + propertyPath + ".url' must be specified (or configure '"
+                            + propertyPath + ".data-source-bean' to reuse an existing Spring DataSource bean).");
+        }
+        ClassLoader classLoader = Thread.currentThread().getContextClassLoader();
+        if (classLoader == null) {
+            classLoader = JoyaDataSourceFactory.class.getClassLoader();
+        }
+        if (props.getType() == null && DataSourceBuilder.findType(classLoader) == null) {
             throw new IllegalStateException(
                     "Failed to create self-managed Joya DataSource under '" + propertyPath
                             + "': no supported connection pool implementation (such as HikariCP) was found on the classpath. "
@@ -64,16 +82,35 @@ final class JoyaDataSourceFactory {
                             + "add 'org.springframework.boot:spring-boot-starter-jdbc' (or 'com.zaxxer:HikariCP'), "
                             + "or explicitly configure '" + propertyPath + ".type'.");
         }
-        DataSource dataSource = props.initializeDataSourceBuilder().build();
+        String url = props.getUrl().trim();
+        DataSourceBuilder<?> builder = DataSourceBuilder.create(classLoader).url(url);
+        if (props.getType() != null) {
+            builder.type(props.getType());
+        }
+        if (Strings.isNotBlank(props.getDriverClassName())) {
+            builder.driverClassName(props.getDriverClassName().trim());
+        } else {
+            String deducedDriver = DatabaseDriver.fromJdbcUrl(url).getDriverClassName();
+            if (Strings.isNotBlank(deducedDriver)) {
+                builder.driverClassName(deducedDriver);
+            }
+        }
+        if (props.getUsername() != null) {
+            builder.username(props.getUsername());
+        }
+        if (props.getPassword() != null) {
+            builder.password(props.getPassword());
+        }
+        DataSource dataSource = builder.build();
         Map<String, Object> hikariProps = props.getHikari();
         if (hikariProps != null && !hikariProps.isEmpty()) {
             try {
-                org.springframework.boot.context.properties.bind.Binder binder =
-                        new org.springframework.boot.context.properties.bind.Binder(
-                                new org.springframework.boot.context.properties.source.MapConfigurationPropertySource(hikariProps));
-                binder.bind(
-                        org.springframework.boot.context.properties.source.ConfigurationPropertyName.EMPTY,
-                        org.springframework.boot.context.properties.bind.Bindable.ofInstance(dataSource));
+                MapConfigurationPropertySource source = new MapConfigurationPropertySource(hikariProps);
+                Binder binder = new Binder(source);
+                BindHandler strictHandler = new NoUnboundElementsBindHandler(
+                        BindHandler.DEFAULT,
+                        cp -> cp == source);
+                binder.bind(ConfigurationPropertyName.EMPTY, Bindable.ofInstance(dataSource), strictHandler);
             } catch (Exception e) {
                 throw new IllegalStateException(
                         "Failed to bind '" + propertyPath + ".hikari' properties onto DataSource of type "
@@ -84,22 +121,12 @@ final class JoyaDataSourceFactory {
     }
 
     /**
-     * 明确拒绝 Joya 未实现的 JNDI / XA 配置，避免静默降级。
+     * 明确拒绝 Joya 未实现的 JNDI / XA 配置与空 URL，避免静默忽略或底层 NPE。
      */
-    static void validateSelfManaged(String propertyPath, JoyaDataSourceProperties props) {
-        List<String> unsupportedProperties = new ArrayList<>();
-        if (Strings.isNotBlank(props.getJndiName())) {
-            unsupportedProperties.add(propertyPath + ".jndi-name");
-        }
-        DataSourceProperties.Xa xa = props.getXa();
-        if (xa != null) {
-            if (Strings.isNotBlank(xa.getDataSourceClassName())) {
-                unsupportedProperties.add(propertyPath + ".xa.data-source-class-name");
-            }
-            if (xa.getProperties() != null && !xa.getProperties().isEmpty()) {
-                unsupportedProperties.add(propertyPath + ".xa.properties");
-            }
-        }
+    static void validateSelfManaged(String propertyPath,
+                                    JoyaDataSourceProperties props,
+                                    @Nullable Environment environment) {
+        List<String> unsupportedProperties = collectUnsupportedJndiOrXa(propertyPath, environment);
         if (!unsupportedProperties.isEmpty()) {
             throw new IllegalStateException(
                     "Unsupported self-managed Joya DataSource configuration: "
@@ -108,12 +135,20 @@ final class JoyaDataSourceFactory {
                             + "remove these properties and configure JDBC 'url'/'type' instead. "
                             + "To reuse a Spring-managed primary DataSource, set 'joya.primary.use-spring=true'.");
         }
+        if (Strings.isBlank(props.getUrl())) {
+            throw new IllegalStateException(
+                    "Failed to create self-managed Joya DataSource under '" + propertyPath
+                            + "': '" + propertyPath + ".url' must be specified (or configure '"
+                            + propertyPath + ".data-source-bean' to reuse an existing Spring DataSource bean).");
+        }
     }
 
     /**
      * 校验复用容器既有 {@link DataSource} Bean 时不得同时配置自建连接/连接池属性，避免语义歧义。
      */
-    static void validateBeanReference(String propertyPath, JoyaDataSourceProperties props) {
+    static void validateBeanReference(String propertyPath,
+                                      JoyaDataSourceProperties props,
+                                      @Nullable Environment environment) {
         List<String> conflicts = new ArrayList<>();
         if (Strings.isNotBlank(props.getUrl())) {
             conflicts.add(propertyPath + ".url");
@@ -130,17 +165,10 @@ final class JoyaDataSourceFactory {
         if (props.getType() != null) {
             conflicts.add(propertyPath + ".type");
         }
-        if (Strings.isNotBlank(props.getJndiName())) {
-            conflicts.add(propertyPath + ".jndi-name");
-        }
         if (props.getHikari() != null && !props.getHikari().isEmpty()) {
             conflicts.add(propertyPath + ".hikari");
         }
-        DataSourceProperties.Xa xa = props.getXa();
-        if (xa != null && (Strings.isNotBlank(xa.getDataSourceClassName())
-                || (xa.getProperties() != null && !xa.getProperties().isEmpty()))) {
-            conflicts.add(propertyPath + ".xa");
-        }
+        conflicts.addAll(collectUnsupportedJndiOrXa(propertyPath, environment));
         if (!conflicts.isEmpty()) {
             throw new IllegalStateException(
                     "Conflicting Joya DataSource configuration under '" + propertyPath + "': "
@@ -149,11 +177,34 @@ final class JoyaDataSourceFactory {
         }
     }
 
-    static boolean hasCustomConnectionConfig(PrimaryDataSourceProperties props) {
+    static boolean hasCustomConnectionConfig(PrimaryDataSourceProperties props, @Nullable Environment environment) {
         return Strings.isNotBlank(props.getUrl())
                 || Strings.isNotBlank(props.getUsername())
                 || Strings.isNotBlank(props.getPassword())
                 || Strings.isNotBlank(props.getDriverClassName())
-                || Strings.isNotBlank(props.getJndiName());
+                || props.getType() != null
+                || (props.getHikari() != null && !props.getHikari().isEmpty())
+                || !collectUnsupportedJndiOrXa("joya.primary", environment).isEmpty();
+    }
+
+    private static List<String> collectUnsupportedJndiOrXa(String propertyPath, @Nullable Environment environment) {
+        if (environment == null) {
+            return List.of();
+        }
+        Binder binder = Binder.get(environment);
+        List<String> found = new ArrayList<>();
+        String jndi = binder.bind(propertyPath + ".jndi-name", String.class).orElse(null);
+        if (Strings.isNotBlank(jndi)) {
+            found.add(propertyPath + ".jndi-name");
+        }
+        String xaClass = binder.bind(propertyPath + ".xa.data-source-class-name", String.class).orElse(null);
+        if (Strings.isNotBlank(xaClass)) {
+            found.add(propertyPath + ".xa.data-source-class-name");
+        }
+        Map<?, ?> xaProps = binder.bind(propertyPath + ".xa.properties", Map.class).orElse(null);
+        if (xaProps != null && !xaProps.isEmpty()) {
+            found.add(propertyPath + ".xa.properties");
+        }
+        return found;
     }
 }

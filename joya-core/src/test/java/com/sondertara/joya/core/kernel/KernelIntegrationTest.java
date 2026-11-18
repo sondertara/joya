@@ -148,7 +148,7 @@ class KernelIntegrationTest {
             @Override
             public void beforeExecute(SqlExecutionContext ctx) {
                 seen.add(ctx.batch());
-                seen.add(ctx.attributes().get(SqlExecutionContext.ATTR_BATCH_ROWS));
+                seen.add(ctx.batchRows());
                 seen.add(ctx.statement().metadata().dbType());
                 seen.add(ctx.statement().parameters().size());
             }
@@ -278,13 +278,15 @@ class KernelIntegrationTest {
         h2Kernel.queryList(SqlStatement.select("SELECT id FROM t_user WHERE id = ?", 1), new MapRowMapper());
         SqlExecutionContext nonPage = beforeContexts.get(0);
         assertFalse(nonPage.inPage());
+        assertEquals(-1, nonPage.batchRows());
         assertEquals(-1L, nonPage.offset());
         assertEquals(-1L, nonPage.limit());
         assertSame(nonPage.statement(), nonPage.logicalStatement());
         assertSame(nonPage.statement(), executedStatements.get(0));
-        SqlExecutionContext legacyCtor = new SqlExecutionContext(nonPage.statement(), false, Map.of());
-        assertFalse(legacyCtor.inPage());
-        assertSame(nonPage.statement(), legacyCtor.logicalStatement());
+        SqlExecutionContext simpleCtor = new SqlExecutionContext(nonPage.statement(), false);
+        assertFalse(simpleCtor.inPage());
+        assertEquals(-1, simpleCtor.batchRows());
+        assertSame(nonPage.statement(), simpleCtor.logicalStatement());
 
         // 2. SQL Server (ANSI_OFFSET_FETCH) 深分页双视图（通过零 JDBC 执行桩验证 SQL 与参数）
         beforeContexts.clear();
@@ -419,5 +421,55 @@ class KernelIntegrationTest {
         assertThrows(IllegalArgumentException.class,
                 () -> template.queryList(SqlStatement.select("SELECT id FROM t_user WHERE id = ?", 1, 2),
                         new MapRowMapper()));
+    }
+
+    @Test
+    void clientName_propagatesAcrossSingleBatchStreamPageTxAndWithSettings() {
+        List<SqlExecutionContext> recorded = new ArrayList<>();
+        List<String> closedStreams = new ArrayList<>();
+        com.sondertara.joya.core.JoyaClient named = com.sondertara.joya.core.JoyaClient.builder(dataSource)
+                .clientName(" analytics ")
+                .executionListener(new SqlExecutionListener() {
+                    @Override
+                    public void beforeExecute(SqlExecutionContext ctx) {
+                        recorded.add(ctx);
+                    }
+
+                    @Override
+                    public void onStreamClosed(SqlExecutionContext ctx) {
+                        closedStreams.add(ctx.clientName());
+                    }
+                })
+                .build();
+        assertEquals("analytics", named.clientName());
+
+        // 1. 单条、分页、流式、批量
+        named.sql("SELECT id FROM t_user WHERE id = ?", 1).listMap();
+        named.sql("SELECT id FROM t_user").page(java.util.Map.class,
+                com.sondertara.joya.core.query.pagination.PageRequest.of(0, 2));
+        try (var stream = named.sql("SELECT id FROM t_user").stream(Integer.class)) {
+            assertTrue(stream.count() > 0);
+        }
+        named.sql("INSERT INTO t_user VALUES (?, ?)").batch(
+                List.of(new Object[]{301, "x"}, new Object[]{302, "y"}));
+
+        // 2. 派生视图与事务视图（防止 bind / withSettings 重建内核时丢标）
+        com.sondertara.joya.core.JoyaClient derived = named.withSettings(s -> s.withBatchSize(256));
+        assertEquals("analytics", derived.clientName());
+        derived.sql("SELECT id FROM t_user WHERE id = ?", 1).value(Integer.class);
+
+        named.tx(tx -> {
+            tx.sql("SELECT id FROM t_user WHERE id = ?", 1).value(Integer.class);
+            tx.withSettings(s -> s.withQueryTimeoutSeconds(5))
+                    .sql("SELECT id FROM t_user WHERE id = ?", 2).value(Integer.class);
+        });
+
+        assertTrue(recorded.size() >= 8, "应覆盖单条、分页(count+data)、流式、批量、派生视图与事务路径");
+        for (SqlExecutionContext ctx : recorded) {
+            assertEquals("analytics", ctx.clientName());
+        }
+        assertEquals(List.of("analytics"), closedStreams);
+        SqlExecutionContext batchCtx = recorded.stream().filter(SqlExecutionContext::batch).findFirst().orElseThrow();
+        assertEquals(2, batchCtx.batchRows());
     }
 }

@@ -8,7 +8,6 @@ import org.slf4j.LoggerFactory;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
-import java.util.Map;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
@@ -24,10 +23,16 @@ public final class ExecutionObserver {
     private static final Logger log = LoggerFactory.getLogger(ExecutionObserver.class);
 
     private final List<SqlExecutionListener> listeners;
+    private final @Nullable String clientName;
     private volatile List<SqlExecutionListener> orderedListeners;
 
     public ExecutionObserver(List<SqlExecutionListener> listeners) {
+        this(listeners, null);
+    }
+
+    public ExecutionObserver(List<SqlExecutionListener> listeners, @Nullable String clientName) {
         this.listeners = listeners == null ? List.of() : List.copyOf(listeners);
+        this.clientName = (clientName == null || clientName.isBlank()) ? null : clientName.trim();
     }
 
     private List<SqlExecutionListener> orderedListeners() {
@@ -54,7 +59,7 @@ public final class ExecutionObserver {
         return List.copyOf(sorted);
     }
 
-    /** 已排序的监听器（供 {@code bind} 派生视图复用）。 */
+    /** 已注册的监听器列表（供 {@code bind} 派生视图复用）。 */
     public List<SqlExecutionListener> listeners() {
         return listeners;
     }
@@ -65,22 +70,20 @@ public final class ExecutionObserver {
     }
 
     /**
-     * 执行观测包装：before → 执行 → after/onError。监听器为空时零额外开销。
+     * 流式执行观测包装：before → 执行 → after/onError，流关闭时触发 onStreamClosed。监听器为空时零额外开销。
      */
-    public <T> Stream<T> observeStream(SqlStatement statement, Map<String, Object> attributes,
-                                       Supplier<Stream<T>> action) {
-        return observeStream(statement, attributes, null, action);
+    public <T> Stream<T> observeStream(SqlStatement statement, Supplier<Stream<T>> action) {
+        return observeStream(statement, null, action);
     }
 
     public <T> Stream<T> observeStream(SqlStatement statement,
-                                       Map<String, Object> attributes,
                                        SqlExecutionContext.@Nullable PaginationView page,
                                        Supplier<Stream<T>> action) {
         if (listeners.isEmpty()) {
             return action.get();
         }
         List<SqlExecutionListener> active = orderedListeners();
-        SqlExecutionContext ctx = new SqlExecutionContext(statement, false, attributes, page);
+        SqlExecutionContext ctx = new SqlExecutionContext(statement, false, -1, clientName, page);
         for (SqlExecutionListener listener : active) {
             runListenerQuietly(() -> listener.beforeExecute(ctx), "beforeExecute");
         }
@@ -106,14 +109,29 @@ public final class ExecutionObserver {
         }
     }
 
-    public <T> T observe(SqlStatement statement, boolean batch, Map<String, Object> attributes,
-                          Supplier<T> action, Function<T, SqlExecutionResult> resultMapper) {
-        return observe(statement, batch, attributes, null, action, resultMapper);
+    public <T> T observe(SqlStatement statement,
+                         Supplier<T> action,
+                         Function<T, SqlExecutionResult> resultMapper) {
+        return observe(statement, false, -1, null, action, resultMapper);
     }
 
     public <T> T observe(SqlStatement statement,
+                         SqlExecutionContext.@Nullable PaginationView page,
+                         Supplier<T> action,
+                         Function<T, SqlExecutionResult> resultMapper) {
+        return observe(statement, false, -1, page, action, resultMapper);
+    }
+
+    public <T> T observeBatch(SqlStatement probeStatement,
+                              int batchRows,
+                              Supplier<T> action,
+                              Function<T, SqlExecutionResult> resultMapper) {
+        return observe(probeStatement, true, batchRows, null, action, resultMapper);
+    }
+
+    private <T> T observe(SqlStatement statement,
                           boolean batch,
-                          Map<String, Object> attributes,
+                          int batchRows,
                           SqlExecutionContext.@Nullable PaginationView page,
                           Supplier<T> action,
                           Function<T, SqlExecutionResult> resultMapper) {
@@ -121,7 +139,7 @@ public final class ExecutionObserver {
             return action.get();
         }
         List<SqlExecutionListener> active = orderedListeners();
-        SqlExecutionContext ctx = new SqlExecutionContext(statement, batch, attributes, page);
+        SqlExecutionContext ctx = new SqlExecutionContext(statement, batch, batchRows, clientName, page);
         for (SqlExecutionListener listener : active) {
             runListenerQuietly(() -> listener.beforeExecute(ctx), "beforeExecute");
         }

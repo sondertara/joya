@@ -618,6 +618,21 @@ class JoyaSpringSidecarIntegrationTest {
                 () -> joinedTx.sql("SELECT 1").value(Integer.class));
         assertEquals(com.sondertara.joya.core.tx.TxState.COMMITTED, afterClose.current(),
                 "外层已提交的 joinedTx 在 close() 后终态应保持 COMMITTED，不能被覆盖为 ROLLED_BACK");
+
+        // 对称分支：外层 Spring 事务提前回滚后，调用 joinedTx.commit() 必须拒绝且保持 ROLLED_BACK 终态
+        org.springframework.transaction.TransactionStatus rolledBackOuter =
+                transactionManager.getTransaction(new org.springframework.transaction.support.DefaultTransactionDefinition());
+        com.sondertara.joya.core.tx.Tx joinedInRolledBack = joyaClient.tx().begin();
+        try {
+            transactionManager.rollback(rolledBackOuter);
+            com.sondertara.joya.core.tx.IllegalTxStateException commitAfterOuterRollback = assertThrows(
+                    com.sondertara.joya.core.tx.IllegalTxStateException.class,
+                    joinedInRolledBack::commit);
+            assertEquals(com.sondertara.joya.core.tx.TxState.ROLLED_BACK, commitAfterOuterRollback.current(),
+                    "外层已回滚的事务上调用 commit() 必须抛 IllegalTxStateException 且报告当前终态为 ROLLED_BACK");
+        } finally {
+            joinedInRolledBack.close();
+        }
     }
 
     @Configuration(proxyBeanMethods = false)

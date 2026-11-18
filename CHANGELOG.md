@@ -4,6 +4,35 @@
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-11-18
+
+### Added（新增能力）
+- **客户端身份可观测性与多库 SQL 日志标签（`JoyaClient.Builder.clientName` + `SqlExecutionContext.clientName`）**：
+  - `JoyaClient.Builder` 新增 `clientName(String)`，`JoyaClient` 与 `SqlExecutionContext` 新增 `clientName()` 强类型访问器（随 `tx(...)` 显式事务与 `withSettings(...)` 派生视图自动继承）。
+  - `joya-spring-boot-starter` 自动为每个客户端注入注册名（如 `primary`、`order`），内置 `joyaSqlLogListener` 输出 `[Joya SQL][<clientName>]` / `[Joya SQL SLOW][<clientName>]` / `[Joya SQL ERROR][<clientName>]`，自定义全局 `SqlExecutionListener` 同样可直接区分目标数据源。
+
+### Fixed（缺陷修复）
+- **修复多数据源 `SpringTxEngine` 物理连接/`ThreadLocal` 泄漏与交错重入回调错挂（P0-2）**：
+  - `SpringTxSession` 在 `status.isNewTransaction() == true` 时不再受全局 `isActualTransactionActive()` 影响，未提交关闭与显式 `commit()` / `rollback()` 均通过统一的乱序同步补偿执行底层提交/回滚、解绑 `ConnectionHolder` 并清理 `resume()` 恢复的过期同步快照；同源加入型事务在外层提前结束时调用 `commit()` 亦严格抛出 `IllegalTxStateException`。
+  - 新增 `SyncOwnerMarker` 与异源活跃事务检测：阻止在 `primary → order → primary(join)` 跨库交错重入时将外层库的 `afterCommit` / `afterCompletion` 错挂到内层异源事务的 `TransactionSynchronization` 列表或误读异源隔离级别。
+- **修复自定义带 `@Qualifier` 副库客户端导致主库 `@Primary JoyaClient` 退让串库问题（P0-1）**：
+  - `JoyaAutoConfiguration.joyaClient` 改为仅在已存在名为 `joyaClient`、标记 `@Primary` 或无任何限定符的主 `JoyaClient` Bean 时才退让。
+- **支持无数据库微服务自动退让（P0-3）**：
+  - `JoyaAutoConfiguration` 新增 `OnJoyaDataSourceAvailableCondition`（`REGISTER_BEAN` 阶段）：排除 `DataSourceAutoConfiguration` 且未显式配置自管数据源的服务在启动期优雅跳过。
+- **消除 `JoyaDataSourceProperties` 非容器 Bean 裸 `NullPointerException` 与 `hikari` 拼写静默忽略（P0-4）**：
+  - `JoyaDataSourceProperties` 解除对 `DataSourceProperties`（`InitializingBean`）的继承，清理不支持的 JNDI/XA IDE 元数据污染，漏配 `.url` 时抛出指明属性路径的 `IllegalStateException`；`hikari` 子属性绑定启用 `NoUnboundElementsBindHandler` 对未知/拼错属性快速失败，补齐 `hasCustomConnectionConfig` 对 `type`/`hikari` 的告警。
+- **补齐结果集拉取期与流式迭代期 `SQLException` 的异常翻译（P1-1）与 Spring 6 默认策略对齐（P1-2）**：
+  - `SingleRowRecordExtractor`、`ListRecordExtractor`、`ExecutionKernel.queryOne` 与 `ResultSetSpliterator` 统一接入 `SqlExceptionTranslator`，确保游标拉取超时等异常在 Spring 下转换为 `DataAccessException`。
+  - `SpringSqlExceptionTranslator` 对齐 Spring 6 `JdbcAccessor` 默认使用零连接开销的 `SQLExceptionSubclassTranslator`（仅存在自定义 `sql-error-codes.xml` 时才启用错误码探测），消除连接池耗尽故障期的二次借连接阻塞。
+- **扩展点支持 Spring `@Order` / `Ordered` 排序与自定义无值 `@Qualifier` 隔离（P1-3），命名客户端兼容 Spring 6 AOT（P1-4 & P2-1）**：
+  - `JoyaExtensionPointResolver` 支持识别 `@Bean` 方法与类级 `@Order` 及 `org.springframework.core.Ordered`，不再将标注无值自定义 `@Qualifier` 元注解的专用 Bean 误判为全局候选。
+  - `JoyaNamedClientsAutoConfiguration` 改用 `factoryBeanName + factoryMethodName` 注册命名 `JoyaClient`，原生通过 Spring 6 AOT 代码生成；`SpringTxSession` 将外层 `TransactionTimedOutException` 统一桥接为 `TxTimeoutException`，`validateConfiguration` 统一采用 `matchesDataSource`。
+
+### Changed（行为与契约变更）
+- **移除 `SqlRewriteContext` 与 `SqlExecutionContext` 中的弱类型 `attributes` 映射，收敛为纯强类型 `record`**：
+  - **Breaking**：`SqlRewriteContext` 收敛为不可变 `record` 并移除从未有写入入口的 `attributes()` / `attribute(String)` 及对应构造重载，彻底消除 `UpsertPlanner` 预探测门禁与实际改写上下文的潜在分叉风险。
+  - **Breaking**：`SqlExecutionContext` 移除 `attributes()`、`ATTR_BATCH` 与 `ATTR_BATCH_ROWS`，将批处理总行数提升为一等强类型字段 `int batchRows()`（单条执行为 `-1`），实现全观测链路零 `HashMap` 分配与零装箱。
+
 ## [1.0.0] - 2026-11-15
 
 ### Added（新增能力）

@@ -9,4 +9,8 @@ public class TxTimeoutException extends TxException {
     public TxTimeoutException(String message) {
         super(message);
     }
+
+    public TxTimeoutException(String message, Throwable cause) {
+        super(message, cause);
+    }
 }

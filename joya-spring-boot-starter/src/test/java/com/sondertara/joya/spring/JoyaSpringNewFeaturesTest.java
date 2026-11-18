@@ -653,12 +653,6 @@ class JoyaSpringNewFeaturesTest {
     @Configuration(proxyBeanMethods = false)
     @EnableAutoConfiguration
     static class CustomQualifiedOrderClientConfig {
-        @Primary
-        @Bean
-        JoyaClient primaryClient(JoyaClientRegistry registry) {
-            return registry.primary();
-        }
-
         @Bean
         @Qualifier("order")
         JoyaClient customOrderClient(JoyaClientRegistry registry) {
@@ -666,12 +660,13 @@ class JoyaSpringNewFeaturesTest {
         }
 
         @Bean
-        OrderQualifierHolder orderQualifierHolder(@Qualifier("order") JoyaClient orderClient) {
-            return new OrderQualifierHolder(orderClient);
+        OrderQualifierHolder orderQualifierHolder(JoyaClient primaryClient,
+                                                  @Qualifier("order") JoyaClient orderClient) {
+            return new OrderQualifierHolder(primaryClient, orderClient);
         }
     }
 
-    record OrderQualifierHolder(JoyaClient orderClient) {
+    record OrderQualifierHolder(JoyaClient primaryClient, JoyaClient orderClient) {
     }
 
     @Test
@@ -737,7 +732,10 @@ class JoyaSpringNewFeaturesTest {
                         "joya.datasources[0].type=org.h2.jdbcx.JdbcDataSource")
                 .run(context -> {
                     assertNull(context.getStartupFailure());
+                    JoyaClientRegistry registry = context.getBean(JoyaClientRegistry.class);
                     OrderQualifierHolder holder = context.getBean(OrderQualifierHolder.class);
+                    assertSame(registry.primary(), holder.primaryClient(),
+                            "仅自定义带 @Qualifier 的副库客户端时，默认 @Primary 主库客户端不得退让或串库");
                     assertEquals(77, holder.orderClient().settings().executionOptions().batchSize());
                     assertFalse(context.containsBean("orderJoyaClient"),
                             "已存在用户定义的 @Qualifier(\"order\") JoyaClient 时应主动退让");

@@ -23,7 +23,6 @@ import java.util.Collection;
 import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
@@ -65,9 +64,6 @@ final class StatementPreparer {
      *
      * <p>逐个操作构建三种上下文（单条无别名、单条带别名、批量模板），任一改写器对任一操作声明支持
      * 即视为「可能生效」——保守判定，避免把「改写器只在其他操作/其他形态生效」误判为安全而绕过行级过滤。
-     *
-     * <p>约定：{@code supports()} 的判定应只依赖 operation / entityType / tables / dbType；
-     * 若自定义改写器把 batch、rootAlias 或 attributes 作为必要条件，本门禁可能给出乐观结论。
      */
     boolean hasApplicableRewriters(Collection<Operation> operations,
                                    @org.jspecify.annotations.Nullable Class<?> entityType,
@@ -91,7 +87,7 @@ final class StatementPreparer {
     private static SqlRewriteContext probe(Operation operation, @org.jspecify.annotations.Nullable Class<?> entityType,
                                            @org.jspecify.annotations.Nullable DbType dbType, Set<TableRef> tables,
                                            @org.jspecify.annotations.Nullable String rootAlias, boolean batch) {
-        return new SqlRewriteContext(operation, entityType, dbType, tables, rootAlias, batch, null);
+        return new SqlRewriteContext(operation, entityType, dbType, tables, rootAlias, batch);
     }
 
     private boolean skipApplicableRewriteCheck(Collection<Operation> operations) {
@@ -133,7 +129,7 @@ final class StatementPreparer {
      * AST 级结构改写。只有框架生成的语句（{@code ast != null}）才走这条路径；
      * 原生 SQL 保持字符串语义，不解析、不改写。
      */
-    private SqlStatement applyRewriters(SqlStatement statement, Map<String, Object> attributes) {
+    private SqlStatement applyRewriters(SqlStatement statement) {
         if (rewriters.isEmpty() || statement.ast() == null) {
             return statement;
         }
@@ -145,8 +141,7 @@ final class StatementPreparer {
                 statement.metadata().dbType(),
                 statement.metadata().tables(),
                 rootAlias(originalNode),
-                false,
-                attributes);
+                false);
         for (SqlRewriter rewriter : orderedRewriters()) {
             if (rewriter.supports(ctx)) {
                 node = applySingleRewriter(node, rewriter, ctx);
@@ -337,7 +332,7 @@ final class StatementPreparer {
      * 批量语句的结构改写：INSERT/UPSERT 支持追加整批同值的额外列，UPDATE/DELETE 支持整批同值的
      * 额外 WHERE 参数；逐行不同值的改写仍不在此层支持。
      */
-    private BatchSqlStatement applyBatchRewriters(BatchSqlStatement batch, Map<String, Object> attributes) {
+    private BatchSqlStatement applyBatchRewriters(BatchSqlStatement batch) {
         if (rewriters.isEmpty() || batch.ast() == null) {
             return batch;
         }
@@ -345,7 +340,7 @@ final class StatementPreparer {
         SqlNode node = originalNode;
         SqlRewriteContext ctx = new SqlRewriteContext(
                 batch.metadata().operation(), batch.metadata().entityType(),
-                batch.metadata().dbType(), batch.metadata().tables(), rootAlias(originalNode), true, attributes);
+                batch.metadata().dbType(), batch.metadata().tables(), rootAlias(originalNode), true);
         for (SqlRewriter rewriter : orderedRewriters()) {
             if (rewriter.supports(ctx)) {
                 node = applySingleRewriter(node, rewriter, ctx);
@@ -448,12 +443,12 @@ final class StatementPreparer {
     }
 
     /**
-     * 批量语句的唯一准备入口，与 {@link #prepare(SqlStatement, Map)} 对称：注入方言类型 → AST 改写。
+     * 批量语句的唯一准备入口，与 {@link #prepare(SqlStatement)} 对称：注入方言类型 → AST 改写。
      *
      * <p>批量 rewriter 只允许在列尾/参数尾追加；重排、删除或替换既有列与参数会被拒绝，
      * 避免逐行绑定静默错位。
      */
-    BatchSqlStatement prepareBatch(BatchSqlStatement batch, Map<String, Object> attributes) {
+    BatchSqlStatement prepareBatch(BatchSqlStatement batch) {
         BatchSqlStatement withDbType = batch;
         if (batch.metadata().dbType() == null) {
             Dialect dialect = dialectStrategy.resolve(connections);
@@ -462,11 +457,11 @@ final class StatementPreparer {
             }
         }
         BatchSqlStatement normalized = normalizeBatchPlaceholders(withDbType);
-        return applyBatchRewriters(normalized, attributes);
+        return applyBatchRewriters(normalized);
     }
 
     /** 执行前的唯一准备入口：注入方言类型 → AST 改写 → 单一渲染。 */
-    Prepared prepare(SqlStatement statement, Map<String, Object> attributes) {
+    Prepared prepare(SqlStatement statement) {
         Objects.requireNonNull(statement, "statement must not be null");
         Dialect resolvedDialect = statement.metadata().dbType() == null
                 ? dialectStrategy.resolve(connections)
@@ -475,7 +470,7 @@ final class StatementPreparer {
                 ? injectDbType(statement, resolvedDialect.dbType())
                 : statement;
         SqlStatement normalized = normalizeNumberedParameters(withDbType);
-        SqlStatement prepared = rewriters.isEmpty() ? normalized : applyRewriters(normalized, attributes);
+        SqlStatement prepared = rewriters.isEmpty() ? normalized : applyRewriters(normalized);
         validateParameterContract(prepared);
         return new Prepared(prepared, resolvedDialect);
     }

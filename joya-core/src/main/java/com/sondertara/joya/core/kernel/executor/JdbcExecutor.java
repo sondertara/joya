@@ -181,7 +181,11 @@ public class JdbcExecutor implements Executor {
             };
             cleanupRef.set(cleanup);
             // 流关闭时才归还连接；事务边界也可通过 StreamAccess 对称清理同一组资源。
-            Stream<T> stream = new ResultSetSpliterator<>(capturedRs, mapper, streamAccess)
+            Stream<T> stream = new ResultSetSpliterator<>(
+                    capturedRs,
+                    mapper,
+                    streamAccess,
+                    sqlEx -> exceptionTranslator.translate("queryStream", statement, sqlEx))
                     .stream()
                     .onClose(cleanup);
             if (streamAccess != null) {

@@ -3,10 +3,10 @@ package com.sondertara.joya.spring.autoconfigure;
 import com.sondertara.joya.core.JoyaSettings;
 import com.sondertara.joya.core.kernel.statement.DbType;
 import com.sondertara.joya.core.kernel.dialect.QuoteStyle;
-import org.springframework.boot.autoconfigure.jdbc.DataSourceProperties;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.NestedConfigurationProperty;
 
+import javax.sql.DataSource;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -208,13 +208,29 @@ public class JoyaProperties {
     }
 
     /**
-     * 单个数据源配置：直接继承 Spring Boot 原生 {@link DataSourceProperties}（支持 {@code url}、{@code username}、
-     * {@code password}、{@code driver-class-name}、{@code type} 等），并内聚该数据源可选的 Joya 参数覆写。
+     * 单个数据源配置：内聚纯 JDBC 连接属性（{@code url}、{@code username}、{@code password}、
+     * {@code driver-class-name}、{@code type}）与该数据源可选的 Joya 参数覆写（不继承生命周期 Bean
+     * {@code DataSourceProperties}，避免非容器 Bean 初始化缺失与不支持的 JNDI/XA 属性污染 IDE 补全）。
      */
-    public static class JoyaDataSourceProperties extends DataSourceProperties {
+    public static class JoyaDataSourceProperties {
 
         /** 数据源注册名称（如 {@code order}、{@code archive}）。 */
         private String name;
+
+        /** JDBC 连接 URL（自建数据源模式必填）。 */
+        private String url;
+
+        /** 数据库用户名。 */
+        private String username;
+
+        /** 数据库密码。 */
+        private String password;
+
+        /** JDBC 驱动类名（未指定时按 {@code url} 自动推导）。 */
+        private String driverClassName;
+
+        /** 显式指定连接池实现类（如 {@code com.zaxxer.hikari.HikariDataSource}）。 */
+        private Class<? extends DataSource> type;
 
         /** 单库查询超时秒数覆写。 */
         private Integer queryTimeoutSeconds;
@@ -240,7 +256,7 @@ public class JoyaProperties {
         /** 单库标识符引用风格覆写（{@code null} 表示沿用全局 {@code joya.quote-style}）。 */
         private QuoteStyle quoteStyle;
 
-        /** 单库 Hikari 连接池属性透传绑定（如 maximum-pool-size、minimum-idle）。 */
+        /** 单库 Hikari 连接池属性透传绑定（如 maximum-pool-size、minimum-idle、data-source-properties）。 */
         private java.util.Map<String, Object> hikari = new java.util.LinkedHashMap<>();
 
         /** 复用 Spring 容器中已存在的 {@link javax.sql.DataSource} Bean 名称（配置后不自建连接池）。 */
@@ -249,14 +265,52 @@ public class JoyaProperties {
         /** 复用 Spring 容器中已存在的 {@link org.springframework.transaction.PlatformTransactionManager} Bean 名称。 */
         private String transactionManagerBean;
 
-        @Override
         public String getName() {
             return name;
         }
 
-        @Override
         public void setName(String name) {
             this.name = name;
+        }
+
+        public String getUrl() {
+            return url;
+        }
+
+        public void setUrl(String url) {
+            this.url = url;
+        }
+
+        public String getUsername() {
+            return username;
+        }
+
+        public void setUsername(String username) {
+            this.username = username;
+        }
+
+        public String getPassword() {
+            return password;
+        }
+
+        public void setPassword(String password) {
+            this.password = password;
+        }
+
+        public String getDriverClassName() {
+            return driverClassName;
+        }
+
+        public void setDriverClassName(String driverClassName) {
+            this.driverClassName = driverClassName;
+        }
+
+        public Class<? extends DataSource> getType() {
+            return type;
+        }
+
+        public void setType(Class<? extends DataSource> type) {
+            this.type = type;
         }
 
         public Integer getQueryTimeoutSeconds() {

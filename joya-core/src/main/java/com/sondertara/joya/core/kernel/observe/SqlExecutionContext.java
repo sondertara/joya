@@ -4,8 +4,6 @@ import com.sondertara.joya.core.kernel.statement.SqlStatement;
 import com.sondertara.joya.core.kernel.statement.StatementMetadata;
 import org.jspecify.annotations.Nullable;
 
-import java.util.Collections;
-import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -15,21 +13,22 @@ import java.util.Objects;
  * 当处于分页执行（{@link #inPage()} 为 {@code true}）时，可通过 {@link #logicalStatement()} 获取改写完成但未经方言包装的逻辑语句，
  * 并通过 {@link #offset()} / {@link #limit()} 读取显式分页坐标。
  *
- * <p>{@code attributes} 为单次物理执行的内部横切属性包：由准备阶段的 {@code SqlRewriter} 写入
- * （如链路追踪标签、改写标记），在此以不可变视图暴露给观测监听器。
+ * <p>批量执行（{@link #batch()} 为 {@code true}）时可通过 {@link #batchRows()} 获取本次批处理的总行数（单条执行为 {@code -1}）；
+ * 多数据源或命名客户端场景下可通过 {@link #clientName()} 获取所属客户端逻辑名称（如 {@code "primary"}、{@code "order"}）。
+ *
+ * @param statement  实际送入执行器的物理 SQL 语句
+ * @param batch      是否为批处理执行
+ * @param batchRows  批处理总行数（非批处理或未指定批行数时固定为 {@code -1}）
+ * @param clientName 所属客户端逻辑标识（未命名客户端为 {@code null}）
+ * @param page       可选分页视图（非分页执行为 {@code null}）
  */
 public record SqlExecutionContext(
         SqlStatement statement,
         boolean batch,
-        Map<String, Object> attributes,
+        int batchRows,
+        @Nullable String clientName,
         @Nullable PaginationView page
 ) {
-
-    /** 批量模式标记，值为 {@link Boolean#TRUE}。 */
-    public static final String ATTR_BATCH = "joya.batch";
-
-    /** 批量总行数（{@link Integer}）。 */
-    public static final String ATTR_BATCH_ROWS = "joya.batch.rows";
 
     /**
      * 一次分页请求的坐标与包装前的逻辑语句。
@@ -46,14 +45,20 @@ public record SqlExecutionContext(
         }
     }
 
-    /** 兼容旧构造：非分页执行。 */
-    public SqlExecutionContext(SqlStatement statement, boolean batch, Map<String, Object> attributes) {
-        this(statement, batch, attributes, null);
+    /** 便捷构造：非分页执行（无客户端标识，未指定批行数时统一为 {@code -1}）。 */
+    public SqlExecutionContext(SqlStatement statement, boolean batch) {
+        this(statement, batch, -1, null, null);
+    }
+
+    /** 便捷构造：指定客户端标识的非分页执行。 */
+    public SqlExecutionContext(SqlStatement statement, boolean batch, int batchRows, @Nullable String clientName) {
+        this(statement, batch, batchRows, clientName, null);
     }
 
     public SqlExecutionContext {
         statement = Objects.requireNonNull(statement, "statement must not be null");
-        attributes = attributes == null ? Collections.emptyMap() : Collections.unmodifiableMap(attributes);
+        batchRows = (batch && batchRows >= 0) ? batchRows : -1;
+        clientName = (clientName == null || clientName.isBlank()) ? null : clientName.trim();
     }
 
     public StatementMetadata metadata() {

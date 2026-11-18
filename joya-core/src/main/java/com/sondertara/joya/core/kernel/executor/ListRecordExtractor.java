@@ -1,7 +1,5 @@
 package com.sondertara.joya.core.kernel.executor;
 
-import com.sondertara.joya.exceptions.DbException;
-
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
@@ -20,18 +18,14 @@ public class ListRecordExtractor<T> implements ResultSetExtractor<List<T>> {
     }
 
     @Override
-    public List<T> extract(ResultSet record) {
+    public List<T> extract(ResultSet record) throws SQLException {
         List<T> result = new ArrayList<>();
-        try {
-            RowMapper<T> boundMapper = null;
-            while (record.next()) {
-                if (boundMapper == null) {
-                    boundMapper = rowMapper.forResultSet(record);
-                }
-                result.add(boundMapper.map(record));
+        RowMapper<T> boundMapper = null;
+        while (record.next()) {
+            if (boundMapper == null) {
+                boundMapper = rowMapper.forResultSet(record);
             }
-        } catch (SQLException e) {
-            throw new DbException(e);
+            result.add(boundMapper.map(record));
         }
         return result;
     }
