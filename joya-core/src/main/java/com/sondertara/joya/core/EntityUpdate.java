@@ -49,10 +49,11 @@ public final class EntityUpdate<T> {
         return this;
     }
 
-    /** 当值非 {@code null} 时按 Lambda 属性引用设置待更新列。 */
+    /** 当值非 {@code null} 时按 Lambda 属性引用设置待更新列（列名与可更新性始终立即校验）。 */
     public <V> EntityUpdate<T> setIfPresent(IGetter<T, V> column, @Nullable V value) {
+        String colName = validateUpdatableColumn(meta.resolveColumn(column));
         if (value != null) {
-            set(column, value);
+            values.put(colName, value);
         }
         return this;
     }
@@ -61,6 +62,15 @@ public final class EntityUpdate<T> {
     public EntityUpdate<T> set(String columnOrField, @Nullable Object value) {
         String colName = validateUpdatableColumn(meta.resolveColumnName(columnOrField));
         values.put(colName, value);
+        return this;
+    }
+
+    /** 当值非 {@code null} 时按列名或字段名设置待更新列（列名与可更新性始终立即校验）。 */
+    public EntityUpdate<T> setIfPresent(String columnOrField, @Nullable Object value) {
+        String colName = validateUpdatableColumn(meta.resolveColumnName(columnOrField));
+        if (value != null) {
+            values.put(colName, value);
+        }
         return this;
     }
 

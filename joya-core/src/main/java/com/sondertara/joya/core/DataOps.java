@@ -6,6 +6,8 @@ import com.sondertara.joya.core.kernel.statement.SqlStatement;
 import com.sondertara.joya.core.query.dsl.Query;
 
 import java.io.Reader;
+import java.io.StringReader;
+import java.util.Objects;
 import java.util.function.UnaryOperator;
 
 /**
@@ -66,6 +68,14 @@ public interface DataOps {
      * </ul>
      */
     void script(Reader reader);
+
+    /**
+     * 执行轻量级 SQL 脚本字符串（等价于 {@code script(new StringReader(sql))}；契约边界见 {@link #script(Reader)}）。
+     */
+    default void script(String sql) {
+        Objects.requireNonNull(sql, "sql must not be null");
+        script(new StringReader(sql));
+    }
 
     /**
      * 获取当前数据操作上下文的客户端配置（默认返回 {@link JoyaSettings#DEFAULT}）。

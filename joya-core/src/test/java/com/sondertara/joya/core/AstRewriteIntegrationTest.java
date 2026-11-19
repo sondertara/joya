@@ -162,7 +162,7 @@ class AstRewriteIntegrationTest {
                 .page(PageRequest.of(0, 10));
 
         assertEquals(1L, page.getTotal());
-        assertEquals(1, page.getData().size());
+        assertEquals(1, page.items().size());
     }
 
     @Test

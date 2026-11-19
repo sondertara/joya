@@ -7,12 +7,14 @@ import com.sondertara.joya.core.kernel.ExecutionKernel;
 import com.sondertara.joya.core.kernel.connection.ConnectionProvider;
 import com.sondertara.joya.core.kernel.connection.DataSourceConnectionProvider;
 import com.sondertara.joya.core.kernel.dialect.DialectStrategy;
+import com.sondertara.joya.core.kernel.dialect.QuoteStyle;
 import com.sondertara.joya.core.kernel.error.SqlExceptionTranslator;
 import com.sondertara.joya.core.kernel.executor.Executor;
 import com.sondertara.joya.core.kernel.executor.RowMapperFactory;
 import com.sondertara.joya.core.kernel.interceptor.SqlRewriter;
 import com.sondertara.joya.core.kernel.observe.SqlExecutionListener;
 import com.sondertara.joya.core.kernel.statement.SqlStatement;
+import com.sondertara.joya.core.naming.TableNameResolver;
 import com.sondertara.joya.core.query.dsl.Query;
 import com.sondertara.joya.core.tx.TxCallback;
 import com.sondertara.joya.core.tx.TxConsumer;
@@ -23,6 +25,7 @@ import org.jspecify.annotations.Nullable;
 
 import javax.sql.DataSource;
 import java.io.Reader;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -45,10 +48,6 @@ public final class JoyaClient implements DataOps {
     private final ExecutionKernel kernel;
     private final TxEngine txEngine;
     private final DataOpsSupport dataOps;
-
-    public JoyaClient(DataSource dataSource) {
-        this(builder(dataSource));
-    }
 
     private JoyaClient(ExecutionKernel kernel, TxEngine txEngine) {
         this.kernel = Objects.requireNonNull(kernel, "kernel must not be null");
@@ -281,6 +280,30 @@ public final class JoyaClient implements DataOps {
         /** 设置默认查询超时秒数（{@code <= 0} 表示不限制；直接合并至当前 {@link JoyaSettings}）。 */
         public Builder queryTimeoutSeconds(int queryTimeoutSeconds) {
             this.settings = this.settings.withQueryTimeoutSeconds(queryTimeoutSeconds);
+            return this;
+        }
+
+        /** 设置默认查询超时（{@code null} 或 {@link Duration#ZERO} 表示不限制；正值按秒向上取整；直接合并至当前 {@link JoyaSettings}）。 */
+        public Builder queryTimeout(@Nullable Duration queryTimeout) {
+            this.settings = this.settings.withQueryTimeout(queryTimeout);
+            return this;
+        }
+
+        /** 设置批量写入/更新分片大小（直接合并至当前 {@link JoyaSettings}）。 */
+        public Builder batchSize(int batchSize) {
+            this.settings = this.settings.withBatchSize(batchSize);
+            return this;
+        }
+
+        /** 设置渲染期动态表名解析器（按月分表 / 租户分表 / schema 切换；直接合并至当前 {@link JoyaSettings}）。 */
+        public Builder tableNameResolver(TableNameResolver tableNameResolver) {
+            this.settings = this.settings.withTableNameResolver(tableNameResolver);
+            return this;
+        }
+
+        /** 设置标识符转义风格（反引号 / 双引号 / 方括号；直接合并至当前 {@link JoyaSettings}）。 */
+        public Builder quoteStyle(QuoteStyle quoteStyle) {
+            this.settings = this.settings.withQuoteStyle(quoteStyle);
             return this;
         }
 

@@ -136,8 +136,8 @@ class AuditRegressionTest {
 
     @Test
     void pageResult_unknownTotalDoesNotGuessHasNext() {
-        assertFalse(PageResult.of(List.of(1, 2), -1L, 1, 2).hasNext());
-        assertTrue(PageResult.of(List.of(1, 2), -1L, 1, 2, true).hasNext());
+        assertFalse(PageResult.of(List.of(1, 2), -1L, 0, 2).hasNext());
+        assertTrue(PageResult.of(List.of(1, 2), -1L, 0, 2, true).hasNext());
     }
 
     @Test
@@ -556,7 +556,7 @@ class AuditRegressionTest {
 
     @Test
     void pageResult_exposesCompleteJavaBeanGettersForJsonSerialization() throws Exception {
-        PageResult<String> slice = PageResult.of(List.of("a", "b"), -1L, 2, 2, true);
+        PageResult<String> slice = PageResult.of(List.of("a", "b"), -1L, 1, 2, true);
         java.beans.BeanInfo beanInfo = java.beans.Introspector.getBeanInfo(PageResult.class, Object.class);
         java.util.Map<String, java.lang.reflect.Method> getters = new java.util.LinkedHashMap<>();
         for (java.beans.PropertyDescriptor pd : beanInfo.getPropertyDescriptors()) {
@@ -565,17 +565,18 @@ class AuditRegressionTest {
             }
         }
         for (String expectedProp : List.of(
-                "items", "data", "total", "pageNum", "currentPage",
-                "pageSize", "totalPages", "hasPrev", "hasNext", "empty")) {
+                "items", "total", "page", "size", "totalPages", "hasPrev", "hasNext", "empty")) {
             assertTrue(getters.containsKey(expectedProp),
-                    "PageResult 必须暴露 JavaBean getter 以支持 Jackson JSON 序列化字段: " + expectedProp);
+                    "PageResult 必须暴露 0-based JavaBean getter 以支持 Jackson JSON 序列化字段: " + expectedProp);
         }
+        assertFalse(getters.containsKey("pageNum"));
+        assertFalse(getters.containsKey("pageSize"));
+        assertFalse(getters.containsKey("currentPage"));
+        assertFalse(getters.containsKey("data"));
         assertEquals(List.of("a", "b"), getters.get("items").invoke(slice));
-        assertEquals(List.of("a", "b"), getters.get("data").invoke(slice));
         assertEquals(-1L, getters.get("total").invoke(slice));
-        assertEquals(2, getters.get("pageNum").invoke(slice));
-        assertEquals(1, getters.get("currentPage").invoke(slice));
-        assertEquals(2, getters.get("pageSize").invoke(slice));
+        assertEquals(1, getters.get("page").invoke(slice));
+        assertEquals(2, getters.get("size").invoke(slice));
         assertEquals(-1, getters.get("totalPages").invoke(slice));
         assertEquals(Boolean.TRUE, getters.get("hasPrev").invoke(slice));
         assertEquals(Boolean.TRUE, getters.get("hasNext").invoke(slice));

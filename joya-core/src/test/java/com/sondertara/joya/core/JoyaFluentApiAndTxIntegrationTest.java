@@ -248,7 +248,7 @@ class JoyaFluentApiAndTxIntegrationTest {
         MutationResult res = joya.of(Account.class).insert(acc);
 
         assertEquals(1L, res.affectedRows());
-        Long generatedId = res.getGeneratedKey(Long.class);
+        Long generatedId = res.generatedKey(Long.class);
         assertNotNull(generatedId, "insert 应返回数据库自增主键");
         assertEquals(generatedId, acc.getId(), "insert 应将自增主键回写至实体字段");
     }
@@ -478,7 +478,7 @@ class JoyaFluentApiAndTxIntegrationTest {
                 .select(Account::getName)
                 .page(PageRequest.of(0, 2));
         assertEquals(4L, namePage.getTotal());
-        assertEquals(List.of("Alice", "Bob"), namePage.getData());
+        assertEquals(List.of("Alice", "Bob"), namePage.items());
 
         // 4. 宽 DTO：不写 select，根据 DTO 字段自动推列
         List<AccountBrief> briefs = joya.from(Account.class)
@@ -502,17 +502,17 @@ class JoyaFluentApiAndTxIntegrationTest {
                 .orderByAsc(Account::getId)
                 .page(PageRequest.of(0, 2));
         assertEquals(4L, page0.getTotal());
-        assertEquals(2, page0.getData().size());
+        assertEquals(2, page0.items().size());
 
-        // 8. 动态 PageQueryParams 适配器分页
-        PageQueryRequest param = new PageQueryRequest(1, 10)
+        // 8. 动态 PageQueryParams 适配器分页（0-based）
+        PageQueryRequest param = new PageQueryRequest(0, 10)
                 .addFilter("balance", FilterOperator.GE, 250)
                 .addSortDesc("balance");
         PageResult<Account> dynamicPage = joya.from(Account.class)
                 .apply(PageQueryParams.of(param))
                 .page(param.toPageRequest());
         assertEquals(2L, dynamicPage.getTotal());
-        assertEquals("David", dynamicPage.getData().get(0).getName());
+        assertEquals("David", dynamicPage.items().get(0).getName());
 
         // 9. Stream 读取
         try (Stream<Account> stream = joya.from(Account.class).orderByAsc(Account::getId).stream()) {
@@ -593,8 +593,8 @@ class JoyaFluentApiAndTxIntegrationTest {
                 .select(OrderRecord::getId, OrderRecord::getAmount, Account::getName)
                 .page(AccountOrderView::new, PageRequest.of(0, 10));
         assertEquals(2L, viewPage.getTotal());
-        assertEquals(new AccountOrderView(102L, 280, "Alice"), viewPage.getData().get(0));
-        assertEquals(new AccountOrderView(101L, 120, "Alice"), viewPage.getData().get(1));
+        assertEquals(new AccountOrderView(102L, 280, "Alice"), viewPage.items().get(0));
+        assertEquals(new AccountOrderView(101L, 120, "Alice"), viewPage.items().get(1));
 
         // 5. 分组统计 + having(Expr) + orderByDesc(Expr) + 分页 count 子查询
         PageResult<AccountOrderStat> groupPage = joya.from(OrderRecord.class)
@@ -605,8 +605,8 @@ class JoyaFluentApiAndTxIntegrationTest {
                 .select(Account::getName, max(OrderRecord::getAmount), count())
                 .page(AccountOrderStat::new, PageRequest.of(0, 10));
         assertEquals(2L, groupPage.getTotal(), "GROUP BY 分页的 total 应为分组数（2 组）而非明细行数（3 行）");
-        assertEquals(new AccountOrderStat("Alice", 280, 2L), groupPage.getData().get(0));
-        assertEquals(new AccountOrderStat("Bob", 60, 1L), groupPage.getData().get(1));
+        assertEquals(new AccountOrderStat("Alice", 280, 2L), groupPage.items().get(0));
+        assertEquals(new AccountOrderStat("Bob", 60, 1L), groupPage.items().get(1));
 
         // 6. 统计值终结方法：count / exists / max / min / sum / avg / countDistinct
         assertEquals(2L, joya.from(OrderRecord.class).where(w -> w.eq(OrderRecord::getAccountId, 1L)).count());
@@ -771,11 +771,10 @@ class JoyaFluentApiAndTxIntegrationTest {
 
     @Test
     void batch1AndBatch2ApiErgonomicsAndExpressiveness() {
-        // 1. PageRequest 0-based / 1-based 语义工厂
-        assertEquals(0, PageRequest.ofZeroBased(0, 10).getPage());
-        assertEquals(0, PageRequest.ofOneBased(1, 10).getPage());
-        assertEquals(10, PageRequest.ofOneBased(2, 10).getOffset());
-        assertThrows(IllegalArgumentException.class, () -> PageRequest.ofOneBased(0, 10));
+        // 1. PageRequest 统一 0-based 工厂与偏移量
+        assertEquals(0, PageRequest.of(0, 10).page());
+        assertEquals(10, PageRequest.of(1, 10).offset());
+        assertThrows(IllegalArgumentException.class, () -> PageRequest.of(-1, 10));
 
         // 2. JoyaMapper 统一业务语义返回契约（写返回 int 影响行数 + 主键自动回写，单条读返回 Optional<T>）
         JoyaMapper<Account> mapper = new AccountRepository(joya);
@@ -787,15 +786,15 @@ class JoyaFluentApiAndTxIntegrationTest {
         assertNotNull(a2.getId());
 
         a1.setBalance(150);
-        assertEquals(1, mapper.updateById(a1));
+        assertEquals(1, mapper.update(a1));
         Account patchAcc = new Account(a2.getId(), null, 250, "bob@test.com");
-        assertEquals(1, mapper.patchById(patchAcc));
+        assertEquals(1, mapper.patch(patchAcc));
         assertEquals("Bob", mapper.findByField(Account::getName, "Bob").orElseThrow().getName());
         assertTrue(mapper.findByField(Account::getName, "Nobody").isEmpty());
         assertEquals(250, mapper.findByCondition(w -> w.eq(Account::getId, a2.getId())).orElseThrow().getBalance());
         assertEquals(2, mapper.findByIds(List.of(a1.getId(), a2.getId())).size());
-        assertEquals(2L, mapper.findPage(PageRequest.ofOneBased(1, 10)).getTotal());
-        assertEquals(1L, mapper.findPageByCondition(w -> w.eq(Account::getName, "Alice"), PageRequest.ofOneBased(1, 10)).getTotal());
+        assertEquals(2L, mapper.findPage(PageRequest.of(0, 10)).getTotal());
+        assertEquals(1L, mapper.findPageByCondition(w -> w.eq(Account::getName, "Alice"), PageRequest.of(0, 10)).getTotal());
 
         // 3. WhereCriterion.anyOf（含单条件动态降级） + 可变参数 in / notIn + inChunked
         List<Account> anyOfSingle = joya.from(Account.class)

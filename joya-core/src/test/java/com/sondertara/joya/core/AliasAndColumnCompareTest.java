@@ -486,7 +486,7 @@ class AliasAndColumnCompareTest {
         BatchSeqItem c = new BatchSeqItem("C", null);
         var res = joya.of(BatchSeqItem.class).insertAllIgnoreNull(java.util.List.of(a, b, c));
         assertEquals(java.util.List.of(1L, 2L, 3L), java.util.List.of(a.getId(), b.getId(), c.getId()));
-        assertEquals(java.util.List.of(1L, 2L, 3L), res.getGeneratedKeys(Long.class));
+        assertEquals(java.util.List.of(1L, 2L, 3L), res.generatedKeys(Long.class));
     }
 
     public record PrimitiveLongView(long val) {
@@ -524,7 +524,7 @@ class AliasAndColumnCompareTest {
         var insertRes = joya.of(ListenedSeqItem.class).insert().values(listened).ignoreNulls().execute();
         assertTrue(listened.preCalled);
         assertNotNull(listened.getId());
-        assertEquals(listened.getId(), insertRes.getGeneratedKey(Long.class));
+        assertEquals(listened.getId(), insertRes.generatedKey(Long.class));
 
         // 2. [2.2-1] Select1 + 单字段基本类型 record 构造器遇到 NULL 列时回退为默认值 0L 而非抛 NPE
         PrimitiveLongView view = joya.from(BatchSeqItem.class)

@@ -376,7 +376,7 @@ class QueryDslIntegrationTest {
                 .orderByDesc(User::getId)
                 .page(PageRequest.of(0, 2));
         assertEquals(3L, page.getTotal());
-        assertEquals(2, page.getData().size());
+        assertEquals(2, page.items().size());
 
         // 第一条执行的语句是计数 SQL，绝不能包含 ORDER BY
         String countSql = executedStatements.get(0).sql().toUpperCase();
@@ -406,8 +406,8 @@ class QueryDslIntegrationTest {
     @Test
     void checklist_9_pageQueryParamsNestedAndOrConditions() {
         PageQueryRequest param = new PageQueryRequest()
-                .pageNum(1)
-                .pageSize(10)
+                .page(0)
+                .size(10)
                 .addFilter("deptId", FilterOperator.EQ, 10L);
 
         PageQueryRequest.Nested nested = new PageQueryRequest.Nested()
@@ -421,8 +421,8 @@ class QueryDslIntegrationTest {
                 .page(param.toPageRequest());
         assertEquals(2L, result.total());
         assertEquals(2, result.items().size());
-        assertEquals(1, result.pageNum());
-        assertEquals(10, result.pageSize());
+        assertEquals(0, result.page());
+        assertEquals(10, result.size());
         assertFalse(result.hasPrev());
         assertFalse(result.hasNext());
         assertEquals("Bob", result.items().get(0).getName());
@@ -441,7 +441,7 @@ class QueryDslIntegrationTest {
                 .page(PageRequest.of(0, 1));
 
         assertEquals(1L, page.getTotal());
-        assertEquals(List.of(20L), page.getData());
+        assertEquals(List.of(20L), page.items());
         String countSql = executedStatements.get(0).sql();
         assertTrue(countSql.contains("SELECT DISTINCT t0.dept_id AS c1"), countSql);
         assertFalse(countSql.contains("t0.id"), countSql);
@@ -456,7 +456,7 @@ class QueryDslIntegrationTest {
                 .select(count())
                 .page(PageRequest.of(0, 10));
         assertEquals(1L, nonEmptyAggPage.getTotal());
-        assertEquals(List.of(3L), nonEmptyAggPage.getData());
+        assertEquals(List.of(3L), nonEmptyAggPage.items());
 
         // 2. 空结果过滤（或空表）下的无 GROUP BY 全局聚合投影分页：SQL 全局 COUNT(*) 仍返回 1 行（值为 0L），不得因底表 0 行而跳过数据查询
         PageResult<Long> emptyAggPage = joya.from(User.class)
@@ -464,7 +464,7 @@ class QueryDslIntegrationTest {
                 .select(count())
                 .page(PageRequest.of(0, 10));
         assertEquals(1L, emptyAggPage.getTotal());
-        assertEquals(List.of(0L), emptyAggPage.getData());
+        assertEquals(List.of(0L), emptyAggPage.items());
     }
 
     @Test
@@ -486,8 +486,8 @@ class QueryDslIntegrationTest {
 
         // 1. needTotal = false 跳过 COUNT SQL，total = -1，totalPages = -1，hasPrev / hasNext 正常工作
         PageQueryRequest noTotalReq = new PageQueryRequest()
-                .pageNum(1)
-                .pageSize(2)
+                .page(0)
+                .size(2)
                 .needTotal(false)
                 .addSortAsc("id");
         PageResult<User> slicePage = joya.from(User.class)
@@ -498,8 +498,8 @@ class QueryDslIntegrationTest {
         assertEquals(-1L, slicePage.total());
         assertEquals(-1, slicePage.getTotalPages());
         assertEquals(2, slicePage.items().size());
-        assertEquals(1, slicePage.pageNum());
-        assertEquals(2, slicePage.pageSize());
+        assertEquals(0, slicePage.page());
+        assertEquals(2, slicePage.size());
         assertFalse(slicePage.hasPrev());
         assertTrue(slicePage.hasNext());
 
@@ -547,7 +547,7 @@ class QueryDslIntegrationTest {
         PageResult<User> page = joya.sql("SELECT * FROM t_user ORDER BY id")
                 .page(User.class, PageRequest.of(Integer.MAX_VALUE, 2));
         assertEquals(3L, page.getTotal());
-        assertTrue(page.getData().isEmpty());
+        assertTrue(page.items().isEmpty());
 
         for (DbType dbType : List.of(DbType.h2, DbType.mysql, DbType.sqlserver, DbType.oracle, DbType.informix)) {
             JoyaClient client = JoyaClient.builder(dataSource).dialect(dbType).build();

@@ -233,7 +233,7 @@ PageResult<String> summaryPage = joya.from(Order.class)
     .where(w -> w.gteIfPresent(Order::getAmount, minAmount))
     .orderByDesc(Order::getId)
     .select(Order::getId, Order::getAmount, User::getName)
-    .page(OrderUserVO::new, PageRequest.ofOneBased(1, 10))
+    .page(OrderUserVO::new, PageRequest.of(0, 10))
     .map(vo -> vo.userName() + ":" + vo.amount());
 
 // 5. 分组聚合统计（Exprs.max / min / sum / avg / count / countDistinct 可同时用于 select / having / orderBy）
@@ -330,9 +330,9 @@ joya.of(User.class).update()
     .execute();
 ```
 
-### 5. 免扫描 `JoyaMapper` 接口 / `JoyaRepository` 基类
+### 5. `JoyaMapper` 接口（免扫描即用 & Spring `@JoyaMapperScan` 注入） / `JoyaRepository` 基类
 
-`JoyaMapper<T>` 内置了完整的单表快捷方法（`insert` / `patchById` / `save` / `saveAll` / `findById` / `findByField` / `findByCondition` / `findAll(SortCondition.asc(User::getId))` / `findPageByCondition` / `queryPage` / `existsByCondition` / `countByCondition` / `deleteByCondition` 等），自定义查询直接用 `default` 方法组合 `query()` / `ops()` / `sql(...)`：
+`JoyaMapper<T>` 内置了完整的单表快捷方法（`insert` / `update` / `patch` / `save` / `saveAll` / `findById` / `findByField` / `findByCondition` / `findAll(SortCondition.asc(User::getId))` / `findPageByCondition` / `queryPage` / `existsByCondition` / `countByCondition` / `deleteByCondition` 等），自定义查询直接用 `default` 方法组合 `query()` / `ops()` / `sql(...)`：
 
 ```java
 public interface UserAccountMapper extends JoyaMapper<UserAccount> {
@@ -348,11 +348,17 @@ public interface UserAccountMapper extends JoyaMapper<UserAccount> {
     }
 }
 
-// 无需包扫描，在任意 JoyaClient 或事务句柄 Tx 上即取即用（内部自动缓存代理）
+// 方式 A：免包扫描，在任意 JoyaClient 或事务句柄 Tx 上即取即用（内部自动缓存代理）
 Optional<UserAccount> mainUser = joya.mapper(UserAccountMapper.class).findByUserName("Alice");
 Optional<UserAccount> archivedUser = joyaRegistry.get("archive")
     .mapper(UserAccountMapper.class)
     .findByUserName("Alice");
+
+// 方式 B：Spring Boot 按需开启 @JoyaMapperScan，直接 @Autowired UserAccountMapper（支持多数据源分包或接口 @Qualifier）
+@JoyaMapperScan("com.example.user.mapper")
+@JoyaMapperScan(basePackages = "com.example.order.mapper", client = "order")
+@SpringBootApplication
+public class Application {}
 ```
 
 也可以采用类继承模式扩展 `JoyaRepository<T>`：

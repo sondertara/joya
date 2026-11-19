@@ -172,7 +172,7 @@ class TxConnectionSourceTest {
 
     @Test
     void txDataOpsEntries_enforceOwnerThreadBeforeTouchingCaches_andBindMapperToOwner() throws Exception {
-        JoyaClient joya = new JoyaClient(primary);
+        JoyaClient joya = JoyaClient.create(primary);
         assertSame(joya, joya.mapper(SrcMapper.class).db(), "客户端 Mapper 必须绑定到 JoyaClient 自身");
 
         try (Tx tx = joya.tx().begin()) {

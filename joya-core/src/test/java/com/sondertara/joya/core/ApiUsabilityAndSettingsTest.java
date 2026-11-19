@@ -2,6 +2,7 @@ package com.sondertara.joya.core;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sondertara.joya.core.kernel.dialect.QuoteStyle;
 import com.sondertara.joya.core.kernel.executor.ExecutionOptions;
 import com.sondertara.joya.core.kernel.observe.SqlExecutionContext;
 import com.sondertara.joya.core.kernel.observe.SqlExecutionListener;
@@ -14,6 +15,7 @@ import com.sondertara.joya.core.naming.TableNameResolver;
 import com.sondertara.joya.core.query.PageResult;
 import com.sondertara.joya.core.query.dynamic.PageQueryParams;
 import com.sondertara.joya.core.query.pagination.PageQueryRequest;
+import com.sondertara.joya.core.query.pagination.PageRequest;
 import com.sondertara.joya.core.query.pagination.SortCondition;
 import com.sondertara.joya.core.tx.IllegalTxStateException;
 import com.sondertara.joya.core.tx.TxException;
@@ -39,6 +41,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -318,31 +321,38 @@ class ApiUsabilityAndSettingsTest {
     }
 
     @Test
-    void pageResultMap_preservesSliceState_andJacksonOmitsIgnoredAliases() throws Exception {
+    void pageResultMap_preservesSliceState_andJacksonSerializesUnifiedZeroBasedFields() throws Exception {
         PageResult<AccountItem> page = PageResult.of(
                 List.of(new AccountItem(1L, "Alice", 15, 80), new AccountItem(2L, "Bob", 20, 90)),
-                -1L, 2, 2, true);
+                -1L, 1, 2, true);
         PageResult<String> mapped = page.map(item -> item.getUserName() + ":" + (item.getAge() * 2));
 
         assertEquals(List.of("Alice:30", "Bob:40"), mapped.items());
-        assertEquals(2, mapped.pageNum());
-        assertEquals(2, mapped.pageSize());
+        assertEquals(1, mapped.page());
+        assertEquals(2, mapped.size());
         assertEquals(-1L, mapped.total());
         assertFalse(mapped.hasTotal());
+        assertTrue(mapped.hasPrev());
         assertTrue(mapped.hasNext(), "map() 后应保留免 COUNT 切片模式的 hasNextOverride");
 
-        PageResult<AccountItem> empty = PageResult.empty(1, 10);
+        PageResult<AccountItem> empty = PageResult.empty(0, 10);
         PageResult<String> mappedEmpty = empty.map(AccountItem::getUserName);
+        assertEquals(0, mappedEmpty.page());
         assertEquals(0L, mappedEmpty.total());
+        assertEquals(0, mappedEmpty.totalPages());
+        assertFalse(mappedEmpty.hasPrev());
         assertTrue(mappedEmpty.isEmpty());
         assertFalse(mappedEmpty.hasNext());
 
         ObjectMapper objectMapper = new ObjectMapper();
         JsonNode json = objectMapper.readTree(objectMapper.writeValueAsString(mapped));
         assertTrue(json.has("items"));
-        assertTrue(json.has("pageNum"));
-        assertFalse(json.has("data"), "@JsonIgnore 应避免 data 与 items 重复输出");
-        assertFalse(json.has("currentPage"), "@JsonIgnore 应避免 currentPage 与 pageNum 混淆");
+        assertEquals(1, json.get("page").asInt());
+        assertEquals(2, json.get("size").asInt());
+        assertFalse(json.has("pageNum"));
+        assertFalse(json.has("pageSize"));
+        assertFalse(json.has("data"));
+        assertFalse(json.has("currentPage"));
         assertFalse(json.has("empty"), "@JsonIgnore 应避免输出多余 empty 属性");
     }
 
@@ -376,7 +386,7 @@ class ApiUsabilityAndSettingsTest {
                 () -> mapper.updateByCondition(u -> u.set(AccountItem::getScore, 0)));
 
         // SortCondition.asc(IGetter) / desc(IGetter) + PageQueryParams
-        PageQueryRequest req = new PageQueryRequest(1, 10);
+        PageQueryRequest req = new PageQueryRequest(0, 10);
         req.setSorts(List.of(SortCondition.desc(AccountItem::getScore), SortCondition.asc(AccountItem::getId)));
         PageResult<AccountItem> sorted = joya.from(AccountItem.class)
                 .apply(PageQueryParams.of(req))
@@ -539,5 +549,78 @@ class ApiUsabilityAndSettingsTest {
         assertThrows(IllegalArgumentException.class,
                 () -> NamedSqlCompiler.compile("SELECT * FROM t WHERE id IN (:ids)", Map.of("ids", overLimit),
                         Operation.SELECT, DbType.h2));
+    }
+
+    @Test
+    void facadeBuilderShortcuts_valueIfPresent_setIfPresent_andScriptString_workSymmetrically() {
+        JoyaClient custom = JoyaClient.builder(rawDataSource)
+                .batchSize(256)
+                .queryTimeout(java.time.Duration.ofMillis(500))
+                .tableNameResolver((schema, table) -> schema == null ? table : schema + "." + table)
+                .quoteStyle(QuoteStyle.BACKTICK)
+                .build();
+        assertEquals(256, custom.settings().executionOptions().batchSize());
+        assertEquals('`', custom.settings().namingPolicy().openQuote());
+        assertEquals(1, custom.settings().executionOptions().queryTimeoutSeconds(),
+                "亚秒级正超时应向上取整为 1 秒而非截断成 0（不限制）");
+        assertEquals(0, custom.settings().withQueryTimeout(null).executionOptions().queryTimeoutSeconds());
+        assertEquals(0, custom.settings().withQueryTimeout(java.time.Duration.ZERO).executionOptions().queryTimeoutSeconds());
+        assertThrows(IllegalArgumentException.class,
+                () -> custom.settings().withQueryTimeout(java.time.Duration.ofSeconds(-1)));
+
+        custom.script("INSERT INTO t_api_account (id, user_name, age, score) VALUES (10, 'Scripted', 30, 88);");
+        assertEquals("Scripted", custom.of(AccountItem.class).findById(10L).orElseThrow().getUserName());
+
+        custom.of(AccountItem.class)
+                .insert()
+                .value(AccountItem::getId, 11L)
+                .valueIfPresent(AccountItem::getUserName, "PresentName")
+                .valueIfPresent(AccountItem::getAge, null)
+                .valueIfPresent("score", null)
+                .execute();
+        AccountItem inserted = custom.of(AccountItem.class).findById(11L).orElseThrow();
+        assertEquals("PresentName", inserted.getUserName());
+        assertNull(inserted.getAge());
+        assertEquals(100, inserted.getScore(), "valueIfPresent(null) 跳过该列以触发数据库 DEFAULT");
+
+        custom.of(AccountItem.class)
+                .update()
+                .setIfPresent("user_name", "UpdatedByString")
+                .setIfPresent("score", null)
+                .where(w -> w.eq(AccountItem::getId, 11L))
+                .execute();
+        AccountItem afterUpdate = custom.of(AccountItem.class).findById(11L).orElseThrow();
+        assertEquals("UpdatedByString", afterUpdate.getUserName());
+        assertEquals(100, afterUpdate.getScore(), "setIfPresent(String, null) 不得将已有列覆盖为 NULL");
+
+        // 0-based PageResult 翻页边界：共 2 条记录，每页 1 条 -> page=0 有下一页无上一页，page=1 无下一页有上一页
+        PageResult<AccountItem> p0 = custom.from(AccountItem.class)
+                .orderByAsc(AccountItem::getId)
+                .page(PageRequest.of(0, 1));
+        assertEquals(0, p0.page());
+        assertEquals(2, p0.totalPages());
+        assertFalse(p0.hasPrev());
+        assertTrue(p0.hasNext());
+
+        PageResult<AccountItem> p1 = custom.from(AccountItem.class)
+                .orderByAsc(AccountItem::getId)
+                .page(PageRequest.of(1, 1));
+        assertEquals(1, p1.page());
+        assertEquals(2, p1.totalPages());
+        assertTrue(p1.hasPrev());
+        assertFalse(p1.hasNext());
+
+        // valueIfPresent / setIfPresent 即便传入 null 值也必须立即校验列合法性，杜绝静默吞掉拼写错误
+        assertThrows(Exception.class,
+                () -> custom.of(AccountItem.class).insert().valueIfPresent("typo_unknown_col", null));
+        assertThrows(Exception.class,
+                () -> custom.of(AccountItem.class).update().setIfPresent("typo_unknown_col", null));
+
+        // 超大总行数（totalPages > Integer.MAX_VALUE）时 hasNext() 不受 int 截断影响
+        PageResult<String> hugeTotalPage = PageResult.of(List.of("row"), 50_000_000_000L, Integer.MAX_VALUE - 1, 10);
+        assertEquals(Integer.MAX_VALUE, hugeTotalPage.totalPages());
+        assertTrue(hugeTotalPage.hasNext(), "500 亿总行在 page=MAX_INT-1, size=10 时仍有后续页");
+
+        assertTrue(new PageQueryRequest(2, 50).toString().contains("page=2, size=50"));
     }
 }

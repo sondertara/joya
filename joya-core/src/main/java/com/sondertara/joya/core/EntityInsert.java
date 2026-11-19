@@ -38,25 +38,37 @@ public final class EntityInsert<T> {
 
     /** 按 Lambda 属性引用设置列值。 */
     public <V> EntityInsert<T> value(IGetter<T, V> column, @Nullable V value) {
-        String colName = meta.resolveColumn(column);
-        if (meta.nonInsertableColumns().contains(colName)) {
-            throw new IllegalArgumentException(
-                    "Column '" + colName + "' is marked as insertable=false on entity " + meta.entityType().getName());
-        }
+        String colName = validateInsertableColumn(meta.resolveColumn(column));
         values.put(colName, value);
         explicitValues.put(colName, value);
         return this;
     }
 
+    /** 当值非 {@code null} 时按 Lambda 属性引用设置列值（列名与可插入性始终立即校验）。 */
+    public <V> EntityInsert<T> valueIfPresent(IGetter<T, V> column, @Nullable V value) {
+        String colName = validateInsertableColumn(meta.resolveColumn(column));
+        if (value != null) {
+            values.put(colName, value);
+            explicitValues.put(colName, value);
+        }
+        return this;
+    }
+
     /** 按列名或字段名设置列值。 */
     public EntityInsert<T> value(String columnOrField, @Nullable Object value) {
-        String colName = meta.resolveColumnName(columnOrField);
-        if (meta.nonInsertableColumns().contains(colName)) {
-            throw new IllegalArgumentException(
-                    "Column '" + colName + "' is marked as insertable=false on entity " + meta.entityType().getName());
-        }
+        String colName = validateInsertableColumn(meta.resolveColumnName(columnOrField));
         values.put(colName, value);
         explicitValues.put(colName, value);
+        return this;
+    }
+
+    /** 当值非 {@code null} 时按列名或字段名设置列值（列名与可插入性始终立即校验）。 */
+    public EntityInsert<T> valueIfPresent(String columnOrField, @Nullable Object value) {
+        String colName = validateInsertableColumn(meta.resolveColumnName(columnOrField));
+        if (value != null) {
+            values.put(colName, value);
+            explicitValues.put(colName, value);
+        }
         return this;
     }
 
@@ -118,5 +130,13 @@ public final class EntityInsert<T> {
         String pk = meta.primaryKey();
         Object existingPkVal = pk == null ? null : values.get(pk);
         return InsertPlan.executeSingleStatement(kernel, meta, stmt, null, existingPkVal);
+    }
+
+    private String validateInsertableColumn(String colName) {
+        if (meta.nonInsertableColumns().contains(colName)) {
+            throw new IllegalArgumentException(
+                    "Column '" + colName + "' is marked as insertable=false on entity " + meta.entityType().getName());
+        }
+        return colName;
     }
 }

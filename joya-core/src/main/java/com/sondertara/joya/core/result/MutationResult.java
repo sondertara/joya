@@ -139,7 +139,7 @@ public record MutationResult(
      * 获取首个生成键（单行插入常用，支持数字类型自动转换）。
      */
     @Nullable
-    public <K> K getGeneratedKey(@NonNull Class<K> type) {
+    public <K> K generatedKey(@NonNull Class<K> type) {
         if (generatedKeys == null || generatedKeys.isEmpty() || generatedKeys.get(0) == null) {
             return null;
         }
@@ -151,10 +151,10 @@ public record MutationResult(
     }
 
     /**
-     * 获取所有生成键（批量插入 RETURNING 多行）。
+     * 获取所有生成键（批量插入 RETURNING 多行，支持数字类型自动转换）。
      */
     @NonNull
-    public <K> List<K> getGeneratedKeys(@NonNull Class<K> type) {
+    public <K> List<K> generatedKeys(@NonNull Class<K> type) {
         if (generatedKeys == null || generatedKeys.isEmpty()) {
             return Collections.emptyList();
         }

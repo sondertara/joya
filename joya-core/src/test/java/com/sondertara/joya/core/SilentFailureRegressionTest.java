@@ -326,7 +326,7 @@ class SilentFailureRegressionTest {
                 .select(Exprs.count().as("cnt"))
                 .page(PageRequest.of(0, 10));
         assertEquals(1L, page.getTotal(), "全局聚合带别名分页的 total 应为 1 行，而非底层表行数");
-        assertEquals(List.of(2L), page.getData());
+        assertEquals(List.of(2L), page.items());
     }
 
     @Test
@@ -771,20 +771,20 @@ class SilentFailureRegressionTest {
 
     @Test
     void bug3_bug4_pageResultNullTotalIsNegativeOneAndPageRequestGetOffsetNeverOverflowsInt() {
-        var withoutTotalResult = new com.sondertara.joya.core.query.PageResult<>(List.of("a"), null, 1, 10);
+        var withoutTotalResult = new com.sondertara.joya.core.query.PageResult<>(List.of("a"), null, 0, 10);
         assertEquals(-1L, withoutTotalResult.total());
         org.junit.jupiter.api.Assertions.assertFalse(withoutTotalResult.hasTotal());
 
-        var builderDefaultResult = com.sondertara.joya.core.query.PageResult.of(List.of("a")).page(1, 10).build();
+        var builderDefaultResult = com.sondertara.joya.core.query.PageResult.of(List.of("a")).page(0, 10).build();
         assertEquals(-1L, builderDefaultResult.total());
         org.junit.jupiter.api.Assertions.assertFalse(builderDefaultResult.hasTotal());
 
-        var emptyResult = com.sondertara.joya.core.query.PageResult.empty(1, 10);
+        var emptyResult = com.sondertara.joya.core.query.PageResult.empty(0, 10);
         assertEquals(0L, emptyResult.total());
         assertTrue(emptyResult.hasTotal());
 
         var hugePage = com.sondertara.joya.core.query.pagination.PageRequest.of(100_000_000, 100);
-        assertEquals(10_000_000_000L, hugePage.getOffset());
+        assertEquals(10_000_000_000L, hugePage.offset());
         assertEquals(10_000_000_000L, hugePage.getOffset());
     }
 

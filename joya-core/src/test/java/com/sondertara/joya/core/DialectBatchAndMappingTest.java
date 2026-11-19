@@ -417,8 +417,8 @@ class DialectBatchAndMappingTest {
                 PageRequest.of(0, 1));
         assertTrue(customBinderInvoked.get(), "Custom ParameterBinder must be preserved across queryPage/queryLimit");
         assertEquals(2L, page.getTotal());
-        assertEquals(1, page.getData().size());
-        assertEquals("Alice", page.getData().get(0).getUserName());
+        assertEquals(1, page.items().size());
+        assertEquals("Alice", page.items().get(0).getUserName());
 
         SqlStatement baseStmt = SqlStatement.select("SELECT id FROM t_chain_user WHERE dept_id = ? ORDER BY id ASC", 10L);
 
@@ -459,8 +459,8 @@ class DialectBatchAndMappingTest {
 
         PageResult<ChainUser> paged = mapper.findByDeptIdOrderByIdAsc(10L, PageRequest.of(0, 1));
         assertEquals(2L, paged.getTotal());
-        assertEquals(1, paged.getData().size());
-        assertEquals("Alice", paged.getData().get(0).getUserName());
+        assertEquals(1, paged.items().size());
+        assertEquals("Alice", paged.items().get(0).getUserName());
 
         List<ChainUser> slice = mapper.findByDeptIdOrderByIdDesc(10L, PageRequest.of(0, 1));
         assertEquals(1, slice.size());
@@ -589,7 +589,7 @@ class DialectBatchAndMappingTest {
         assertNotNull(i1.getId());
         assertNotNull(i2.getId());
         assertNotNull(i3.getId());
-        assertEquals(3, insRes.getGeneratedKeys(Long.class).size());
+        assertEquals(3, insRes.generatedKeys(Long.class).size());
 
         AutoKeyItem loaded1 = items.findById(i1.getId()).orElseThrow();
         assertEquals("PENDING", loaded1.getStatus());
@@ -1037,7 +1037,7 @@ class DialectBatchAndMappingTest {
                 .limit(2)
                 .page(PageRequest.of(0, 10));
         assertEquals(2L, limitedPage.getTotal());
-        assertEquals(2, limitedPage.getData().size());
+        assertEquals(2, limitedPage.items().size());
 
         PageResult<ChainUser> emptyPage = joya.from(ChainUser.class)
                 .where(w -> w.eq(ChainUser::getId, -999L))

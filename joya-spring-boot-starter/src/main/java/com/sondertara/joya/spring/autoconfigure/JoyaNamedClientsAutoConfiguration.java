@@ -4,9 +4,12 @@ import com.sondertara.joya.core.JoyaClient;
 import com.sondertara.joya.utils.Strings;
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.ListableBeanFactory;
+import org.springframework.beans.factory.annotation.AnnotatedBeanDefinition;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.config.BeanDefinition;
 import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
 import org.springframework.beans.factory.config.SingletonBeanRegistry;
+import org.springframework.beans.factory.support.AbstractBeanDefinition;
 import org.springframework.beans.factory.support.AutowireCandidateQualifier;
 import org.springframework.beans.factory.support.BeanDefinitionRegistry;
 import org.springframework.beans.factory.support.BeanDefinitionRegistryPostProcessor;
@@ -17,6 +20,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.bind.Binder;
 import org.springframework.context.annotation.Bean;
 import org.springframework.core.env.Environment;
+import org.springframework.core.type.MethodMetadata;
 
 import javax.sql.DataSource;
 import java.util.HashSet;
@@ -59,12 +63,16 @@ public class JoyaNamedClientsAutoConfiguration {
             JoyaProperties properties = Binder.get(environment)
                     .bind("joya", JoyaProperties.class)
                     .orElse(null);
-            if (properties == null || !properties.isEnabled() || properties.getDatasources().isEmpty()) {
+            if (properties != null && !properties.isEnabled()) {
                 return;
             }
-            String primaryName = Strings.isBlank(properties.getPrimary().getName())
+            String primaryName = (properties == null || Strings.isBlank(properties.getPrimary().getName()))
                     ? JoyaClientRegistry.PRIMARY
                     : properties.getPrimary().getName().trim();
+            qualifyAutoConfiguredPrimaryClient(registry, primaryName);
+            if (properties == null || properties.getDatasources().isEmpty()) {
+                return;
+            }
             Set<String> seen = new HashSet<>();
             seen.add(primaryName);
             String registryBeanName = (registryBeanNames != null && registryBeanNames.length > 0)
@@ -94,6 +102,32 @@ public class JoyaNamedClientsAutoConfiguration {
         @Override
         public void postProcessBeanFactory(ConfigurableListableBeanFactory beanFactory) throws BeansException {
             // BeanDefinition 已在 postProcessBeanDefinitionRegistry 阶段完成注册
+        }
+
+        /**
+         * 为自动装配的主库 {@code joyaClient} 补齐 {@code @Qualifier(primaryName)}（保留 {@code @Primary}），
+         * 使 {@code @Autowired JoyaClient} 与 {@code @Qualifier("primary") JoyaClient} 对称可用。
+         */
+        private static void qualifyAutoConfiguredPrimaryClient(BeanDefinitionRegistry registry, String primaryName) {
+            if (!registry.containsBeanDefinition("joyaClient")) {
+                return;
+            }
+            BeanDefinition bd = registry.getBeanDefinition("joyaClient");
+            if (!(bd instanceof AbstractBeanDefinition abd) || !abd.isPrimary()) {
+                return;
+            }
+            MethodMetadata factoryMethod = (abd instanceof AnnotatedBeanDefinition annotatedBd)
+                    ? annotatedBd.getFactoryMethodMetadata()
+                    : null;
+            boolean fromJoyaAutoConfig = factoryMethod != null
+                    ? JoyaAutoConfiguration.class.getName().equals(factoryMethod.getDeclaringClassName())
+                    : JoyaAutoConfiguration.class.getName().equals(abd.getFactoryBeanName());
+            if (!fromJoyaAutoConfig) {
+                return;
+            }
+            if (!JoyaExtensionPointResolver.extractQualifiers(abd).values().contains(primaryName)) {
+                abd.addQualifier(new AutowireCandidateQualifier(Qualifier.class, primaryName));
+            }
         }
 
         private static boolean hasExistingNamedClient(BeanDefinitionRegistry registry,

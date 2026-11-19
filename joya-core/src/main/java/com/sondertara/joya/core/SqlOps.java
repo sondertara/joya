@@ -267,17 +267,17 @@ public final class SqlOps {
     public <T> PageResult<T> page(RowMapper<T> rowMapper, PageRequest pageRequest) {
         Objects.requireNonNull(pageRequest, "pageRequest must not be null");
         rejectTrailingLimit("page");
-        if (!pageRequest.isNeedTotal()) {
-            int pageSize = pageRequest.getSize();
+        if (!pageRequest.needTotal()) {
+            int size = pageRequest.size();
             List<T> fetched = kernel.queryLimit(
-                    selectStmt(), rowMapper, pageRequest.getOffset(), (long) pageSize + 1L);
-            boolean hasNext = fetched.size() > pageSize;
-            List<T> rows = hasNext ? new ArrayList<>(fetched.subList(0, pageSize)) : fetched;
-            return PageResult.of(rows, -1L, pageRequest.getPageNum(), pageSize, hasNext);
+                    selectStmt(), rowMapper, pageRequest.offset(), (long) size + 1L);
+            boolean hasNext = fetched.size() > size;
+            List<T> rows = hasNext ? new ArrayList<>(fetched.subList(0, size)) : fetched;
+            return PageResult.of(rows, -1L, pageRequest.page(), size, hasNext);
         }
         PageSlice<T> slice = kernel.queryPage(
-                selectStmt(), rowMapper, pageRequest.getOffset(), pageRequest.getSize());
-        return PageResult.of(slice.rows(), slice.total(), pageRequest.getPageNum(), pageRequest.getSize());
+                selectStmt(), rowMapper, pageRequest.offset(), pageRequest.size());
+        return PageResult.of(slice.rows(), slice.total(), pageRequest.page(), pageRequest.size());
     }
 
     /** 按方言偏移量与行数截取结果列表。 */

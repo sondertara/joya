@@ -114,14 +114,14 @@ public interface JoyaMapper<T> {
     /**
      * 按主键全量更新单个实体（包含 {@code null} 列）。
      */
-    default int updateById(T entity) {
+    default int update(T entity) {
         return ops().update(entity).affectedRowsInt();
     }
 
     /**
      * 按主键局部更新单个实体（仅更新非 {@code null} 列）。
      */
-    default int patchById(T entity) {
+    default int patch(T entity) {
         return ops().patch(entity).affectedRowsInt();
     }
 
@@ -353,13 +353,6 @@ public interface JoyaMapper<T> {
      */
     default int deleteByCondition(UnaryOperator<WhereCriterion> func) {
         return ops().delete().where(func).execute().affectedRowsInt();
-    }
-
-    /**
-     * 删除全表所有记录（{@code DELETE FROM table}）并返回影响行数。
-     */
-    default int deleteAll() {
-        return ops().delete().allowAll().execute().affectedRowsInt();
     }
 
     /**

@@ -47,13 +47,17 @@ class P0RegressionTest {
     void slicePagination_lastPageMustNotReportHasNext() {
         PageResult<Map> first = joya.sql("SELECT id, name FROM t_p0 ORDER BY id")
                 .page(Map.class, PageRequest.of(0, 1).withoutTotal());
-        assertEquals(1, first.getData().size());
+        assertEquals(1, first.items().size());
+        assertEquals(0, first.page());
+        assertFalse(first.hasPrev());
         assertTrue(first.hasNext(), "first page has a next page");
         assertEquals(-1L, first.total(), "needTotal=false must not report a total");
 
         PageResult<Map> last = joya.sql("SELECT id, name FROM t_p0 ORDER BY id")
                 .page(Map.class, PageRequest.of(1, 1).withoutTotal());
-        assertEquals(1, last.getData().size());
+        assertEquals(1, last.items().size());
+        assertEquals(1, last.page());
+        assertTrue(last.hasPrev());
         assertFalse(last.hasNext(), "last page must not report a next page");
     }
 
@@ -61,8 +65,8 @@ class P0RegressionTest {
     void slicePagination_exactlyOneRowOnFirstPageMustNotReportHasNext() {
         PageResult<Map> page = joya.sql("SELECT id, name FROM t_p0 WHERE id = 1")
                 .page(Map.class, PageRequest.of(0, 1).withoutTotal());
-        assertEquals(1, page.getData().size());
-        assertFalse(page.hasNext(), "one row with pageSize=1 is the last page");
+        assertEquals(1, page.items().size());
+        assertFalse(page.hasNext(), "one row with size=1 is the last page");
     }
 
     @Test
@@ -70,7 +74,7 @@ class P0RegressionTest {
         assertThrows(IllegalArgumentException.class,
                 () -> PageRequest.of(0, PageRequest.MAX_PAGE_SIZE + 1));
         assertEquals(PageRequest.MAX_PAGE_SIZE,
-                new PageQueryRequest(1, PageRequest.MAX_PAGE_SIZE + 1).normalizedPageSize());
+                new PageQueryRequest(0, PageRequest.MAX_PAGE_SIZE + 1).normalizedSize());
     }
 
     @Test

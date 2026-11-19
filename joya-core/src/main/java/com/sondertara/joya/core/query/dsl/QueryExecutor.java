@@ -99,43 +99,43 @@ final class QueryExecutor<T> {
                                           Projection<V> projection, RenderContext ctx) {
         Objects.requireNonNull(page, "page must not be null");
         SqlStatement dataStmt = renderer.renderStatement(spec, projection.nodes(), true, ctx);
-        if (!page.isNeedTotal()) {
+        if (!page.needTotal()) {
             long baseOffset = spec.offset() == null ? 0L : spec.offset();
-            long pageRelOffset = page.getOffset();
+            long pageRelOffset = page.offset();
             long effectiveOffset = Math.addExact(baseOffset, pageRelOffset);
-            long requested = (long) page.getSize() + 1L;
+            long requested = (long) page.size() + 1L;
             long effectiveLimit = spec.limit() == null
                     ? requested
                     : Math.min(requested, Math.max(0L, spec.limit() - pageRelOffset));
             List<V> fetched = effectiveLimit <= 0L
                     ? List.of()
                     : requireKernel().queryLimit(dataStmt, mapper(projection), effectiveOffset, effectiveLimit);
-            boolean hasNext = fetched.size() > page.getSize();
+            boolean hasNext = fetched.size() > page.size();
             List<V> rows = hasNext
-                    ? new ArrayList<>(fetched.subList(0, page.getSize()))
+                    ? new ArrayList<>(fetched.subList(0, page.size()))
                     : fetched;
-            return PageResult.of(rows, -1L, page.getPageNum(), page.getSize(), hasNext);
+            return PageResult.of(rows, -1L, page.page(), page.size(), hasNext);
         }
         if (spec.limit() != null || spec.offset() != null) {
             long total = count(spec, projection.nodes(), projection.aggregate(), ctx);
-            long pageRelOffset = page.getOffset();
+            long pageRelOffset = page.offset();
             if (total <= 0L || pageRelOffset >= total) {
-                return PageResult.of(List.of(), total, page.getPageNum(), page.getSize());
+                return PageResult.of(List.of(), total, page.page(), page.size());
             }
             long baseOffset = spec.offset() == null ? 0L : spec.offset();
             long effectiveOffset = Math.addExact(baseOffset, pageRelOffset);
             long effectiveLimit = spec.limit() == null
-                    ? page.getSize()
-                    : Math.min((long) page.getSize(), Math.max(0L, spec.limit() - pageRelOffset));
+                    ? page.size()
+                    : Math.min((long) page.size(), Math.max(0L, spec.limit() - pageRelOffset));
             List<V> rows = effectiveLimit <= 0L
                     ? List.of()
                     : requireKernel().queryLimit(dataStmt, mapper(projection), effectiveOffset, effectiveLimit);
-            return PageResult.of(rows, total, page.getPageNum(), page.getSize());
+            return PageResult.of(rows, total, page.page(), page.size());
         }
         SqlStatement countStmt = renderer.renderCountStatement(spec, projection.nodes(), projection.aggregate(), ctx);
         PageSlice<V> slice = requireKernel().queryPage(
-                dataStmt, countStmt, mapper(projection), page.getOffset(), page.getSize());
-        return PageResult.of(slice.rows(), slice.total(), page.getPageNum(), page.getSize());
+                dataStmt, countStmt, mapper(projection), page.offset(), page.size());
+        return PageResult.of(slice.rows(), slice.total(), page.page(), page.size());
     }
 
     long count(QuerySpec<T> spec, List<SqlNode> projectionNodes, boolean hasAggregate, RenderContext ctx) {

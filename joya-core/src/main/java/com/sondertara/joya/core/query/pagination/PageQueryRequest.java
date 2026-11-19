@@ -8,11 +8,11 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * 通用动态分页查询请求协议：
+ * 通用动态分页查询请求协议（0-based 页索引）：
  * <pre>{@code
  * {
- *   "pageNum": 1,
- *   "pageSize": 20,
+ *   "page": 0,
+ *   "size": 20,
  *   "needTotal": true,
  *   "sorts": [ { "field": "createTime", "direction": "DESC" } ],
  *   "filters": [ { "field": "status", "operator": "EQ", "value": 1 } ]
@@ -25,11 +25,11 @@ import java.util.Objects;
 public class PageQueryRequest implements Serializable, Cloneable {
     private static final long serialVersionUID = 1L;
 
-    /** 页码，1-based，默认 1 */
-    private int pageNum = 1;
+    /** 页索引，0-based，默认 0 */
+    private int page = 0;
 
     /** 每页条数，默认 20 */
-    private int pageSize = 20;
+    private int size = 20;
 
     /** 是否统计总数，默认 true */
     private boolean needTotal = true;
@@ -49,42 +49,42 @@ public class PageQueryRequest implements Serializable, Cloneable {
     public PageQueryRequest() {
     }
 
-    public PageQueryRequest(int pageNum, int pageSize) {
-        this.pageNum = pageNum;
-        this.pageSize = pageSize;
+    public PageQueryRequest(int page, int size) {
+        this.page = page;
+        this.size = size;
     }
 
-    /** 页码归一化：小于 1 按 1 处理。 */
-    public int normalizedPageNum() {
-        return Math.max(pageNum, 1);
+    /** 页索引归一化：小于 0 按 0 处理。 */
+    public int normalizedPage() {
+        return Math.max(page, 0);
     }
 
-    /** 页大小归一化：小于 1 按 1 处理，大于 {@link PageRequest#MAX_PAGE_SIZE} 截断。 */
-    public int normalizedPageSize() {
-        return Math.min(Math.max(pageSize, 1), PageRequest.MAX_PAGE_SIZE);
+    /** 每页条数归一化：小于 1 按 1 处理，大于 {@link PageRequest#MAX_PAGE_SIZE} 截断。 */
+    public int normalizedSize() {
+        return Math.min(Math.max(size, 1), PageRequest.MAX_PAGE_SIZE);
     }
 
     /** 当前页之前需要跳过的记录数（64 位防溢出）。 */
     public long offset() {
-        return (long) (normalizedPageNum() - 1) * (long) normalizedPageSize();
+        return (long) normalizedPage() * (long) normalizedSize();
     }
 
     /**
      * 提取分页窗口坐标 {@link PageRequest}。
      */
     public PageRequest toPageRequest() {
-        return PageRequest.ofOneBased(normalizedPageNum(), normalizedPageSize(), needTotal);
+        return PageRequest.of(normalizedPage(), normalizedSize(), needTotal);
     }
 
     // ===== 流式构建与便捷操作 =====
 
-    public PageQueryRequest pageNum(int pageNum) {
-        this.pageNum = pageNum;
+    public PageQueryRequest page(int page) {
+        this.page = page;
         return this;
     }
 
-    public PageQueryRequest pageSize(int pageSize) {
-        this.pageSize = pageSize;
+    public PageQueryRequest size(int size) {
+        this.size = size;
         return this;
     }
 
@@ -176,20 +176,20 @@ public class PageQueryRequest implements Serializable, Cloneable {
 
     // ===== 标准 Getters / Setters =====
 
-    public int getPageNum() {
-        return pageNum;
+    public int getPage() {
+        return page;
     }
 
-    public void setPageNum(int pageNum) {
-        this.pageNum = pageNum;
+    public void setPage(int page) {
+        this.page = page;
     }
 
-    public int getPageSize() {
-        return pageSize;
+    public int getSize() {
+        return size;
     }
 
-    public void setPageSize(int pageSize) {
-        this.pageSize = pageSize;
+    public void setSize(int size) {
+        this.size = size;
     }
 
     public boolean isNeedTotal() {
@@ -239,8 +239,8 @@ public class PageQueryRequest implements Serializable, Cloneable {
     @Override
     public PageQueryRequest clone() {
         PageQueryRequest copy = new PageQueryRequest();
-        copy.setPageNum(this.pageNum);
-        copy.setPageSize(this.pageSize);
+        copy.setPage(this.page);
+        copy.setSize(this.size);
         copy.setNeedTotal(this.needTotal);
         copy.setRootOperator(this.rootOperator);
         if (this.filters != null) {
@@ -286,8 +286,8 @@ public class PageQueryRequest implements Serializable, Cloneable {
         if (!(o instanceof PageQueryRequest that)) {
             return false;
         }
-        return pageNum == that.pageNum
-                && pageSize == that.pageSize
+        return page == that.page
+                && size == that.size
                 && needTotal == that.needTotal
                 && rootOperator == that.rootOperator
                 && Objects.equals(sorts, that.sorts)
@@ -297,7 +297,14 @@ public class PageQueryRequest implements Serializable, Cloneable {
 
     @Override
     public int hashCode() {
-        return Objects.hash(pageNum, pageSize, needTotal, rootOperator, sorts, filters, nested);
+        return Objects.hash(page, size, needTotal, rootOperator, sorts, filters, nested);
+    }
+
+    @Override
+    public String toString() {
+        return "PageQueryRequest{page=" + page + ", size=" + size
+                + ", needTotal=" + needTotal + ", rootOperator=" + rootOperator
+                + ", sorts=" + sorts + ", filters=" + filters + '}';
     }
 
     /**

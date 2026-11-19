@@ -4,7 +4,9 @@ import com.sondertara.joya.core.kernel.executor.ExecutionOptions;
 import com.sondertara.joya.core.kernel.dialect.QuoteStyle;
 import com.sondertara.joya.core.naming.NamingPolicy;
 import com.sondertara.joya.core.naming.TableNameResolver;
+import org.jspecify.annotations.Nullable;
 
+import java.time.Duration;
 import java.util.Objects;
 
 /**
@@ -42,6 +44,13 @@ public record JoyaSettings(
 
     public JoyaSettings withQueryTimeoutSeconds(int queryTimeoutSeconds) {
         return withExecutionOptions(executionOptions.withQueryTimeoutSeconds(queryTimeoutSeconds));
+    }
+
+    /**
+     * 设置默认查询超时（{@code null} 或 {@link Duration#ZERO} 表示不限制；正值按秒向上取整，至少 1 秒；负值抛异常）。
+     */
+    public JoyaSettings withQueryTimeout(@Nullable Duration queryTimeout) {
+        return withQueryTimeoutSeconds(toTimeoutSeconds(queryTimeout));
     }
 
     public JoyaSettings withBatchSize(int batchSize) {
@@ -99,6 +108,14 @@ public record JoyaSettings(
             return this;
         }
 
+        /**
+         * 设置默认查询超时（{@code null} 或 {@link Duration#ZERO} 表示不限制；正值按秒向上取整，至少 1 秒；负值抛异常）。
+         */
+        public Builder queryTimeout(@Nullable Duration queryTimeout) {
+            this.queryTimeoutSeconds = toTimeoutSeconds(queryTimeout);
+            return this;
+        }
+
         public Builder batchSize(int batchSize) {
             this.batchSize = batchSize;
             return this;
@@ -145,5 +162,19 @@ public record JoyaSettings(
                             closeQuote)
             );
         }
+    }
+
+    private static int toTimeoutSeconds(@Nullable Duration timeout) {
+        if (timeout == null || timeout.isZero()) {
+            return 0;
+        }
+        if (timeout.isNegative()) {
+            throw new IllegalArgumentException("queryTimeout must not be negative: " + timeout);
+        }
+        long seconds = timeout.getSeconds();
+        if (timeout.getNano() > 0 && seconds < Long.MAX_VALUE) {
+            seconds++;
+        }
+        return seconds > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) Math.max(1L, seconds);
     }
 }
