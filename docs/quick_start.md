@@ -8,7 +8,7 @@ Maven Project（Spring Boot 3）
 <dependency>
     <groupId>com.sondertara.joya</groupId>
     <artifactId>joya-spring-boot-starter</artifactId>
-    <version>1.0.1</version>
+    <version>1.1.0</version>
 </dependency>
 <!-- joya-spring-boot-starter 采用轻量旁路定位，不强制绑定特定连接池；
      若宿主工程尚未引入连接池（如 spring-boot-starter-data-jpa / Druid），请一并引入 spring-boot-starter-jdbc 与对应数据库驱动 -->
@@ -24,13 +24,13 @@ Maven Project（纯 Java）
 <dependency>
     <groupId>com.sondertara.joya</groupId>
     <artifactId>joya-core</artifactId>
-    <version>1.0.1</version>
+    <version>1.1.0</version>
 </dependency>
 ```
 
 ## Spring Boot 3 集成 :id=spring_boot
 
-引入 `joya-spring-boot-starter` 后，默认复用 Spring 容器原生的 `spring.datasource` 装配主 `@Primary JoyaClient` 与 `JoyaClientRegistry`，并为扩展数据源自动注册 `@Qualifier("<name>") JoyaClient`：
+引入 `joya-spring-boot-starter` 后，默认复用 Spring 容器原生的 `spring.datasource` 装配主 `@Primary JoyaClient`（同时附带 `@Qualifier("primary")` 或 `joya.primary.name`）与 `JoyaClientRegistry`，并为扩展数据源自动注册 `@Qualifier("<name>") JoyaClient`；如需直接 `@Autowired XxxMapper`，在启动类或配置类按需标注 `@JoyaMapperScan` 即可（默认零包扫描开销）：
 
 ```java
 @Service

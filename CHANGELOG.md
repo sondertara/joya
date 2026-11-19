@@ -4,6 +4,39 @@
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-19
+
+### Added（新增能力）
+- **按需 `@JoyaMapperScan` 扫描注入与主库 `@Qualifier` 对称性（`joya-spring-boot-starter`）**：
+  - 新增 `@JoyaMapperScan` 与 `@JoyaMapperScans`（支持 `@Repeatable` 分包配置多数据源）：默认仍保持免扫描零开销，显式标注后由基础设施级 `BeanDefinitionRegistryPostProcessor` 扫描具化了实体类型参数的独立 `JoyaMapper` 子接口（自动忽略未具化的泛型中间父接口，并对用户手工声明的同名 `@Bean` 自动退让）。
+  - 支持三级数据源路由优先级：**Mapper 接口 `@Qualifier("dsName")` > `@JoyaMapperScan(client = "dsName")` > 主库 `JoyaClient`**；通过 `FactoryBean.OBJECT_TYPE_ATTRIBUTE` 注册，类型匹配期零提前实例化且原生兼容 Spring Boot 3 AOT。
+  - `JoyaNamedClientsAutoConfiguration` 为默认主库 `joyaClient` 同步补齐 `@Qualifier(primaryName)`（默认 `"primary"` 或 `joya.primary.name`，保留 `@Primary`），使 `@Autowired JoyaClient` 与 `@Qualifier("primary") JoyaClient` 完全对称。
+- **批量语句交错槽位绑定模型（`BatchSlot`）**：
+  - `BatchSqlStatement` 引入 `BatchSlot`（`Row` / `Const` / `RowRef`）与 `SqlRenderer.RenderedBatch`，允许 `SqlRewriter` 在批量 `INSERT` / `UPDATE` / `UPSERT` AST 的任意位置（前置、中间交错或尾部）插入常量参数或重写列槽位，彻底解除旧“行参数 + 尾部追加参数”固定布局假设，并在 `StatementPreparer` 强制执行占位符与槽位数守卫及 `preservesConjunctPredicate` 合取谓词守卫。
+- **顶层构建器与流式门面快捷能力补齐**：
+  - `JoyaClient.Builder` 新增 `queryTimeout(Duration)`、`batchSize(int)`、`tableNameResolver(TableNameResolver)`、`quoteStyle(QuoteStyle)` 快捷入口；`JoyaSettings` 与 `JoyaSettings.Builder` 新增 `withQueryTimeout(Duration)` / `queryTimeout(Duration)`（亚秒正值向上取整至 1 秒）。
+  - `EntityInsert` 新增 `valueIfPresent(IGetter, V)` 与 `valueIfPresent(String, Object)`；`EntityUpdate` 新增 `setIfPresent(String, Object)`（传入 `null` 值时同样立即执行列名与可写性校验）；`DataOps` 新增 `script(String)`。
+
+### Fixed（缺陷修复）
+- **`EntityOps.deleteAll` 主键值原样绑定与超长分片前置空值校验**：
+  - 修复 `EntityOps.deleteAll` 对非 `Serializable` 标量主键值调用 `.toString()` 导致与单条 `delete(T)` 参数类型不一致的问题，并在超过 1000 条触发分片删除前统一完成 `null` 元素及 `null` 主键前置校验，消除跨分片半程失败的部分提交风险。
+- **参数来源分类精确化与超大行数翻页判定修正**：
+  - `QueryRenderer` 将 `HAVING` 子句参数来源修正为 `ParameterSource.HAVING`，各数据库方言分页参数统一标记为 `ParameterSource.PAGINATION`。
+  - `PageResult.hasNext()` 在已知总数模式下改为 64 位无截断计算 `((long) page + 1L) * (long) size < total`，修复 `totalPages > Integer.MAX_VALUE` 时的截断误判；`PageQueryRequest` 补齐 `toString()`。
+- **内核观测作用域与内部重复逻辑收敛**：
+  - `ExecutionObserver` 收窄 `try` 作用域避免误捕获监听器自身 `afterExecute` 异常；收敛 `EntityMetadataContext.requirePrimaryKey` / `requireAssignedPrimaryKey`、`Ordered.sort`、`ColumnMetaProvider` 值类型解析及 `EntityDeleter` 冗余包装壳。
+
+### Changed（行为与契约变更）
+- **全链路分页模型彻底统一为 0-based `page` + `size`（Breaking）**：
+  - **Breaking**：`PageRequest`、`PageQueryRequest` 与 `PageResult` 全链路统一为 **0-based** 页索引（第 1 页 `page = 0`）与 `size`（每页条数）：
+    - `PageRequest`：保留唯一工厂 `PageRequest.of(int page, int size)` / `of(int page, int size, boolean needTotal)` 与 `withoutTotal()`，移除 `ofOneBased`、`ofZeroBased`、`getPageNum`、`getPageSize`；
+    - `PageQueryRequest`：字段与读写器由 `pageNum = 1` / `pageSize = 20` 改为 `page = 0` / `size = 20`（`normalizedPage()` / `normalizedSize()`）；
+    - `PageResult`：字段、静态工厂、`Builder` 及 JSON 序列化属性统一为 `items`、`total`、`page`（0-based）、`size`、`totalPages`、`hasPrev`（`page > 0`）、`hasNext`，移除 `pageNum`、`pageSize`、`getCurrentPage`、`getData`。
+- **顶层门面方法与构造入口单一契约收敛（Breaking）**：
+  - **Breaking**：`JoyaMapper` 移除隐式全表删库的无参 `deleteAll()`（清空表请显式调用 `truncate()` 或 `ops().delete().allowAll().execute()`），并将接收实体的 `updateById(T)` / `patchById(T)` 重命名为 `update(T)` / `patch(T)`（与 `EntityOps` 对齐，`*ById` 仅用于接收主键值）。
+  - **Breaking**：`MutationResult` 将 `getGeneratedKey(Class)` / `getGeneratedKeys(Class)` 重命名为无前缀 `generatedKey(Class)` / `generatedKeys(Class)`，与 record 组件风格一致。
+  - **Breaking**：`JoyaClient` 移除公开构造器 `new JoyaClient(DataSource)`，统一收敛于 `JoyaClient.create(DataSource)` 与 `JoyaClient.builder(DataSource)`。
+
 ## [1.0.1] - 2026-11-18
 
 ### Added（新增能力）
