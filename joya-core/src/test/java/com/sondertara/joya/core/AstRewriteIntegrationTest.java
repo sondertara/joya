@@ -537,7 +537,7 @@ class AstRewriteIntegrationTest {
         assertEquals("t1", verifier.sql("SELECT tenant_id FROM t_ast_plain WHERE id = ?", 51L)
                 .value(String.class).orElseThrow());
 
-        // 3. 批量 INSERT 改写器重排原有列顺序或前置插入 WHERE 参数时，显式抛 SqlRewriteException 拒绝静默错位
+        // 3. 批量 INSERT 改写器重排原有列顺序、或批量 UPDATE 丢弃原有行参数（WHERE id = ? / SET 列）时，显式抛 SqlRewriteException
         JoyaClient reorderInsertClient = JoyaClient.builder(dataSource)
                 .rewriter((node, ctx) -> {
                     if (node instanceof SqlNode.Insert insert) {
@@ -551,20 +551,139 @@ class AstRewriteIntegrationTest {
                 () -> reorderInsertClient.of(PlainUser.class)
                         .insertAll(List.of(new PlainUser(60L, "p60"), new PlainUser(61L, "p61"))));
 
+        JoyaClient dropWhereUpdateClient = JoyaClient.builder(dataSource)
+                .rewriter((node, ctx) -> {
+                    if (node instanceof SqlNode.Update update) {
+                        SqlNode tenantPred = SqlNodes.eq(
+                                SqlNodes.column((SqlNode.Table) null, "tenant_id"),
+                                SqlNodes.param("tenantId", "t1", ParameterSource.TENANT));
+                        // 错误改写：直接覆盖原 WHERE id = ?，丢弃主键行槽位
+                        return update.withWhere(tenantPred);
+                    }
+                    return node;
+                })
+                .build();
+        assertThrows(SqlRewriteException.class,
+                () -> dropWhereUpdateClient.of(PlainUser.class).updateAll(List.of(new PlainUser(10L, "x"))));
+
+        JoyaClient dropSetUpdateClient = JoyaClient.builder(dataSource)
+                .rewriter((node, ctx) -> {
+                    if (node instanceof SqlNode.Update update) {
+                        return new SqlNode.Update(update.table(), List.of(
+                                SqlNodes.assignment("tenant_id",
+                                        SqlNodes.param("tenantId", "t1", ParameterSource.TENANT))),
+                                update.where());
+                    }
+                    return node;
+                })
+                .build();
+        assertThrows(SqlRewriteException.class,
+                () -> dropSetUpdateClient.of(PlainUser.class).updateAll(List.of(new PlainUser(10L, "x"))));
+
+        // 4. 在 WHERE 左侧前置插入常量条件与单条 UPDATE 语义完全对称：槽位自动交错对齐，不误伤其他租户
         JoyaClient prependWhereUpdateClient = JoyaClient.builder(dataSource)
                 .rewriter((node, ctx) -> {
                     if (node instanceof SqlNode.Update update) {
                         SqlNode tenantPred = SqlNodes.eq(
                                 SqlNodes.column((SqlNode.Table) null, "tenant_id"),
                                 SqlNodes.param("tenantId", "t1", ParameterSource.TENANT));
-                        // 把新参数插在原 WHERE id = ? 之前
                         return update.withWhere(SqlNodes.and(tenantPred, update.where()));
                     }
                     return node;
                 })
                 .build();
-        assertThrows(SqlRewriteException.class,
-                () -> prependWhereUpdateClient.of(PlainUser.class).updateAll(List.of(new PlainUser(10L, "x"))));
+        prependWhereUpdateClient.of(PlainUser.class).updateAll(List.of(
+                new PlainUser(10L, "p10-prepended"),
+                new PlainUser(11L, "p11-blocked")));
+        assertEquals("p10-prepended", verifier.sql("SELECT name FROM t_ast_plain WHERE id = ?", 10L)
+                .value(String.class).orElseThrow());
+        assertEquals("p2", verifier.sql("SELECT name FROM t_ast_plain WHERE id = ?", 11L)
+                .value(String.class).orElseThrow());
+    }
+
+    @Test
+    void batchUpdateRewriter_supportsInterleavedSetAuditNullConstExpressionAndTenantWhere_withAccurateProbe() {
+        JoyaClient bootstrap = JoyaClient.builder(dataSource).build();
+        bootstrap.sql("ALTER TABLE t_ast_plain ADD COLUMN updated_by VARCHAR(32)").update();
+        bootstrap.sql("ALTER TABLE t_ast_plain ADD COLUMN remark VARCHAR(32)").update();
+        bootstrap.sql("ALTER TABLE t_ast_plain ADD COLUMN rev INT DEFAULT 1").update();
+        bootstrap.sql("UPDATE t_ast_plain SET remark = 'init', rev = 1").update();
+
+        List<SqlStatement> observedProbes = new ArrayList<>();
+        SqlRewriter auditAndRevRewriter = (node, ctx) -> {
+            if (node instanceof SqlNode.Update update) {
+                List<SqlNode.Assignment> assignments = new ArrayList<>(update.assignments());
+                assignments.add(SqlNodes.assignment("updated_by",
+                        SqlNodes.param("updated_by", "auditor", ParameterSource.AUDIT)));
+                assignments.add(SqlNodes.assignment("remark",
+                        SqlNodes.param("remark", null, ParameterSource.AUDIT)));
+                assignments.add(SqlNodes.assignment("rev",
+                        SqlNodes.binary("+", SqlNodes.column((SqlNode.Table) null, "rev"), SqlNodes.raw("1"))));
+                return new SqlNode.Update(update.table(), assignments, update.where());
+            }
+            return node;
+        };
+        SqlRewriter prependTenantRewriter = (node, ctx) -> {
+            if (node instanceof SqlNode.Update update) {
+                SqlNode tenantPred = SqlNodes.eq(
+                        SqlNodes.column((SqlNode.Table) null, "tenant_id"),
+                        SqlNodes.param("tenantId", "t1", ParameterSource.TENANT));
+                return update.withWhere(SqlNodes.and(tenantPred, update.where()));
+            }
+            return node;
+        };
+
+        JoyaClient joya = JoyaClient.builder(dataSource)
+                .rewriter(auditAndRevRewriter)
+                .rewriter(prependTenantRewriter)
+                .executionListener(new SqlExecutionListener() {
+                    @Override
+                    public void beforeExecute(SqlExecutionContext ctx) {
+                        observedProbes.add(ctx.statement());
+                    }
+                })
+                .build();
+
+        // 同一套改写器同时驱动批量 updateAll 与单条 update
+        joya.of(PlainUser.class).updateAll(List.of(
+                new PlainUser(10L, "p10-audited"),
+                new PlainUser(11L, "p11-should-skip")));
+
+        assertEquals(1, observedProbes.size());
+        SqlStatement probe = observedProbes.get(0);
+        assertEquals("UPDATE t_ast_plain SET name = ?, updated_by = ?, remark = ?, rev = rev + 1 WHERE tenant_id = ? AND id = ?",
+                probe.sql());
+        assertEquals(5, probe.parameters().size());
+        assertEquals("p10-audited", probe.parameters().get(0).value());
+        assertEquals(ParameterSource.SET, probe.parameters().get(0).source());
+        assertEquals("auditor", probe.parameters().get(1).value());
+        assertEquals(ParameterSource.AUDIT, probe.parameters().get(1).source());
+        assertEquals(null, probe.parameters().get(2).value());
+        assertEquals(ParameterSource.AUDIT, probe.parameters().get(2).source());
+        assertEquals("t1", probe.parameters().get(3).value());
+        assertEquals(ParameterSource.TENANT, probe.parameters().get(3).source());
+        assertEquals(10L, probe.parameters().get(4).value());
+        assertEquals(ParameterSource.WHERE, probe.parameters().get(4).source());
+
+        assertEquals("p10-audited", bootstrap.sql("SELECT name FROM t_ast_plain WHERE id = ?", 10L)
+                .value(String.class).orElseThrow());
+        assertEquals("auditor", bootstrap.sql("SELECT updated_by FROM t_ast_plain WHERE id = ?", 10L)
+                .value(String.class).orElseThrow());
+        assertTrue(bootstrap.sql("SELECT remark FROM t_ast_plain WHERE id = ?", 10L)
+                .value(String.class).isEmpty(), "常量 null 槽位应将 remark 更新为 NULL");
+        assertEquals(2, bootstrap.sql("SELECT rev FROM t_ast_plain WHERE id = ?", 10L)
+                .value(Integer.class).orElseThrow());
+
+        // id=11 属于租户 t2，不应被修改
+        assertEquals("p2", bootstrap.sql("SELECT name FROM t_ast_plain WHERE id = ?", 11L)
+                .value(String.class).orElseThrow());
+        assertEquals(1, bootstrap.sql("SELECT rev FROM t_ast_plain WHERE id = ?", 11L)
+                .value(Integer.class).orElseThrow());
+
+        // 单条 update 走完全相同的改写器同样成功
+        joya.of(PlainUser.class).update(new PlainUser(10L, "p10-single"));
+        assertEquals(3, bootstrap.sql("SELECT rev FROM t_ast_plain WHERE id = ?", 10L)
+                .value(Integer.class).orElseThrow());
     }
 
     @Test
@@ -619,6 +738,34 @@ class AstRewriteIntegrationTest {
                 .build();
         assertThrows(SqlRewriteException.class,
                 () -> updateToDeleteClient.of(PlainUser.class).updateAll(List.of(new PlainUser(10L, "u10"))));
+
+        // 批量 UPDATE 篡改主键 WHERE 列名或用 OR 弱化主键谓词时必须被拒绝
+        JoyaClient hijackedPkColumnClient = JoyaClient.builder(dataSource)
+                .rewriter((node, ctx) -> {
+                    if (node instanceof SqlNode.Update update && update.where() instanceof SqlNode.Binary eq) {
+                        return update.withWhere(SqlNodes.eq(
+                                SqlNodes.column((SqlNode.Table) null, "tenant_id"),
+                                eq.right()));
+                    }
+                    return node;
+                })
+                .build();
+        assertThrows(SqlRewriteException.class,
+                () -> hijackedPkColumnClient.of(PlainUser.class).updateAll(List.of(new PlainUser(10L, "u10"))));
+
+        JoyaClient weakenedOrWhereClient = JoyaClient.builder(dataSource)
+                .rewriter((node, ctx) -> {
+                    if (node instanceof SqlNode.Update update) {
+                        SqlNode tenantPred = SqlNodes.eq(
+                                SqlNodes.column((SqlNode.Table) null, "tenant_id"),
+                                SqlNodes.param("tenantId", "t1", ParameterSource.TENANT));
+                        return update.withWhere(SqlNodes.or(tenantPred, update.where()));
+                    }
+                    return node;
+                })
+                .build();
+        assertThrows(SqlRewriteException.class,
+                () -> weakenedOrWhereClient.of(PlainUser.class).updateAll(List.of(new PlainUser(10L, "u10"))));
 
         // 2. 批量 INSERT 改写器追加已存在的重复列名时，必须被 requireDistinctColumns 拒绝
         JoyaClient dupColBatchClient = JoyaClient.builder(dataSource)

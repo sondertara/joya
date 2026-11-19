@@ -61,7 +61,16 @@ public final class UpsertStatementFactory {
         SqlNode.Upsert upsert = wrap(insertNode(insertBatch.ast()), meta, columns, pk, namingPolicy, style);
         StatementMetadata metadata = dbType != null ? insertBatch.metadata().withDbType(dbType) : insertBatch.metadata();
         SqlStatement rendered = SqlRenderer.render(upsert, metadata);
-        return insertBatch.withMetadata(metadata).withSql(rendered.sql()).withAst(upsert);
+        return new BatchSqlStatement(
+                rendered.sql(),
+                insertBatch.columns(),
+                insertBatch.rows(),
+                metadata,
+                insertBatch.batchSize(),
+                false,
+                upsert,
+                insertBatch.slots()
+        );
     }
 
     private static SqlNode.Insert insertNode(SqlNode ast) {

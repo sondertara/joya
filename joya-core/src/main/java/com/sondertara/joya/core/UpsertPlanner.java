@@ -1,7 +1,6 @@
 package com.sondertara.joya.core;
 
 import com.sondertara.joya.core.kernel.dialect.Dialect;
-import com.sondertara.joya.core.kernel.executor.ExecutionOptions;
 import com.sondertara.joya.core.kernel.ExecutionKernel;
 import com.sondertara.joya.core.listener.EntityListener;
 import com.sondertara.joya.core.kernel.statement.Operation;
@@ -89,23 +88,11 @@ final class UpsertPlanner<T> {
         if (pk == null) {
             return null;
         }
-        if (hasListener) {
-            boolean exists = finder.existsById((Serializable) pkVal);
-            EntityListener listener = (EntityListener) entity;
-            if (exists) {
-                listener.preUpdate();
-            } else {
-                listener.prePersist();
-            }
+        if (hasListener && entity instanceof EntityListener listener) {
+            fireUpsertListener(listener, finder.existsById((Serializable) pkVal));
         }
         Map<String, Object> values = EntitySnapshot.snapshot(meta, entity).values();
-        List<String> columns = new ArrayList<>();
-        for (String column : meta.insertableColumnsWithPrimaryKey()) {
-            if (ignoreNull && values.get(column) == null && !column.equals(pk)) {
-                continue;
-            }
-            columns.add(column);
-        }
+        List<String> columns = selectUpsertColumns(values, pk, ignoreNull);
         if (columns.isEmpty()) {
             return null;
         }
@@ -128,24 +115,16 @@ final class UpsertPlanner<T> {
             for (T row : rows) {
                 if (row instanceof EntityListener listener) {
                     boolean exists = existing.contains(normalizePrimaryKey(meta.readFieldValue(row, pk)));
-                    if (exists) {
-                        listener.preUpdate();
-                    } else {
-                        listener.prePersist();
-                    }
+                    fireUpsertListener(listener, exists);
                 }
             }
         }
         Map<List<String>, List<Object[]>> groups = new LinkedHashMap<>();
-        List<String> candidateColumns = meta.insertableColumnsWithPrimaryKey();
         for (T row : rows) {
             Map<String, Object> values = EntitySnapshot.snapshot(meta, row).values();
-            List<String> columns = new ArrayList<>(candidateColumns.size());
-            for (String column : candidateColumns) {
-                if (ignoreNull && values.get(column) == null && !column.equals(pk)) {
-                    continue;
-                }
-                columns.add(column);
+            List<String> columns = selectUpsertColumns(values, pk, ignoreNull);
+            if (columns.isEmpty()) {
+                return null;
             }
             Object[] args = new Object[columns.size()];
             for (int i = 0; i < columns.size(); i++) {
@@ -164,12 +143,34 @@ final class UpsertPlanner<T> {
         return total;
     }
 
+    private static void fireUpsertListener(EntityListener listener, boolean exists) {
+        if (exists) {
+            listener.preUpdate();
+        } else {
+            listener.prePersist();
+        }
+    }
+
+    private List<String> selectUpsertColumns(Map<String, Object> values, String pk, boolean ignoreNull) {
+        List<String> candidateColumns = meta.insertableColumnsWithPrimaryKey();
+        if (!ignoreNull) {
+            return candidateColumns;
+        }
+        List<String> columns = new ArrayList<>(candidateColumns.size());
+        for (String column : candidateColumns) {
+            if (values.get(column) != null || column.equals(pk)) {
+                columns.add(column);
+            }
+        }
+        return columns;
+    }
+
     MutationResult saveAll(Collection<T> entities, boolean ignoreNull) {
         if (entities == null || entities.isEmpty()) {
             return MutationResult.EMPTY;
         }
         List<T> rows = entities instanceof List<T> l ? l : new ArrayList<>(entities);
-        String pk = writer.requirePrimaryKey();
+        String pk = meta.requirePrimaryKey();
         List<Object> primaryKeys = new ArrayList<>(rows.size());
         Set<Object> seenPrimaryKeys = new HashSet<>();
         for (T row : rows) {
@@ -184,8 +185,7 @@ final class UpsertPlanner<T> {
             }
         }
 
-        int configuredBatchSize = kernel.executionOptions().batchSize();
-        int batchPartitionSize = configuredBatchSize > 0 ? configuredBatchSize : ExecutionOptions.DEFAULT_BATCH_SIZE;
+        int batchPartitionSize = kernel.executionOptions().batchSize();
 
         boolean hasListeners = rows.stream().anyMatch(EntityListener.class::isInstance);
         if (primaryKeys.stream().allMatch(Objects::nonNull)) {
@@ -294,7 +294,7 @@ final class UpsertPlanner<T> {
     }
 
     private boolean canUseNativeUpsert(UpsertStyle style) {
-        if (style == UpsertStyle.NONE) {
+        if (style == UpsertStyle.NONE || meta.insertableColumnsWithPrimaryKey().isEmpty()) {
             return false;
         }
         if (style == UpsertStyle.MERGE) {

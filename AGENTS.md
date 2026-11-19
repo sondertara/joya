@@ -35,10 +35,9 @@ core/
 ├── EntityOps.java                      实体域门面：命令式写（insert/update/patch/save/delete）+ 列级变更构建器（insert/update/delete）+ 按主键快捷读
 ├── EntityInsert.java                   实体流式插入构建器（value / values / ignoreNulls → execute）
 ├── EntityUpdate.java                   实体流式条件更新构建器（set / where / allowAll → execute）
-├── EntityDelete.java                   实体流式条件删除构建器（where / allowAll → execute）
+├── EntityDelete.java                   实体流式条件删除构建器与清空入口（where / allowAll → execute + truncate）
 ├── SqlOps.java                         参数化原生 SQL 流式门面（bind / bindMap / bindBean 具名参数绑定 + list / listMap / one / first / value / count / page / stream / update / insert / batch）
 ├── EntityFinder.java                   实体读取（findById / findByIds / findAll / existsById / count）
-├── EntityDeleter.java                  实体删除（deleteById / deleteByIds / delete / deleteAll / truncate）
 ├── EntityWriter.java                   实体写执行器（insert / insertAll / update / patch / updateAll / patchAll；EntityOps 与 UpsertPlanner 共用）
 ├── UpsertPlanner.java                  先查后写 / 原生 upsert 策略（save / saveAll；依赖 EntityWriter + EntityFinder，不回调门面）
 ├── Partitions.java                     集合分片与 IN 子句上限（写/删/查共用一份）
@@ -98,7 +97,7 @@ core/
 │   ├── interceptor/                    SqlRewriter / SqlRewriteContext / SqlRewriteException
 │   ├── observe/                        SqlExecutionListener / SqlExecutionContext / SqlExecutionResult / ExecutionObserver（监听器编排）
 │   ├── error/                          SqlExceptionTranslator
-│   ├── statement/                      SqlStatement / BatchSqlStatement / SqlRenderer（唯一 SQL 文本组装点）/ SqlFormatUtils（占位符词法扫描）/ SqlScriptSplitter（脚本词法切分）/ 参数契约 / DbType / UpsertStyle（语句词汇表，dialect 与 executor 单向依赖它）
+│   ├── statement/                      SqlStatement / BatchSqlStatement / BatchSlot / SqlRenderer（唯一 SQL 文本组装点）/ SqlFormatUtils（占位符词法扫描）/ SqlScriptSplitter（脚本词法切分）/ 参数契约 / DbType / UpsertStyle（语句词汇表，dialect 与 executor 单向依赖它）
 │   ├── dialect/                        Dialect / DialectStrategy / PaginationStyle / QuoteStyle
 │   └── support/                        Ordered（有序扩展点标记接口）/ ScriptRunner / LoggingOutputStream
 │

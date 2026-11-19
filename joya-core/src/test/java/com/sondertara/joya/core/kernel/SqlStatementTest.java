@@ -1,5 +1,14 @@
 package com.sondertara.joya.core.kernel;
 
+import com.sondertara.joya.core.kernel.dialect.Dialect;
+import com.sondertara.joya.core.kernel.dialect.DialectStrategy;
+import com.sondertara.joya.core.kernel.dialect.PaginationStyle;
+import com.sondertara.joya.core.kernel.observe.ExecutionObserver;
+import com.sondertara.joya.core.kernel.observe.SqlExecutionContext;
+import com.sondertara.joya.core.kernel.observe.SqlExecutionListener;
+import com.sondertara.joya.core.kernel.statement.BatchSlot;
+import com.sondertara.joya.core.kernel.statement.BatchSqlStatement;
+import com.sondertara.joya.core.kernel.statement.ColumnBinding;
 import com.sondertara.joya.core.kernel.statement.DbType;
 import com.sondertara.joya.core.kernel.statement.Operation;
 import com.sondertara.joya.core.kernel.statement.ParameterSource;
@@ -9,9 +18,11 @@ import com.sondertara.joya.core.kernel.statement.StatementMetadata;
 import com.sondertara.joya.core.kernel.statement.TableRef;
 import org.junit.jupiter.api.Test;
 
+import java.sql.Connection;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
@@ -100,5 +111,96 @@ class SqlStatementTest {
         assertEquals(DbType.postgresql, metadata.dbType());
         assertEquals(Set.of(TableRef.of("t_order", "o")), metadata.tables());
         assertEquals(String.class, metadata.entityType());
+    }
+
+    @Test
+    void batchWithSql_validatesPlaceholderCountAgainstSlots() {
+        BatchSqlStatement batch = new BatchSqlStatement(
+                "INSERT INTO t_user (id, name) VALUES (?1, ?2)",
+                List.of(ColumnBinding.of("id"), ColumnBinding.of("name")),
+                List.<Object[]>of(new Object[]{1L, "alice"}),
+                StatementMetadata.of(Operation.INSERT, DbType.h2),
+                100,
+                false,
+                null,
+                null);
+
+        BatchSqlStatement normalized = batch.withSql("INSERT INTO t_user (id, name) VALUES (?, ?)");
+        assertEquals("INSERT INTO t_user (id, name) VALUES (?, ?)", normalized.sql());
+
+        assertThrows(IllegalArgumentException.class,
+                () -> batch.withSql("INSERT INTO t_user (id) VALUES (?)"),
+                "withSql 改变有效占位符数量时必须立即拒绝");
+    }
+
+    @Test
+    void statementPreparer_rejectsResidualBatchRowRefInSingleRowStatement() {
+        StatementPreparer preparer = new StatementPreparer(
+                List.of(),
+                DialectStrategy.fixed(Dialect.H2),
+                new com.sondertara.joya.core.kernel.connection.ConnectionProvider() {
+                    @Override
+                    public Connection acquire() {
+                        throw new AssertionError("should not acquire connection");
+                    }
+
+                    @Override
+                    public void release(Connection connection) {
+                    }
+                });
+        SqlStatement leaked = SqlStatement.of(
+                "INSERT INTO t_user (id) VALUES (?)",
+                List.of(SqlParameter.of(1, "id", new BatchSlot.RowRef(0), ParameterSource.INSERT)),
+                StatementMetadata.of(Operation.INSERT, DbType.h2));
+
+        assertThrows(IllegalStateException.class, () -> preparer.prepare(leaked));
+
+        assertThrows(IllegalArgumentException.class,
+                () -> new BatchSlot.Const("id", new BatchSlot.RowRef(0), ParameterSource.INSERT,
+                        com.sondertara.joya.core.kernel.statement.ParameterBinder.DEFAULT),
+                "BatchSlot.Const 不得容纳 BatchSlot.RowRef");
+
+        BatchSqlStatement mismatchedBatch = new BatchSqlStatement(
+                "INSERT INTO t_user (id, name) VALUES (?, ?)",
+                List.of(ColumnBinding.of("id")),
+                List.<Object[]>of(new Object[]{1L}),
+                StatementMetadata.of(Operation.INSERT, DbType.h2),
+                100,
+                false,
+                null,
+                null);
+        assertThrows(IllegalArgumentException.class, () -> preparer.prepareBatch(mismatchedBatch),
+                "prepareBatch 必须统一拦截无改写路径的占位符与槽位数量失配");
+    }
+
+    @Test
+    void executionObserver_resultMapperFailure_doesNotTriggerOnError() {
+        AtomicBoolean onErrorCalled = new AtomicBoolean();
+        ExecutionObserver observer = new ExecutionObserver(List.of(new SqlExecutionListener() {
+            @Override
+            public void onError(SqlExecutionContext ctx, Throwable error, long elapsedNanos) {
+                onErrorCalled.set(true);
+            }
+        }));
+
+        assertThrows(IllegalStateException.class, () -> observer.observe(
+                SqlStatement.select("SELECT 1"),
+                () -> "ok",
+                ignored -> {
+                    throw new IllegalStateException("summary mapping boom");
+                }));
+        org.junit.jupiter.api.Assertions.assertFalse(onErrorCalled.get(),
+                "SQL 已执行成功，后置 resultMapper 抛异常不得误报 onError");
+    }
+
+    @Test
+    void paginationStyle_tagsAppendedParametersWithPaginationSource() {
+        SqlStatement base = SqlStatement.select("SELECT id FROM t_user WHERE status = ?", 1);
+        SqlStatement paged = PaginationStyle.LIMIT_OFFSET.paginate(base, 20L, 10L);
+
+        assertEquals(3, paged.parameters().size());
+        assertEquals(ParameterSource.RAW, paged.parameters().get(0).source());
+        assertEquals(ParameterSource.PAGINATION, paged.parameters().get(1).source());
+        assertEquals(ParameterSource.PAGINATION, paged.parameters().get(2).source());
     }
 }

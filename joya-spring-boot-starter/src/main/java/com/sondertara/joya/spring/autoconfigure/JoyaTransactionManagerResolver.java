@@ -84,8 +84,7 @@ final class JoyaTransactionManagerResolver {
                                                                     DataSource targetDataSource,
                                                                     String targetLabel) {
         List<PlatformTransactionManager> exact = managers.stream()
-                .filter(tm -> tm instanceof ResourceTransactionManager rtm
-                        && SpringTxEngine.matchesDataSource(rtm.getResourceFactory(), targetDataSource))
+                .filter(tm -> matchesResourceManager(tm, targetDataSource))
                 .toList();
         if (exact.size() > 1) {
             throw new IllegalStateException("Multiple Spring transaction managers match " + targetLabel + " ("
@@ -96,17 +95,55 @@ final class JoyaTransactionManagerResolver {
         }
 
         List<PlatformTransactionManager> jpaBound = managers.stream()
-                .filter(JpaTransactionManagerSupport::isJpa)
-                .filter(tm -> {
-                    DataSource jpaDataSource = JpaTransactionManagerSupport.dataSource(tm);
-                    return jpaDataSource != null
-                            && SpringTxEngine.matchesDataSource(jpaDataSource, targetDataSource);
-                })
+                .filter(tm -> matchesJpaManager(tm, targetDataSource))
                 .toList();
         if (jpaBound.size() > 1) {
             throw new IllegalStateException("Multiple JpaTransactionManagers are bound to " + targetLabel + " ("
                     + targetDataSource + "): " + jpaBound + ". Configure a single one or specify transaction-manager-bean.");
         }
         return jpaBound.size() == 1 ? jpaBound.get(0) : null;
+    }
+
+    /**
+     * 校验通过 {@code transaction-manager-bean} 显式指定的事务管理器类型及其与目标 {@link DataSource} 的绑定关系。
+     */
+    static PlatformTransactionManager verifyExplicit(String propertyPath,
+                                                     String beanName,
+                                                     PlatformTransactionManager tm,
+                                                     DataSource targetDataSource) {
+        if (JpaTransactionManagerSupport.isJta(tm)) {
+            throw new IllegalStateException("Configured '" + propertyPath + ".transaction-manager-bean' ('"
+                    + beanName + "') is a JTA transaction manager, which is not supported by Joya.");
+        }
+        if (tm instanceof ResourceTransactionManager) {
+            if (!matchesResourceManager(tm, targetDataSource)) {
+                throw new IllegalStateException("Configured '" + propertyPath + ".transaction-manager-bean' ('"
+                        + beanName + "') does not manage the target DataSource.");
+            }
+            return tm;
+        }
+        if (JpaTransactionManagerSupport.isJpa(tm)) {
+            if (!matchesJpaManager(tm, targetDataSource)) {
+                throw new IllegalStateException("Configured '" + propertyPath + ".transaction-manager-bean' ('"
+                        + beanName + "') is a JpaTransactionManager not bound to the target DataSource.");
+            }
+            return tm;
+        }
+        throw new IllegalStateException("Configured '" + propertyPath + ".transaction-manager-bean' ('"
+                + beanName + "') of type " + tm.getClass().getName()
+                + " cannot be verified against the target DataSource.");
+    }
+
+    private static boolean matchesResourceManager(PlatformTransactionManager tm, DataSource targetDataSource) {
+        return tm instanceof ResourceTransactionManager rtm
+                && SpringTxEngine.matchesDataSource(rtm.getResourceFactory(), targetDataSource);
+    }
+
+    private static boolean matchesJpaManager(PlatformTransactionManager tm, DataSource targetDataSource) {
+        if (!JpaTransactionManagerSupport.isJpa(tm)) {
+            return false;
+        }
+        DataSource jpaDataSource = JpaTransactionManagerSupport.dataSource(tm);
+        return jpaDataSource != null && SpringTxEngine.matchesDataSource(jpaDataSource, targetDataSource);
     }
 }

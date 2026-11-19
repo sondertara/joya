@@ -5,11 +5,6 @@ import com.sondertara.joya.core.naming.NamingPolicy;
 import com.sondertara.joya.core.kernel.statement.ParameterSource;
 import com.sondertara.joya.core.kernel.statement.SqlNode;
 import com.sondertara.joya.core.kernel.statement.SqlNodes;
-import com.sondertara.joya.core.kernel.statement.SqlParameter;
-import com.sondertara.joya.core.kernel.statement.SqlParameterList;
-import com.sondertara.joya.core.kernel.statement.SqlRenderer;
-import com.sondertara.joya.core.kernel.statement.SqlStatement;
-import com.sondertara.joya.core.kernel.statement.StatementMetadata;
 import com.sondertara.joya.core.kernel.statement.TableRef;
 import com.sondertara.joya.core.metadata.EntityMetadataContext;
 import com.sondertara.joya.core.model.ColumnAlias;
@@ -28,7 +23,6 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import java.util.StringJoiner;
 
 /**
  * 运行期统一 SQL 渲染上下文。
@@ -422,25 +416,6 @@ public final class RenderContext {
             }
         }
         return null;
-    }
-
-    /**
-     * 渲染 FROM 与 JOIN 子句（不含前导 {@code FROM } 关键字）。
-     */
-    public String renderFromClause() {
-        return renderFromClause(new SqlParameterList());
-    }
-
-    /**
-     * 渲染 FROM 与 JOIN 子句（不含前导 {@code FROM } 关键字），并将 {@code JOIN ... ON} 附加条件中的参数写入 {@code params}。
-     * <p>与 {@link #toFromNode()} 共用同一 AST 构造，避免两套 FROM 拼装逻辑漂移。
-     */
-    public String renderFromClause(SqlParameterList params) {
-        SqlStatement statement = SqlRenderer.render(toFromNode(), StatementMetadata.empty());
-        for (SqlParameter parameter : statement.parameters()) {
-            params.add(parameter);
-        }
-        return statement.sql();
     }
 
     private ColumnAlias rebindJoinColumn(ColumnMetaProvider columnProvider, TableBinding selfBinding) {

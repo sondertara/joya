@@ -829,4 +829,105 @@ class SilentFailureRegressionTest {
             return null;
         });
     }
+
+    @Entity
+    @Table(name = "t_non_serial_pk")
+    public static class NonSerializablePkEntity {
+        @Id
+        private CustomKey id;
+        private String label;
+
+        public CustomKey getId() {
+            return id;
+        }
+
+        public void setId(CustomKey id) {
+            this.id = id;
+        }
+
+        public String getLabel() {
+            return label;
+        }
+
+        public void setLabel(String label) {
+            this.label = label;
+        }
+    }
+
+    public record CustomKey(String raw) implements CharSequence {
+        @Override
+        public int length() {
+            return raw.length();
+        }
+
+        @Override
+        public char charAt(int index) {
+            return raw.charAt(index);
+        }
+
+        @Override
+        public CharSequence subSequence(int start, int end) {
+            return raw.subSequence(start, end);
+        }
+
+        @Override
+        public String toString() {
+            return "STRINGIFIED:" + raw;
+        }
+    }
+
+    @Test
+    void havingClauseUsesHavingParameterSource_andDeleteAllPreservesRawPrimaryKeyInstance() {
+        SqlStatement havingStmt = joya.from(User.class)
+                .where(w -> w.gt(User::getAge, 10))
+                .groupBy(User::getName)
+                .having(h -> h.gt(Exprs.count(), 1L))
+                .select(User::getName)
+                .toSqlStatement();
+        assertEquals(2, havingStmt.parameters().size());
+        assertEquals(com.sondertara.joya.core.kernel.statement.ParameterSource.WHERE,
+                havingStmt.parameters().get(0).source());
+        assertEquals(com.sondertara.joya.core.kernel.statement.ParameterSource.HAVING,
+                havingStmt.parameters().get(1).source());
+
+        JdbcDataSource ds = new JdbcDataSource();
+        ds.setURL("jdbc:h2:mem:delete_raw_pk;DB_CLOSE_DELAY=-1");
+        List<Object> capturedArgs = new ArrayList<>();
+        JoyaClient probeClient = JoyaClient.builder(ds)
+                .executionListener(new SqlExecutionListener() {
+                    @Override
+                    public void beforeExecute(SqlExecutionContext ctx) {
+                        capturedArgs.addAll(ctx.statement().args());
+                    }
+                })
+                .executorFactory((connections, translator) -> new com.sondertara.joya.core.kernel.executor.JdbcExecutor(connections, translator) {
+                    @Override
+                    public int update(SqlStatement statement) {
+                        return 1;
+                    }
+                })
+                .build();
+
+        NonSerializablePkEntity e1 = new NonSerializablePkEntity();
+        e1.setId(new CustomKey("101"));
+        NonSerializablePkEntity e2 = new NonSerializablePkEntity();
+        e2.setId(new CustomKey("102"));
+
+        probeClient.of(NonSerializablePkEntity.class).deleteAll(List.of(e1, e2));
+        assertEquals(List.of(new CustomKey("101"), new CustomKey("102")), capturedArgs,
+                "deleteAll 应与 delete(entity) 一致保留原始主键实例，不得静默降级为 toString()");
+
+        // 超过 1000 条的分片 deleteByIds / findByIds 若后段含 null 元素，必须在下发第 1 条 SQL 前 Fail-Fast
+        List<Long> largeIdsWithTrailingNull = new ArrayList<>(1005);
+        for (long i = 1; i <= 1004; i++) {
+            largeIdsWithTrailingNull.add(i);
+        }
+        largeIdsWithTrailingNull.add(null);
+        executedStatements.clear();
+        assertThrows(IllegalArgumentException.class,
+                () -> joya.of(User.class).deleteByIds(largeIdsWithTrailingNull));
+        assertThrows(IllegalArgumentException.class,
+                () -> joya.of(User.class).findByIds(largeIdsWithTrailingNull));
+        assertTrue(executedStatements.isEmpty(), "含 null 元素的超长集合不得半截下发前序分片 SQL");
+    }
 }

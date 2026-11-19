@@ -10,7 +10,7 @@
     <modelVersion>4.0.0</modelVersion>
     <groupId>com.sondertara.joya</groupId>
     <artifactId>joya-parent</artifactId>
-    <version>1.0.1</version>
+    <version>1.0.2-SNAPSHOT</version>
     <packaging>pom</packaging>
     <name>joya</name>
     <description>Lightweight ORM, type-safe fluent SQL DSL, and explicit value-based transaction engine for modern Java (JDK 17+).</description>

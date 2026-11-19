@@ -190,6 +190,28 @@ public final class EntityMetadataContext {
         return primaryKey;
     }
 
+    /** 获取主键列名；若当前实体未声明主键则抛出 {@link IllegalStateException}。 */
+    public String requirePrimaryKey() {
+        if (primaryKey == null || primaryKey.isBlank()) {
+            String owner = entityType != null ? entityType.getName() : tableName;
+            throw new IllegalStateException("Entity has no primary key: " + owner);
+        }
+        return primaryKey;
+    }
+
+    /**
+     * 校验非自增主键在插入前已赋值：避免渲染出 {@code INSERT ... (id, ...) VALUES (NULL, ...)}
+     * 落到 JDBC 层才报模糊的 {@code NULL not allowed}。
+     */
+    public void requireAssignedPrimaryKey(@Nullable Object pkValue) {
+        if (primaryKey == null || pkValue != null || generatedColumns.contains(primaryKey)) {
+            return;
+        }
+        String owner = entityType != null ? entityType.getName() : tableName;
+        throw new IllegalArgumentException("Primary key '" + primaryKey + "' of " + owner
+                + " is null and is not annotated with @GeneratedValue; assign it before insert");
+    }
+
     /** 主键的 Java 类型。 */
     public @Nullable Class<?> primaryKeyType() {
         return primaryKeyType;

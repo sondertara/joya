@@ -70,6 +70,11 @@ public final class EntityDelete<T> {
         return MutationResult.ofAffected(affected);
     }
 
+    /** 截断当前实体表（包内收口，避免门面直接拼装语句）。 */
+    static void truncate(ExecutionKernel kernel, EntityMetadataContext meta) {
+        kernel.update(DeleteStatementFactory.createTruncate(meta, kernel.namingPolicy()));
+    }
+
     private WhereCriterion buildWhere() {
         if (explicitCriteria.size() == 1 && whereCallbacks.size() == 1) {
             return explicitCriteria.get(0).copy();

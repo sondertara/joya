@@ -25,7 +25,6 @@ public final class EntityOps<T> {
     private final Class<T> entityType;
     private final EntityMetadataContext meta;
     private final EntityFinder<T> finder;
-    private final EntityDeleter<T> deleter;
     private final EntityWriter<T> writer;
     private final UpsertPlanner<T> upsert;
 
@@ -33,8 +32,7 @@ public final class EntityOps<T> {
         this.kernel = Objects.requireNonNull(kernel, "kernel must not be null");
         this.entityType = Objects.requireNonNull(entityType, "entityType must not be null");
         this.meta = LocalTableMetaCache.getMetadataContext(entityType);
-        this.finder = new EntityFinder<>(kernel, entityType, meta.primaryKey());
-        this.deleter = new EntityDeleter<>(kernel, entityType, meta, meta.primaryKey());
+        this.finder = new EntityFinder<>(kernel, entityType, meta);
         this.writer = new EntityWriter<>(kernel, meta);
         this.upsert = new UpsertPlanner<>(kernel, meta, writer, finder);
     }
@@ -121,23 +119,67 @@ public final class EntityOps<T> {
     }
 
     public MutationResult deleteById(Serializable id) {
-        return deleter.deleteById(id);
+        Objects.requireNonNull(id, "id must not be null");
+        String pk = meta.requirePrimaryKey();
+        return delete().where(w -> w.eq(pk, id)).execute();
     }
 
     public MutationResult deleteByIds(Collection<? extends Serializable> ids) {
-        return deleter.deleteByIds(ids);
+        String pk = meta.requirePrimaryKey();
+        if (ids == null || ids.isEmpty()) {
+            return MutationResult.EMPTY;
+        }
+        return deleteByRawIds(pk, ids);
     }
 
     public MutationResult delete(T entity) {
-        return deleter.delete(entity);
+        Objects.requireNonNull(entity, "entity must not be null");
+        String pk = meta.requirePrimaryKey();
+        Object pkValue = meta.readFieldValue(entity, pk);
+        if (pkValue == null) {
+            throw new IllegalArgumentException(
+                    "Entity primary key must not be null for delete: " + entityType.getName());
+        }
+        return delete().where(w -> w.eq(pk, pkValue)).execute();
     }
 
     public MutationResult deleteAll(Collection<? extends T> entities) {
-        return deleter.deleteAll(entities);
+        String pk = meta.requirePrimaryKey();
+        if (entities == null || entities.isEmpty()) {
+            return MutationResult.EMPTY;
+        }
+        List<Object> ids = new ArrayList<>(entities.size());
+        for (T entity : entities) {
+            Objects.requireNonNull(entity, "Entity element in deleteAll must not be null");
+            Object pkValue = meta.readFieldValue(entity, pk);
+            if (pkValue == null) {
+                throw new IllegalArgumentException(
+                        "Entity primary key must not be null for deleteAll: " + entityType.getName());
+            }
+            ids.add(pkValue);
+        }
+        return deleteByRawIds(pk, ids);
+    }
+
+    private MutationResult deleteByRawIds(String pk, Collection<?> ids) {
+        for (Object id : ids) {
+            if (id == null) {
+                throw new IllegalArgumentException("Entity id element in deleteByIds/deleteAll must not be null");
+            }
+        }
+        if (ids.size() <= Partitions.MAX_IN_CLAUSE_SIZE) {
+            return delete().where(w -> w.in(pk, ids)).execute();
+        }
+        long total = 0L;
+        List<Object> idList = new ArrayList<>(ids);
+        for (List<Object> chunk : Partitions.of(idList, Partitions.MAX_IN_CLAUSE_SIZE)) {
+            total += delete().where(w -> w.in(pk, chunk)).execute().affectedRows();
+        }
+        return MutationResult.ofAffected(total);
     }
 
     public void truncate() {
-        deleter.truncate();
+        EntityDelete.truncate(kernel, meta);
     }
 
     public EntityInsert<T> insert() {

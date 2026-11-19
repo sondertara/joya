@@ -238,6 +238,13 @@ final class JoyaExtensionPointResolver {
         return new QualifierMetadata(hasAny[0], values);
     }
 
+    static QualifierMetadata extractQualifiers(BeanDefinition bd) {
+        boolean[] hasAny = {false};
+        Set<String> values = new LinkedHashSet<>();
+        collectQualifiersFromBeanDefinition(bd, hasAny, values);
+        return new QualifierMetadata(hasAny[0], values);
+    }
+
     private static void collectQualifiersFromBeanDefinition(BeanDefinition bd, boolean[] hasAny, Set<String> values) {
         if (bd instanceof AbstractBeanDefinition abd) {
             for (AutowireCandidateQualifier q : abd.getQualifiers()) {

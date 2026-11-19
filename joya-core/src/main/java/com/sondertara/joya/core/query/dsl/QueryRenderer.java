@@ -47,7 +47,7 @@ final class QueryRenderer<T> {
         SqlNode.From fromNode = ctx.toFromNode();
         SqlNode whereNode = spec.whereCriterion().toNode(ctx, ParameterSource.WHERE);
         List<SqlNode> groupByNodes = groupByNodes(spec, ctx);
-        SqlNode havingNode = spec.havingCriterion().toNode(ctx, ParameterSource.WHERE);
+        SqlNode havingNode = spec.havingCriterion().toNode(ctx, ParameterSource.HAVING);
         List<SqlNode> orderByNodes = (!includeOrderBy || spec.orderSpecs().isEmpty())
                 ? List.of()
                 : orderByNodes(spec, ctx);

@@ -1,7 +1,6 @@
 package com.sondertara.joya.core;
 
 import com.sondertara.joya.core.listener.EntityListener;
-import com.sondertara.joya.core.kernel.executor.ExecutionOptions;
 import com.sondertara.joya.core.kernel.ExecutionKernel;
 import com.sondertara.joya.core.kernel.executor.BatchSlice;
 import com.sondertara.joya.core.kernel.statement.BatchSqlStatement;
@@ -205,7 +204,7 @@ final class UpdatePlan<T> {
                 pk,
                 rows,
                 kernel.namingPolicy(),
-                effectiveBatchSize(kernel));
+                kernel.executionOptions().batchSize());
     }
 
     private static MutationResult executeBatch(ExecutionKernel kernel, BatchSqlStatement batch) {
@@ -230,10 +229,5 @@ final class UpdatePlan<T> {
         }
         Map<String, Object> values = EntitySnapshot.snapshot(meta, row).values();
         return new UpdateRowPlan<>(row, values, pkVal);
-    }
-
-    private static int effectiveBatchSize(ExecutionKernel kernel) {
-        int configured = kernel.executionOptions().batchSize();
-        return configured > 0 ? configured : ExecutionOptions.DEFAULT_BATCH_SIZE;
     }
 }

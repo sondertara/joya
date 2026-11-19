@@ -6,6 +6,7 @@ import com.sondertara.joya.core.kernel.dialect.DialectStrategy;
 import com.sondertara.joya.core.kernel.interceptor.SqlRewriteContext;
 import com.sondertara.joya.core.kernel.interceptor.SqlRewriteException;
 import com.sondertara.joya.core.kernel.interceptor.SqlRewriter;
+import com.sondertara.joya.core.kernel.statement.BatchSlot;
 import com.sondertara.joya.core.kernel.statement.BatchSqlStatement;
 import com.sondertara.joya.core.kernel.statement.ColumnBinding;
 import com.sondertara.joya.core.kernel.statement.DbType;
@@ -17,10 +18,10 @@ import com.sondertara.joya.core.kernel.statement.SqlRenderer;
 import com.sondertara.joya.core.kernel.statement.SqlStatement;
 import com.sondertara.joya.core.kernel.statement.StatementMetadata;
 import com.sondertara.joya.core.kernel.statement.TableRef;
+import com.sondertara.joya.core.kernel.support.Ordered;
 
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
@@ -107,22 +108,12 @@ final class StatementPreparer {
             synchronized (this) {
                 local = orderedRewriters;
                 if (local == null) {
-                    local = sortRewriters(rewriters);
+                    local = Ordered.sort(rewriters);
                     orderedRewriters = local;
                 }
             }
         }
         return local;
-    }
-
-    private static List<SqlRewriter> sortRewriters(List<SqlRewriter> rewriters) {
-        if (rewriters == null || rewriters.isEmpty()) {
-            return List.of();
-        }
-        List<SqlRewriter> sorted = new ArrayList<>(rewriters);
-        sorted.sort(Comparator.comparingInt(SqlRewriter::order)
-                .thenComparing(r -> r.getClass().getName()));
-        return List.copyOf(sorted);
     }
 
     /**
@@ -329,8 +320,9 @@ final class StatementPreparer {
     }
 
     /**
-     * 批量语句的结构改写：INSERT/UPSERT 支持追加整批同值的额外列，UPDATE/DELETE 支持整批同值的
-     * 额外 WHERE 参数；逐行不同值的改写仍不在此层支持。
+     * 批量语句的结构改写：保留全部原始逐行绑定列（{@link BatchSlot.Row}），同时支持改写器在任意位置
+     * 追加整批同值常量参数（{@link BatchSlot.Const}，如 UPDATE SET 审计列、任意位置的 WHERE 租户条件）
+     * 及无参 SQL 表达式（如 {@code version = version + 1}）；删除、重绑或重排原始行参数仍显式拒绝。
      */
     private BatchSqlStatement applyBatchRewriters(BatchSqlStatement batch) {
         if (rewriters.isEmpty() || batch.ast() == null) {
@@ -346,8 +338,25 @@ final class StatementPreparer {
                 node = applySingleRewriter(node, rewriter, ctx);
             }
         }
+        if (node == originalNode) {
+            return batch;
+        }
         validateRewrittenShape(originalNode, node);
+        validateBatchRewrittenAst(originalNode, node);
         StatementMetadata metadata = resolveRewrittenMetadata(batch.metadata(), originalNode, node);
+        SqlStatement rendered = SqlRenderer.render(node, metadata);
+        List<BatchSlot> slots = compileBatchSlots(batch.columns(), rendered.parameters());
+        int actualPlaceholders = SqlFormatUtils.countPlaceholders(rendered.sql(), metadata.dbType());
+        if (actualPlaceholders != slots.size()) {
+            throw new SqlRewriteException(
+                    "Batch rewrite produced " + actualPlaceholders
+                            + " placeholders, expected " + slots.size() + ": " + rendered.sql());
+        }
+        return new BatchSqlStatement(rendered.sql(), batch.columns(), batch.rows(), metadata,
+                batch.batchSize(), batch.returnGeneratedKeys(), node, slots);
+    }
+
+    private static void validateBatchRewrittenAst(SqlNode originalNode, SqlNode node) {
         if (node instanceof SqlNode.Insert || node instanceof SqlNode.Upsert) {
             SqlNode.Insert originalInsert = originalNode instanceof SqlNode.Upsert origUpsert
                     ? origUpsert.insert()
@@ -381,74 +390,92 @@ final class StatementPreparer {
             if (!templateRow.subList(0, origTemplateRow.size()).equals(origTemplateRow)) {
                 throw new SqlRewriteException(
                         "Batch INSERT rewrite must preserve original column parameter bindings in prefix; "
-                                + "extra parameters may only be appended at the end");
+                                + "extra columns may only be appended at the end");
             }
-            List<ColumnBinding> extraColumns = new ArrayList<>();
-            List<Object> extraValues = new ArrayList<>();
-            for (int i = baseColumns.size(); i < insert.columns().size(); i++) {
-                if (!(templateRow.get(i) instanceof SqlNode.Param param)) {
-                    throw new SqlRewriteException(
-                            "Batch INSERT extra column '" + insert.columns().get(i)
-                                    + "' must be a constant SqlNode.Param");
-                }
-                extraColumns.add(ColumnBinding.of(insert.columns().get(i)));
-                extraValues.add(param.value());
-            }
-            SqlStatement rendered = SqlRenderer.render(node, metadata);
-            int expectedPlaceholders = batch.columns().size() + extraColumns.size();
-            int actualPlaceholders = SqlFormatUtils.countPlaceholders(rendered.sql(), metadata.dbType());
-            if (actualPlaceholders != expectedPlaceholders) {
-                throw new SqlRewriteException(
-                        "Batch INSERT rewrite produced " + actualPlaceholders
-                                + " placeholders, expected " + expectedPlaceholders);
-            }
-            return new BatchSqlStatement(rendered.sql(), batch.columns(), batch.rows(), metadata,
-                    batch.batchSize(), batch.returnGeneratedKeys(), node, extraColumns, extraValues);
+            return;
         }
         if (originalNode instanceof SqlNode.Update origUpdate && node instanceof SqlNode.Update update) {
-            if (!update.assignments().equals(origUpdate.assignments())) {
+            if (!update.assignments().containsAll(origUpdate.assignments())) {
                 throw new SqlRewriteException(
-                        "Batch UPDATE rewrite must not add, remove, or reorder SET assignments");
+                        "Batch UPDATE rewrite must preserve all base column SET assignments");
+            }
+            if (origUpdate.where() != null && !preservesConjunctPredicate(update.where(), origUpdate.where())) {
+                throw new SqlRewriteException(
+                        "Batch UPDATE rewrite must preserve the original primary-key WHERE predicate as a top-level AND conjunct");
+            }
+            return;
+        }
+        if (originalNode instanceof SqlNode.Delete origDelete && node instanceof SqlNode.Delete delete) {
+            if (origDelete.where() != null && !preservesConjunctPredicate(delete.where(), origDelete.where())) {
+                throw new SqlRewriteException(
+                        "Batch DELETE rewrite must preserve the original WHERE predicate as a top-level AND conjunct");
             }
         }
-        SqlStatement originalRendered = SqlRenderer.render(originalNode, batch.metadata());
-        List<SqlParameter> baseParams = originalRendered.parameters();
-        SqlStatement rendered = SqlRenderer.render(node, metadata);
-        int baseParamCount = batch.columns().size();
-        if (rendered.parameters().size() < baseParamCount) {
-            throw new SqlRewriteException(
-                    "Batch UPDATE/DELETE rewrite must not remove base parameters");
+    }
+
+    private static boolean preservesConjunctPredicate(
+            @org.jspecify.annotations.Nullable SqlNode rewrittenWhere,
+            SqlNode requiredWhere
+    ) {
+        if (rewrittenWhere == null) {
+            return false;
         }
-        if (!rendered.parameters().subList(0, baseParams.size()).equals(baseParams)) {
-            throw new SqlRewriteException(
-                    "Batch UPDATE/DELETE rewrite must preserve base parameter order and prefix; "
-                            + "extra parameters may only be appended after existing parameters");
+        if (rewrittenWhere.equals(requiredWhere)) {
+            return true;
         }
-        List<ColumnBinding> extraColumns = new ArrayList<>();
-        List<Object> extraValues = new ArrayList<>();
-        for (int i = baseParamCount; i < rendered.parameters().size(); i++) {
-            SqlParameter parameter = rendered.parameters().get(i);
-            extraColumns.add(ColumnBinding.of(parameter.name()));
-            extraValues.add(parameter.value());
+        if (rewrittenWhere instanceof SqlNode.Group group) {
+            return preservesConjunctPredicate(group.body(), requiredWhere);
         }
-        int expectedPlaceholders = baseParamCount + extraColumns.size();
-        int actualPlaceholders = SqlFormatUtils.countPlaceholders(rendered.sql(), metadata.dbType());
-        if (actualPlaceholders != expectedPlaceholders) {
-            throw new SqlRewriteException(
-                    "Batch UPDATE/DELETE rewrite produced " + actualPlaceholders
-                            + " placeholders, expected " + expectedPlaceholders);
+        if (rewrittenWhere instanceof SqlNode.Binary binary && "AND".equalsIgnoreCase(binary.op())) {
+            return preservesConjunctPredicate(binary.left(), requiredWhere)
+                    || preservesConjunctPredicate(binary.right(), requiredWhere);
         }
-        return new BatchSqlStatement(rendered.sql(), batch.columns(), batch.rows(), metadata,
-                batch.batchSize(), batch.returnGeneratedKeys(), node, extraColumns, extraValues);
+        return false;
+    }
+
+    private static List<BatchSlot> compileBatchSlots(List<ColumnBinding> columns, List<SqlParameter> parameters) {
+        int baseCount = columns.size();
+        boolean[] seenRow = new boolean[baseCount];
+        int seenCount = 0;
+        List<BatchSlot> slots = new ArrayList<>(parameters.size());
+        for (SqlParameter parameter : parameters) {
+            if (parameter.value() instanceof BatchSlot.RowRef ref) {
+                int idx = ref.rowIndex();
+                if (idx < 0 || idx >= baseCount) {
+                    throw new SqlRewriteException(
+                            "Batch rewrite referenced out-of-bounds row column index " + idx
+                                    + " (column count=" + baseCount + ")");
+                }
+                if (seenRow[idx]) {
+                    throw new SqlRewriteException(
+                            "Batch rewrite must not duplicate base row parameter '"
+                                    + columns.get(idx).name() + "'");
+                }
+                seenRow[idx] = true;
+                seenCount++;
+                slots.add(new BatchSlot.Row(idx, columns.get(idx), parameter.source()));
+            } else {
+                slots.add(new BatchSlot.Const(
+                        parameter.name(), parameter.value(), parameter.source(), parameter.binder()));
+            }
+        }
+        if (seenCount != baseCount) {
+            for (int i = 0; i < baseCount; i++) {
+                if (!seenRow[i]) {
+                    throw new SqlRewriteException(
+                            "Batch rewrite must preserve all base row parameters; missing '"
+                                    + columns.get(i).name() + "' at index " + i);
+                }
+            }
+        }
+        return slots;
     }
 
     /**
-     * 批量语句的唯一准备入口，与 {@link #prepare(SqlStatement)} 对称：注入方言类型 → AST 改写。
-     *
-     * <p>批量 rewriter 只允许在列尾/参数尾追加；重排、删除或替换既有列与参数会被拒绝，
-     * 避免逐行绑定静默错位。
+     * 批量语句的唯一准备入口，与 {@link #prepare(SqlStatement)} 对称：注入方言类型 → AST 改写 → 槽位编译 → 最终契约校验。
      */
     BatchSqlStatement prepareBatch(BatchSqlStatement batch) {
+        Objects.requireNonNull(batch, "batch must not be null");
         BatchSqlStatement withDbType = batch;
         if (batch.metadata().dbType() == null) {
             Dialect dialect = dialectStrategy.resolve(connections);
@@ -457,7 +484,19 @@ final class StatementPreparer {
             }
         }
         BatchSqlStatement normalized = normalizeBatchPlaceholders(withDbType);
-        return applyBatchRewriters(normalized);
+        BatchSqlStatement prepared = applyBatchRewriters(normalized);
+        validateBatchParameterContract(prepared);
+        return prepared;
+    }
+
+    private static void validateBatchParameterContract(BatchSqlStatement batch) {
+        int placeholders = SqlFormatUtils.countPlaceholders(batch.sql(), batch.metadata().dbType());
+        int slotCount = batch.slots().size();
+        if (placeholders != slotCount) {
+            throw new IllegalArgumentException(
+                    "Batch SQL placeholder count (" + placeholders + ") does not match slot count ("
+                            + slotCount + "): " + batch.sql());
+        }
     }
 
     /** 执行前的唯一准备入口：注入方言类型 → AST 改写 → 单一渲染。 */
@@ -476,16 +515,24 @@ final class StatementPreparer {
     }
 
     /**
-     * 最终参数契约：SQL 中有效占位符数量必须与有序参数数量一致。
+     * 最终参数契约：SQL 中有效占位符数量必须与有序参数数量一致，且单条语句不得残留批量模板占位 {@link BatchSlot.RowRef}。
      * 这里覆盖原生 SQL、AST 渲染与重写器的最终产物。
      */
     private static void validateParameterContract(SqlStatement statement) {
         int placeholders = SqlFormatUtils.countPlaceholders(statement.sql(), statement.metadata().dbType());
-        int parameters = statement.parameters().size();
+        List<SqlParameter> params = statement.parameters();
+        int parameters = params.size();
         if (placeholders != parameters) {
             throw new IllegalArgumentException(
                     "SQL placeholder count (" + placeholders + ") does not match parameter count ("
                             + parameters + "): " + statement.sql());
+        }
+        for (SqlParameter param : params) {
+            if (param.value() instanceof BatchSlot.RowRef ref) {
+                throw new IllegalStateException(
+                        "Batch template placeholder RowRef(" + ref.rowIndex()
+                                + ") must not appear in a single-row SqlStatement: " + statement.sql());
+            }
         }
     }
 
@@ -508,7 +555,8 @@ final class StatementPreparer {
         StatementMetadata updatedMeta = batch.metadata().withDbType(dbType);
         if (batch.ast() != null) {
             SqlStatement rendered = SqlRenderer.render(batch.ast(), updatedMeta);
-            return batch.withMetadata(updatedMeta).withSql(rendered.sql());
+            return new BatchSqlStatement(rendered.sql(), batch.columns(), batch.rows(), updatedMeta,
+                    batch.batchSize(), batch.returnGeneratedKeys(), batch.ast(), batch.slots());
         }
         return batch.withMetadata(updatedMeta);
     }
