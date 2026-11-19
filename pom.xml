@@ -233,7 +233,8 @@
                         <configuration>
                             <publishingServerId>central</publishingServerId>
                             <autoPublish>true</autoPublish>
-                            <waitUntil>published</waitUntil>
+                            <!-- 校验通过且触发自动发布即结束等待，避免后台分发队列超过 30 分钟导致客户端轮询假超时 -->
+                            <waitUntil>validated</waitUntil>
                         </configuration>
                     </plugin>
                 </plugins>
