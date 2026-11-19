@@ -4,6 +4,19 @@
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-11-19
+
+### Changed（行为与契约变更）
+- **查询逻辑运算符语义重构（Breaking）**：
+  - **Breaking**：将 `com.sondertara.joya.core.query.LinkType` 重命名为 `LogicalOperator`（`AND` / `OR`），移除原带前后空格的 `toString()`；`WhereCriterion` 移除 Lombok `@Getter` 依赖并将内部字段 `currentOpt` 规范为 `operator`（同步提供 `getOperator()`）。
+- **分页动态筛选嵌套组重构为递归 `FilterGroup`（Breaking）**：
+  - **Breaking**：移除 `PageQueryRequest.Nested` 内部类及 `nested` 单槽位字段，改为顶层可递归组合的 `FilterGroup` 与 `PageQueryRequest.filterGroups` 列表（支持任意 `AND` / `OR` 并列与多层递归嵌套，内置 `FilterGroup.MAX_DEPTH = 8` 深度保护与 `copy()` / `clone()` 深拷贝校验）。
+  - 迁移指引：`PageQueryRequest.Nested` 请替换为 `FilterGroup` 及 `PageQueryRequest#addOrGroup` / `#addAndGroup` / `#addFilterGroup`；`LinkType` 请替换为 `LogicalOperator`。
+
+### Fixed（缺陷修复）
+- **修复 `rootOperator = OR` 下嵌套组外层隔离不足的问题**：
+  - `PageQueryParams.of(PageQueryRequest)` 在 `rootOperator == LogicalOperator.OR` 时将顶层 `filters` 与所有 `filterGroups` 一并包裹进同一 `orNested(...)` 括号组，防止多组或组合条件在衔接外层 `.where(...)`（如租户隔离）时因优先级泄漏；并在入口及构建期强制校验 `FilterGroup.MAX_DEPTH`。
+
 ## [1.1.0] - 2026-11-19
 
 ### Added（新增能力）

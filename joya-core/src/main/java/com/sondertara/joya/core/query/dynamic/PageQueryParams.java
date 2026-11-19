@@ -1,6 +1,7 @@
 package com.sondertara.joya.core.query.dynamic;
 
-import com.sondertara.joya.core.query.LinkType;
+import com.sondertara.joya.core.query.LogicalOperator;
+import com.sondertara.joya.core.query.pagination.FilterGroup;
 import com.sondertara.joya.core.query.criterion.WhereCriterion;
 import com.sondertara.joya.core.query.dsl.QueryCustomizer;
 import com.sondertara.joya.core.query.pagination.FilterCondition;
@@ -36,28 +37,30 @@ public final class PageQueryParams {
 
     public static QueryCustomizer of(PageQueryRequest request) {
         Objects.requireNonNull(request, "request must not be null");
+        validateGroupDepth(request.getFilterGroups(), 0);
         return scope -> {
             List<FilterCondition> filters = request.getFilters();
-            PageQueryRequest.Nested nested = request.getNested();
+            List<FilterGroup> filterGroups = request.getFilterGroups();
             boolean hasFilters = filters != null && !filters.isEmpty();
-            boolean hasNested = nested != null
-                    && ((nested.getAnd() != null && !nested.getAnd().isEmpty())
-                    || (nested.getOr() != null && !nested.getOr().isEmpty()));
-            if (hasFilters || hasNested) {
+            boolean hasGroups = filterGroups != null && !filterGroups.isEmpty();
+            if (hasFilters || hasGroups) {
                 scope.where(w -> {
-                    if (hasFilters) {
-                        if (request.getRootOperator() == LinkType.OR) {
-                            w.orNested(sub -> applyFilters(sub, filters));
-                        } else {
+                    if (request.getRootOperator() == LogicalOperator.OR) {
+                        w.orNested(root -> {
+                            if (hasFilters) {
+                                applyFilters(root, filters);
+                            }
+                            if (hasGroups) {
+                                applyGroups(root, filterGroups, 0);
+                            }
+                            return root;
+                        });
+                    } else {
+                        if (hasFilters) {
                             applyFilters(w, filters);
                         }
-                    }
-                    if (hasNested) {
-                        if (nested.getAnd() != null && !nested.getAnd().isEmpty()) {
-                            w.andNested(sub -> applyFilters(sub, nested.getAnd()));
-                        }
-                        if (nested.getOr() != null && !nested.getOr().isEmpty()) {
-                            w.orNested(sub -> applyFilters(sub, nested.getOr()));
+                        if (hasGroups) {
+                            applyGroups(w, filterGroups, 0);
                         }
                     }
                     return w;
@@ -68,6 +71,51 @@ public final class PageQueryParams {
                 scope.orderBy(sorts.toArray(new SortCondition[0]));
             }
         };
+    }
+
+    private static void validateGroupDepth(List<FilterGroup> groups, int depth) {
+        if (groups == null || groups.isEmpty()) {
+            return;
+        }
+        checkGroupDepth(depth);
+        for (FilterGroup group : groups) {
+            if (group != null) {
+                validateGroupDepth(group.getFilterGroups(), depth + 1);
+            }
+        }
+    }
+
+    private static void applyGroups(WhereCriterion parent, List<FilterGroup> groups, int depth) {
+        if (groups == null || groups.isEmpty()) {
+            return;
+        }
+        checkGroupDepth(depth);
+        for (FilterGroup group : groups) {
+            if (group == null) {
+                continue;
+            }
+            if (group.getOperator() == LogicalOperator.OR) {
+                parent.orNested(sub -> applyGroupContent(sub, group, depth));
+            } else {
+                parent.andNested(sub -> applyGroupContent(sub, group, depth));
+            }
+        }
+    }
+
+    private static void checkGroupDepth(int depth) {
+        if (depth > FilterGroup.MAX_DEPTH) {
+            throw new IllegalArgumentException(
+                    "FilterGroup nesting depth exceeds maximum allowed (" + FilterGroup.MAX_DEPTH + ")");
+        }
+    }
+
+    private static WhereCriterion applyGroupContent(WhereCriterion sub, FilterGroup group, int depth) {
+        List<FilterCondition> groupFilters = group.getFilters();
+        if (groupFilters != null && !groupFilters.isEmpty()) {
+            applyFilters(sub, groupFilters);
+        }
+        applyGroups(sub, group.getFilterGroups(), depth + 1);
+        return sub;
     }
 
     private static WhereCriterion applyFilters(WhereCriterion w, List<FilterCondition> filters) {

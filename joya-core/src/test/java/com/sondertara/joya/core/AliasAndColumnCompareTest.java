@@ -339,7 +339,7 @@ class AliasAndColumnCompareTest {
     @Test
     void p0_1_1_whereWithOrCriterionWrapsParenthesesToProtectTenantFilter() {
         com.sondertara.joya.core.query.criterion.WhereCriterion orCrit =
-                new com.sondertara.joya.core.query.criterion.WhereCriterion(com.sondertara.joya.core.query.LinkType.OR)
+                new com.sondertara.joya.core.query.criterion.WhereCriterion(com.sondertara.joya.core.query.LogicalOperator.OR)
                         .eq(User::getName, "A")
                         .eq(User::getName, "B");
         SqlStatement stmt = Query.of(User.class)

@@ -2,7 +2,7 @@ package com.sondertara.joya.core.query.dsl;
 
 import com.sondertara.joya.core.kernel.statement.LockMode;
 import com.sondertara.joya.core.query.ColumnMetaProvider;
-import com.sondertara.joya.core.query.LinkType;
+import com.sondertara.joya.core.query.LogicalOperator;
 import com.sondertara.joya.core.query.criterion.JoinCriterion;
 import com.sondertara.joya.core.query.criterion.WhereCriterion;
 import com.sondertara.joya.core.query.pagination.SortDirection;
@@ -47,7 +47,7 @@ final class QuerySpec<T> {
 
     WhereCriterion whereCriterion() {
         if (whereCriterion == null) {
-            whereCriterion = new WhereCriterion(LinkType.AND);
+            whereCriterion = new WhereCriterion(LogicalOperator.AND);
         }
         return whereCriterion;
     }
@@ -61,7 +61,7 @@ final class QuerySpec<T> {
 
     WhereCriterion havingCriterion() {
         if (havingCriterion == null) {
-            havingCriterion = new WhereCriterion(LinkType.AND);
+            havingCriterion = new WhereCriterion(LogicalOperator.AND);
         }
         return havingCriterion;
     }
