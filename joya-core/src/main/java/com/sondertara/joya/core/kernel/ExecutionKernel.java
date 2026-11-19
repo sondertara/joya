@@ -21,10 +21,10 @@ import com.sondertara.joya.core.kernel.observe.ExecutionObserver;
 import com.sondertara.joya.core.kernel.observe.SqlExecutionContext;
 import com.sondertara.joya.core.kernel.observe.SqlExecutionListener;
 import com.sondertara.joya.core.kernel.observe.SqlExecutionResult;
+import com.sondertara.joya.core.kernel.statement.BatchSlot;
 import com.sondertara.joya.core.kernel.statement.BatchSqlStatement;
 import com.sondertara.joya.core.kernel.statement.DbType;
 import com.sondertara.joya.core.kernel.statement.Operation;
-import com.sondertara.joya.core.kernel.statement.ParameterSource;
 import com.sondertara.joya.core.kernel.statement.SqlParameter;
 import com.sondertara.joya.core.kernel.statement.SqlStatement;
 import com.sondertara.joya.core.kernel.statement.TableRef;
@@ -374,21 +374,21 @@ public final class ExecutionKernel {
     }
 
     /**
-     * 批处理观测视图：用首行值构造与占位符一一对应的参数列表，保证监听器拿到的是自洽的
-     * {@link SqlStatement}（占位符数 == 参数数），与单条路径的参数契约一致。
+     * 批处理观测视图：按 {@link BatchSlot} 顺序结合首行值构造与占位符一一对应的参数列表，
+     * 保证监听器拿到的是自洽的 {@link SqlStatement}（占位符数 == 参数数，保留真实 {@code ParameterSource}）。
      */
     private static List<SqlParameter> probeParameters(BatchSqlStatement batch) {
-        List<SqlParameter> parameters = new ArrayList<>(
-                batch.columns().size() + batch.extraColumns().size());
+        List<BatchSlot> slots = batch.slots();
+        List<SqlParameter> parameters = new ArrayList<>(slots.size());
         Object[] firstRow = batch.rows().isEmpty() ? null : batch.rows().get(0);
-        for (int i = 0; i < batch.columns().size(); i++) {
-            Object value = firstRow != null && i < firstRow.length ? firstRow[i] : null;
-            parameters.add(SqlParameter.of(i + 1, batch.columns().get(i).name(), value, ParameterSource.RAW));
-        }
-        int offset = batch.columns().size();
-        for (int i = 0; i < batch.extraColumns().size(); i++) {
-            parameters.add(SqlParameter.of(offset + i + 1, batch.extraColumns().get(i).name(),
-                    batch.extraValues().get(i), ParameterSource.RAW));
+        for (int i = 0; i < slots.size(); i++) {
+            BatchSlot slot = slots.get(i);
+            parameters.add(SqlParameter.of(
+                    i + 1,
+                    slot.name(),
+                    slot.resolveValue(firstRow),
+                    slot.source(),
+                    slot.binder()));
         }
         return parameters;
     }

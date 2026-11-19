@@ -5,6 +5,7 @@ import com.sondertara.joya.core.kernel.statement.SqlNodes;
 import com.sondertara.joya.core.kernel.statement.SqlRenderer;
 
 import com.sondertara.joya.core.naming.NamingPolicy;
+import com.sondertara.joya.core.kernel.statement.BatchSlot;
 import com.sondertara.joya.core.kernel.statement.BatchSqlStatement;
 import com.sondertara.joya.core.kernel.statement.ColumnBinding;
 import com.sondertara.joya.core.kernel.statement.Operation;
@@ -137,17 +138,24 @@ public final class UpdateStatementFactory {
                 .entityType(meta.entityType())
                 .build();
         List<ColumnBinding> bindings = new ArrayList<>(setColumns.size() + 1);
+        List<BatchSlot> slots = new ArrayList<>(setColumns.size() + 1);
         List<SqlNode.Assignment> assignments = new ArrayList<>(setColumns.size());
         for (int i = 0; i < setColumns.size(); i++) {
-            bindings.add(ColumnBinding.of(setColumns.get(i)));
+            String col = setColumns.get(i);
+            ColumnBinding binding = ColumnBinding.of(col);
+            bindings.add(binding);
+            slots.add(new BatchSlot.Row(i, binding, ParameterSource.SET));
             assignments.add(SqlNodes.assignment(formattedSetColumns.get(i),
-                    SqlNodes.param(setColumns.get(i), null, ParameterSource.SET)));
+                    SqlNodes.param(col, new BatchSlot.RowRef(i), ParameterSource.SET)));
         }
-        bindings.add(ColumnBinding.of(pk));
+        int pkIndex = setColumns.size();
+        ColumnBinding pkBinding = ColumnBinding.of(pk);
+        bindings.add(pkBinding);
+        slots.add(new BatchSlot.Row(pkIndex, pkBinding, ParameterSource.WHERE));
         SqlNode.Table table = SqlNodes.table(meta.tableName(), tableName);
         SqlNode where = SqlNodes.eq(
                 SqlNodes.column((SqlNode.Table) null, formattedPk),
-                SqlNodes.param(pk, null, ParameterSource.WHERE));
+                SqlNodes.param(pk, new BatchSlot.RowRef(pkIndex), ParameterSource.WHERE));
         SqlNode.Update ast = new SqlNode.Update(table, assignments, where);
         SqlStatement rendered = SqlRenderer.render(ast, metadata);
         return new BatchSqlStatement(
@@ -158,8 +166,7 @@ public final class UpdateStatementFactory {
                 batchSize,
                 false,
                 ast,
-                List.of(),
-                List.of()
+                slots
         );
     }
 }

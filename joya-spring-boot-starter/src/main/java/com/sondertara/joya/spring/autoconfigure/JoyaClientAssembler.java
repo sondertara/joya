@@ -11,7 +11,6 @@ import com.sondertara.joya.core.kernel.observe.SqlExecutionListener;
 import com.sondertara.joya.core.naming.TableNameResolver;
 import com.sondertara.joya.spring.autoconfigure.JoyaProperties.JoyaDataSourceProperties;
 import com.sondertara.joya.spring.autoconfigure.JoyaProperties.PrimaryDataSourceProperties;
-import com.sondertara.joya.spring.support.JpaTransactionManagerSupport;
 import com.sondertara.joya.spring.support.SpringConnectionProvider;
 import com.sondertara.joya.spring.support.SpringSqlExceptionTranslator;
 import com.sondertara.joya.spring.support.SpringTxEngine;
@@ -24,7 +23,6 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
 import org.springframework.core.env.Environment;
 import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.transaction.support.ResourceTransactionManager;
 
 import javax.sql.DataSource;
 import java.util.ArrayList;
@@ -197,28 +195,7 @@ final class JoyaClientAssembler {
             throw new IllegalStateException("Configured '" + propertyPath + ".transaction-manager-bean' ('"
                     + trimmed + "') could not be resolved as a PlatformTransactionManager.", ex);
         }
-        if (JpaTransactionManagerSupport.isJta(tm)) {
-            throw new IllegalStateException("Configured '" + propertyPath + ".transaction-manager-bean' ('"
-                    + trimmed + "') is a JTA transaction manager, which is not supported by Joya.");
-        }
-        if (tm instanceof ResourceTransactionManager rtm) {
-            if (!SpringTxEngine.matchesDataSource(rtm.getResourceFactory(), targetDataSource)) {
-                throw new IllegalStateException("Configured '" + propertyPath + ".transaction-manager-bean' ('"
-                        + trimmed + "') does not manage the target DataSource.");
-            }
-            return tm;
-        }
-        if (JpaTransactionManagerSupport.isJpa(tm)) {
-            DataSource jpaDs = JpaTransactionManagerSupport.dataSource(tm);
-            if (jpaDs == null || !SpringTxEngine.matchesDataSource(jpaDs, targetDataSource)) {
-                throw new IllegalStateException("Configured '" + propertyPath + ".transaction-manager-bean' ('"
-                        + trimmed + "') is a JpaTransactionManager not bound to the target DataSource.");
-            }
-            return tm;
-        }
-        throw new IllegalStateException("Configured '" + propertyPath + ".transaction-manager-bean' ('"
-                + trimmed + "') of type " + tm.getClass().getName()
-                + " cannot be verified against the target DataSource.");
+        return JoyaTransactionManagerResolver.verifyExplicit(propertyPath, trimmed, tm, targetDataSource);
     }
 
     private JoyaClient buildClient(String clientName,

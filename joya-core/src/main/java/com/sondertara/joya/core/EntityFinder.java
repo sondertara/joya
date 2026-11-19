@@ -1,6 +1,7 @@
 package com.sondertara.joya.core;
 
 import com.sondertara.joya.core.kernel.ExecutionKernel;
+import com.sondertara.joya.core.metadata.EntityMetadataContext;
 import com.sondertara.joya.core.query.dsl.Query;
 import com.sondertara.joya.core.query.pagination.SortCondition;
 
@@ -20,19 +21,19 @@ final class EntityFinder<T> {
 
     private final ExecutionKernel kernel;
     private final Class<T> entityType;
-    private final String primaryKey;
+    private final EntityMetadataContext meta;
 
-    EntityFinder(ExecutionKernel kernel, Class<T> entityType, String primaryKey) {
+    EntityFinder(ExecutionKernel kernel, Class<T> entityType, EntityMetadataContext meta) {
         this.kernel = Objects.requireNonNull(kernel, "kernel must not be null");
         this.entityType = Objects.requireNonNull(entityType, "entityType must not be null");
-        this.primaryKey = primaryKey;
+        this.meta = Objects.requireNonNull(meta, "meta must not be null");
     }
 
     Optional<T> findById(Serializable id) {
         Objects.requireNonNull(id, "id must not be null");
-        requirePrimaryKey();
+        String pk = meta.requirePrimaryKey();
         return new Query<>(kernel, entityType)
-                .where(w -> w.eq(primaryKey, id))
+                .where(w -> w.eq(pk, id))
                 .one();
     }
 
@@ -40,13 +41,19 @@ final class EntityFinder<T> {
         if (ids == null || ids.isEmpty()) {
             return List.of();
         }
+        String pk = meta.requirePrimaryKey();
+        for (Serializable id : ids) {
+            if (id == null) {
+                throw new IllegalArgumentException("Entity id element in findByIds must not be null");
+            }
+        }
         if (ids.size() <= Partitions.MAX_IN_CLAUSE_SIZE) {
-            return queryByIds(ids);
+            return queryByIds(pk, ids);
         }
         List<T> result = new ArrayList<>(ids.size());
         List<Serializable> idList = new ArrayList<>(ids);
         for (List<Serializable> chunk : Partitions.of(idList, Partitions.MAX_IN_CLAUSE_SIZE)) {
-            result.addAll(queryByIds(chunk));
+            result.addAll(queryByIds(pk, chunk));
         }
         return result;
     }
@@ -61,22 +68,15 @@ final class EntityFinder<T> {
 
     boolean existsById(Serializable id) {
         Objects.requireNonNull(id, "id must not be null");
-        requirePrimaryKey();
-        return new Query<>(kernel, entityType).where(w -> w.eq(primaryKey, id)).exists();
+        String pk = meta.requirePrimaryKey();
+        return new Query<>(kernel, entityType).where(w -> w.eq(pk, id)).exists();
     }
 
     long count() {
         return new Query<>(kernel, entityType).count();
     }
 
-    private List<T> queryByIds(Collection<? extends Serializable> ids) {
-        requirePrimaryKey();
-        return new Query<>(kernel, entityType).where(w -> w.in(primaryKey, ids)).list();
-    }
-
-    private void requirePrimaryKey() {
-        if (primaryKey == null || primaryKey.isBlank()) {
-            throw new IllegalStateException("Entity has no primary key: " + entityType.getName());
-        }
+    private List<T> queryByIds(String pk, Collection<? extends Serializable> ids) {
+        return new Query<>(kernel, entityType).where(w -> w.in(pk, ids)).list();
     }
 }

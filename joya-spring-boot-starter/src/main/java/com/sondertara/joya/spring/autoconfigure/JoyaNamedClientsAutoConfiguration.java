@@ -4,12 +4,9 @@ import com.sondertara.joya.core.JoyaClient;
 import com.sondertara.joya.utils.Strings;
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.ListableBeanFactory;
-import org.springframework.beans.factory.annotation.AnnotatedBeanDefinition;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.beans.factory.config.BeanDefinition;
 import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
 import org.springframework.beans.factory.config.SingletonBeanRegistry;
-import org.springframework.beans.factory.support.AbstractBeanDefinition;
 import org.springframework.beans.factory.support.AutowireCandidateQualifier;
 import org.springframework.beans.factory.support.BeanDefinitionRegistry;
 import org.springframework.beans.factory.support.BeanDefinitionRegistryPostProcessor;
@@ -19,13 +16,9 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.bind.Binder;
 import org.springframework.context.annotation.Bean;
-import org.springframework.core.annotation.MergedAnnotation;
-import org.springframework.core.annotation.MergedAnnotations;
 import org.springframework.core.env.Environment;
-import org.springframework.core.type.MethodMetadata;
 
 import javax.sql.DataSource;
-import java.lang.annotation.Annotation;
 import java.util.HashSet;
 import java.util.Set;
 
@@ -110,33 +103,10 @@ public class JoyaNamedClientsAutoConfiguration {
                 if (beanName.equals(targetName)) {
                     return true;
                 }
-                if (!registry.containsBeanDefinition(beanName)) {
-                    continue;
-                }
-                BeanDefinition bd = registry.getBeanDefinition(beanName);
-                if (bd instanceof AbstractBeanDefinition abd) {
-                    for (AutowireCandidateQualifier q : abd.getQualifiers()) {
-                        if (targetName.equals(q.getAttribute(AutowireCandidateQualifier.VALUE_KEY))) {
-                            return true;
-                        }
-                    }
-                }
-                if (bd instanceof AnnotatedBeanDefinition annotatedBd) {
-                    MethodMetadata factoryMethod = annotatedBd.getFactoryMethodMetadata();
-                    if (factoryMethod != null && hasQualifierAnnotation(factoryMethod.getAnnotations(), targetName)) {
-                        return true;
-                    }
-                    if (hasQualifierAnnotation(annotatedBd.getMetadata().getAnnotations(), targetName)) {
-                        return true;
-                    }
-                }
-            }
-            return false;
-        }
-
-        private static boolean hasQualifierAnnotation(MergedAnnotations annotations, String targetName) {
-            for (MergedAnnotation<Annotation> ann : annotations) {
-                if (Qualifier.class.equals(ann.getType()) && targetName.equals(ann.getString("value"))) {
+                if (registry.containsBeanDefinition(beanName)
+                        && JoyaExtensionPointResolver.extractQualifiers(registry.getBeanDefinition(beanName))
+                                .values()
+                                .contains(targetName)) {
                     return true;
                 }
             }

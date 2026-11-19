@@ -78,7 +78,10 @@ class TableNameResolverTest {
         RenderContext ctx = RenderContext.forSingleTable(meta(User.class),
                 new NamingPolicy(10, false, false, MONTHLY));
 
-        assertEquals("t_user_202610", ctx.renderFromClause());
+        assertEquals("t_user_202610",
+                com.sondertara.joya.core.kernel.statement.SqlRenderer
+                        .render(ctx.toFromNode(), com.sondertara.joya.core.kernel.statement.StatementMetadata.empty())
+                        .sql());
     }
 
     @Test
@@ -116,7 +119,10 @@ class TableNameResolverTest {
         RenderContext ctx = RenderContext.forSingleTable(meta(Audit.class),
                 new NamingPolicy(10, false, false, MONTHLY));
 
-        assertEquals("sec.t_audit_202610", ctx.renderFromClause());
+        assertEquals("sec.t_audit_202610",
+                com.sondertara.joya.core.kernel.statement.SqlRenderer
+                        .render(ctx.toFromNode(), com.sondertara.joya.core.kernel.statement.StatementMetadata.empty())
+                        .sql());
     }
 
     @Test

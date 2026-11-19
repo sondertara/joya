@@ -5,10 +5,9 @@ import com.sondertara.joya.core.kernel.error.SqlExceptionTranslator;
 import com.sondertara.joya.core.kernel.support.LoggingOutputStream;
 import com.sondertara.joya.core.kernel.support.ScriptRunner;
 import com.sondertara.joya.core.kernel.connection.ConnectionProvider;
+import com.sondertara.joya.core.kernel.statement.BatchSlot;
 import com.sondertara.joya.core.kernel.statement.BatchSqlStatement;
-import com.sondertara.joya.core.kernel.statement.ColumnBinding;
 import com.sondertara.joya.core.kernel.statement.DbType;
-import com.sondertara.joya.core.kernel.statement.ParameterBinder;
 import com.sondertara.joya.core.kernel.statement.SqlParameter;
 import com.sondertara.joya.core.kernel.statement.SqlStatement;
 import com.sondertara.joya.exceptions.DbException;
@@ -238,10 +237,11 @@ public class JdbcExecutor implements Executor {
         if (batch == null || batch.rowCount() == 0) {
             return BatchSlice.EMPTY;
         }
-        List<ColumnBinding> columns = batch.columns();
+        int expectedColumns = batch.columnCount();
+        List<BatchSlot> slots = batch.slots();
         List<Object[]> rows = batch.rows();
         int totalRows = rows.size();
-        int chunkSize = batch.batchSize() > 0 ? batch.batchSize() : ExecutionOptions.DEFAULT_BATCH_SIZE;
+        int chunkSize = batch.batchSize();
         boolean wantKeys = batch.returnGeneratedKeys();
         String pkColumn = batch.metadata() != null ? batch.metadata().primaryKey() : null;
 
@@ -256,20 +256,13 @@ public class JdbcExecutor implements Executor {
                 int inChunk = 0;
                 for (int r = 0; r < totalRows; r++) {
                     Object[] row = rows.get(r);
-                    if (row == null || row.length != columns.size()) {
+                    if (row == null || row.length != expectedColumns) {
                         throw new IllegalArgumentException("Batch row at index " + r
-                                + " has invalid parameter length (expected " + columns.size() + ")");
+                                + " has invalid parameter length (expected " + expectedColumns + ")");
                     }
                     ps.clearParameters();
-                    for (int c = 0; c < columns.size(); c++) {
-                        ColumnBinding column = columns.get(c);
-                        column.binder().bindValue(ps, c + 1, column.name(), row[c], dbType);
-                    }
-                    List<ColumnBinding> extraColumns = batch.extraColumns();
-                    List<Object> extraValues = batch.extraValues();
-                    for (int e = 0; e < extraColumns.size(); e++) {
-                        ColumnBinding column = extraColumns.get(e);
-                        column.binder().bindValue(ps, columns.size() + e + 1, column.name(), extraValues.get(e), dbType);
+                    for (int s = 0; s < slots.size(); s++) {
+                        slots.get(s).bind(ps, s + 1, row, dbType);
                     }
                     ps.addBatch();
                     inChunk++;
@@ -405,16 +398,14 @@ public class JdbcExecutor implements Executor {
     private PreparedStatement prepare(
             Connection conn,
             String sql,
-            DbType dbType,
-            boolean generatedKeys,
-            Object... params
+            @Nullable DbType dbType,
+            boolean generatedKeys
     ) throws SQLException {
         String jdbcStyleSql = SqlFormatUtils.getJdbcStyleSql(sql, dbType);
         PreparedStatement ps = generatedKeys
                 ? conn.prepareStatement(jdbcStyleSql, Statement.RETURN_GENERATED_KEYS)
                 : conn.prepareStatement(jdbcStyleSql);
         try {
-            bindRow(ps, params, dbType);
             applyQueryTimeout(ps);
             return ps;
         } catch (SQLException | RuntimeException e) {
@@ -512,16 +503,6 @@ public class JdbcExecutor implements Executor {
             } catch (Exception ignored) {
                 // 清理阶段异常不掩盖主流程
             }
-        }
-    }
-
-    private static void bindRow(PreparedStatement stmt, Object[] params, @Nullable DbType dbType) throws SQLException {
-        stmt.clearParameters();
-        if (params == null) {
-            return;
-        }
-        for (int i = 0; i < params.length; i++) {
-            ParameterBinder.DEFAULT.bindValue(stmt, i + 1, params[i], dbType);
         }
     }
 }

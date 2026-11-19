@@ -1,12 +1,11 @@
 package com.sondertara.joya.core.kernel.observe;
 
 import com.sondertara.joya.core.kernel.statement.SqlStatement;
+import com.sondertara.joya.core.kernel.support.Ordered;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.List;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -41,22 +40,12 @@ public final class ExecutionObserver {
             synchronized (this) {
                 local = orderedListeners;
                 if (local == null) {
-                    local = sort(listeners);
+                    local = Ordered.sort(listeners);
                     orderedListeners = local;
                 }
             }
         }
         return local;
-    }
-
-    private static List<SqlExecutionListener> sort(List<SqlExecutionListener> listeners) {
-        if (listeners == null || listeners.isEmpty()) {
-            return List.of();
-        }
-        List<SqlExecutionListener> sorted = new ArrayList<>(listeners);
-        sorted.sort(Comparator.comparingInt(SqlExecutionListener::order)
-                .thenComparing(l -> l.getClass().getName()));
-        return List.copyOf(sorted);
     }
 
     /** 已注册的监听器列表（供 {@code bind} 派生视图复用）。 */
@@ -88,18 +77,9 @@ public final class ExecutionObserver {
             runListenerQuietly(() -> listener.beforeExecute(ctx), "beforeExecute");
         }
         long start = System.nanoTime();
+        final Stream<T> stream;
         try {
-            Stream<T> stream = action.get();
-            SqlExecutionResult summary = SqlExecutionResult.rows(-1L)
-                    .withElapsedNanos(System.nanoTime() - start);
-            for (SqlExecutionListener listener : active) {
-                runListenerQuietly(() -> listener.afterExecute(ctx, summary), "afterExecute");
-            }
-            return stream.onClose(() -> {
-                for (SqlExecutionListener listener : active) {
-                    runListenerQuietly(() -> listener.onStreamClosed(ctx), "onStreamClosed");
-                }
-            });
+            stream = action.get();
         } catch (Throwable error) {
             long elapsedNanos = System.nanoTime() - start;
             for (SqlExecutionListener listener : active) {
@@ -107,6 +87,16 @@ public final class ExecutionObserver {
             }
             throw error;
         }
+        SqlExecutionResult summary = SqlExecutionResult.rows(-1L)
+                .withElapsedNanos(System.nanoTime() - start);
+        for (SqlExecutionListener listener : active) {
+            runListenerQuietly(() -> listener.afterExecute(ctx, summary), "afterExecute");
+        }
+        return stream.onClose(() -> {
+            for (SqlExecutionListener listener : active) {
+                runListenerQuietly(() -> listener.onStreamClosed(ctx), "onStreamClosed");
+            }
+        });
     }
 
     public <T> T observe(SqlStatement statement,
@@ -144,14 +134,9 @@ public final class ExecutionObserver {
             runListenerQuietly(() -> listener.beforeExecute(ctx), "beforeExecute");
         }
         long start = System.nanoTime();
+        final T result;
         try {
-            T result = action.get();
-            SqlExecutionResult summary = resultMapper.apply(result)
-                    .withElapsedNanos(System.nanoTime() - start);
-            for (SqlExecutionListener listener : active) {
-                runListenerQuietly(() -> listener.afterExecute(ctx, summary), "afterExecute");
-            }
-            return result;
+            result = action.get();
         } catch (Throwable error) {
             long elapsedNanos = System.nanoTime() - start;
             for (SqlExecutionListener listener : active) {
@@ -159,6 +144,12 @@ public final class ExecutionObserver {
             }
             throw error;
         }
+        long elapsedNanos = System.nanoTime() - start;
+        SqlExecutionResult summary = resultMapper.apply(result).withElapsedNanos(elapsedNanos);
+        for (SqlExecutionListener listener : active) {
+            runListenerQuietly(() -> listener.afterExecute(ctx, summary), "afterExecute");
+        }
+        return result;
     }
 
     private static void runListenerQuietly(Runnable action, String phase) {

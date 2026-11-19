@@ -37,29 +37,21 @@ final class EntityWriter<T> {
     }
 
     MutationResult updateByPrimaryKey(T entity, boolean ignoreNull) {
-        return UpdatePlan.byPrimaryKey(meta, entity, ignoreNull, requirePrimaryKey()).execute(kernel);
+        return UpdatePlan.byPrimaryKey(meta, entity, ignoreNull, meta.requirePrimaryKey()).execute(kernel);
     }
 
     MutationResult updateAll(Collection<T> entities) {
-        String pk = requirePrimaryKey();
+        String pk = meta.requirePrimaryKey();
         List<String> setColumns = new ArrayList<>(meta.updatableColumns());
         setColumns.remove(pk);
         return UpdatePlan.executeUpdateAll(kernel, meta, entities, setColumns, pk);
     }
 
     MutationResult updateAllByColumns(Collection<T> entities, Collection<String> columns) {
-        return UpdatePlan.executeUpdateAllByColumns(kernel, meta, entities, columns, requirePrimaryKey());
+        return UpdatePlan.executeUpdateAllByColumns(kernel, meta, entities, columns, meta.requirePrimaryKey());
     }
 
     MutationResult patchAll(Collection<T> entities) {
-        return UpdatePlan.executePatchAll(kernel, meta, entities, requirePrimaryKey());
-    }
-
-    String requirePrimaryKey() {
-        String pk = meta.primaryKey();
-        if (pk == null || pk.isBlank()) {
-            throw new IllegalStateException("Entity has no primary key: " + meta.entityType().getName());
-        }
-        return pk;
+        return UpdatePlan.executePatchAll(kernel, meta, entities, meta.requirePrimaryKey());
     }
 }

@@ -188,7 +188,7 @@ public enum PaginationStyle {
 
     private static void appendPageParam(List<SqlParameter> params, long value) {
         int idx = params.size() + 1;
-        params.add(SqlParameter.of(idx, "page_arg_" + idx, value, ParameterSource.RAW));
+        params.add(SqlParameter.of(idx, "page_arg_" + idx, value, ParameterSource.PAGINATION));
     }
 
     static int findTopLevelOrderByIndex(String sql, DbType dbType) {

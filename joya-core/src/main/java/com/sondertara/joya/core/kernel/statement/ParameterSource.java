@@ -12,6 +12,8 @@ public enum ParameterSource {
     SET,
     /** WHERE 条件 */
     WHERE,
+    /** HAVING 聚合过滤条件 */
+    HAVING,
     /** JOIN 条件 */
     JOIN,
     /** 租户隔离字段 */

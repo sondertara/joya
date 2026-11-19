@@ -22,9 +22,9 @@ Observe   SqlExecutionListener     →  日志 / 指标 / 慢查询
 | 关注点 | 推荐入口 | 单条 | 批量 | 说明 |
 |---|---|---|---|---|
 | 分表 / schema 切换 | `NamingPolicy.tableNameResolver` | ✅ | ✅ | 配置期唯一表名机制；`SqlRewriter` 不得改表名 |
-| 租户过滤 | `SqlRewriter` | ✅ | ✅（INSERT 常量列） | 改 WHERE / 追加列；**仅当本实体/本表命中 `SELECT` / `INSERT` / `UPDATE` 任一改写器**时 `save` / `saveAll` 才回退受 `WHERE` 保护路径（拒绝内层 `Insert` 静默并入无条件冲突分支），三者均未命中时保留原生 UPSERT；回退模式需整批原子性时请用 `joya.tx(...)` |
-| 软删 | `EntityDeleter` / `SqlRewriter` | ✅ | ⏳ | DELETE → UPDATE 应在语句构建期建模，不在 rewriter 偷换节点类型 |
-| 审计字段 | `EntityListener` / `SqlRewriter` | ✅ | ✅ | `EntityListener` 仅保留实体自身无参前置回调 `prePersist()` / `preUpdate()`（已移除 `EntityLifecycle` 与全局监听器）；跨表全局审计列推荐使用 `SqlRewriter` |
+| 租户过滤 | `SqlRewriter` | ✅ | ✅ | 改 WHERE / 追加常量列；**仅当本实体/本表命中 `SELECT` / `INSERT` / `UPDATE` 任一改写器**时 `save` / `saveAll` 才回退受 `WHERE` 保护路径（拒绝内层 `Insert` 静默并入无条件冲突分支），三者均未命中时保留原生 UPSERT；回退模式需整批原子性时请用 `joya.tx(...)` |
+| 软删行过滤 | `SqlRewriter` | ✅ | ✅ | 为 `SELECT` / `UPDATE` 追加未删过滤、为 `INSERT` 追加默认未删标记；框架核心不自动把物理 `DELETE` 偷换为 `UPDATE`（逻辑删除写入请显式调用 `EntityOps.update()` 或业务仓储方法） |
+| 审计字段 | `EntityListener` / `SqlRewriter` | ✅ | ✅ | `EntityListener` 仅保留实体自身无参前置回调 `prePersist()` / `preUpdate()`（支持逐行设值）；跨表整批同值的全局审计列（含批量 `INSERT` 追加列与批量 `UPDATE` 追加 `SET` 赋值）推荐使用 `SqlRewriter` |
 | SQL 日志 / 耗时 / 指标 | `SqlExecutionListener` | ✅ | ✅ | before / after / onError（含 `elapsedNanos`）/ onStreamClosed |
 | 错误分类 / 重试 | `SqlExceptionTranslator` | ✅ | ✅ | SQLState → 语义异常；Spring Starter 默认装配惰性 `SpringSqlExceptionTranslator`（翻译为 Spring `DataAccessException` 并保留原因 `SQLException` 供死锁重试识别） |
 | 动态筛选协议 | `QueryCustomizer` | ✅ | — | 查询构建期 |
@@ -73,11 +73,11 @@ Spring 环境下同时支持 `@Bean` 方法或组件类上的 `@org.springframew
 ## 4. 批量语义
 
 - `SqlRewriter` 看到的是 `SqlNode`，不是 probe 字符串；
-- v1 批量 INSERT 支持**整批同值**的额外列/参数（租户 ID、审计时间）；UPDATE/DELETE 的逐行绑定待接入；
-- 逐行不同值的改写显式拒绝，抛 `SqlRewriteException`，避免静默错绑；
-- **批量与单条一样完整经过 `prepare` 管线**：注入 `dbType` → `SqlRewriter`，不存在旁路；
-- 批量 rewriter 只允许在列尾/参数尾追加；重排、删除或替换既有列与参数会被拒绝；
-- `SqlExecutionListener` 通过 `ctx.batch()` 识别批量，`ctx.batchRows()` 获取批量总行数，`ctx.clientName()` 获取所属客户端逻辑名称。
+- 批处理由 `BatchSlot` 槽位表统一编排：保留原始逐行绑定槽位（`BatchSlot.Row`），同时支持改写器在任意位置交错注入**整批同值**的常量槽位（`BatchSlot.Const`，如批量 `INSERT` 追加列、批量 `UPDATE` 追加 `SET` 审计列、任意顺序的 `WHERE` 租户条件）以及无参 SQL 表达式（如 `SET rev = rev + 1`）；
+- 逐行不同值的计算不属于无状态 `SqlRewriter`（逐行前置设值请使用 `EntityListener`）；
+- **批量与单条一样完整经过 `prepare` 管线**：注入 `dbType` → `SqlRewriter` → 槽位编译，不存在旁路；
+- 删除、重绑或重排原始行参数（如丢弃 `WHERE id = ?` 或重排 `INSERT` 原有列）会被显式拒绝并抛 `SqlRewriteException`，杜绝静默错绑；
+- `SqlExecutionListener` 通过 `ctx.batch()` 识别批量，`ctx.batchRows()` 获取批量总行数，`ctx.clientName()` 获取所属客户端逻辑名称，首行观测探针精确保留各槽位的真实 `ParameterSource`。
 
 ## 5. 与旧模型的关系
 

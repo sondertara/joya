@@ -1,7 +1,6 @@
 package com.sondertara.joya.core;
 
 import com.sondertara.joya.core.listener.EntityListener;
-import com.sondertara.joya.core.kernel.executor.ExecutionOptions;
 import com.sondertara.joya.core.kernel.ExecutionKernel;
 import com.sondertara.joya.core.kernel.executor.BatchSlice;
 import com.sondertara.joya.core.kernel.statement.BatchSqlStatement;
@@ -87,7 +86,7 @@ final class InsertPlan<T> {
                 listener.prePersist();
             }
             Map<String, Object> values = valuesOf(entity);
-            List<String> cols = columnsFor(values, pk, pkGenerated);
+            List<String> cols = columnsFor(values, pk);
             RowPlan<T> row = new RowPlan<>(entity, values, cols);
             if (!runs.isEmpty() && runs.get(runs.size() - 1).cols().equals(cols)) {
                 runs.get(runs.size() - 1).rows().add(row);
@@ -120,12 +119,9 @@ final class InsertPlan<T> {
      * 计算一行实际要写入的列：主键非空时保留主键列；{@code ignoreNull} 时过滤 null 列；
      * 并对“非自增主键为 null”给出明确错误，避免落到 JDBC 层的 {@code NULL not allowed}。
      */
-    private List<String> columnsFor(Map<String, Object> values, String pk, boolean pkGenerated) {
+    private List<String> columnsFor(Map<String, Object> values, @Nullable String pk) {
         Object pkValue = pk == null ? null : values.get(pk);
-        if (pk != null && !pkGenerated && pkValue == null) {
-            throw new IllegalArgumentException("Primary key '" + pk + "' of " + meta.entityType().getName()
-                    + " is null and is not annotated with @GeneratedValue; assign it before insert");
-        }
+        meta.requireAssignedPrimaryKey(pkValue);
         List<String> candidate = candidateColumns(meta, pkValue);
         List<String> cols;
         if (ignoreNull) {
@@ -160,9 +156,7 @@ final class InsertPlan<T> {
         for (RowPlan<T> row : rows) {
             batchRows.add(rowValues(row.values(), columns));
         }
-        int batchSize = kernel.executionOptions().batchSize() > 0
-                ? kernel.executionOptions().batchSize()
-                : ExecutionOptions.DEFAULT_BATCH_SIZE;
+        int batchSize = kernel.executionOptions().batchSize();
         BatchSqlStatement batch = InsertStatementFactory.createBatch(
                 meta, columns, batchRows, kernel.namingPolicy(), batchSize, wantKeys);
         BatchSlice slice = kernel.batchExecute(batch);

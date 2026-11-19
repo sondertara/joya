@@ -72,6 +72,13 @@ public sealed interface ColumnMetaProvider
     String propertyName();
 
     /**
+     * 列值或表达式的装箱 Java 类型（未知时为 {@code null}）。
+     */
+    default @Nullable Class<?> valueType() {
+        return null;
+    }
+
+    /**
      * 用于去重与比较的规范化唯一键（无需分配表别名即可在 API 期比较相等性）。
      */
     String canonicalKey();
@@ -138,17 +145,23 @@ public sealed interface ColumnMetaProvider
         }
         Class<?> entityClass = LambdaUtils.getReceiverClass(getter);
         String propertyName = LambdaUtils.getPropertyName(getter);
-        return new GetterColumnMetaProvider(entityClass, propertyName);
+        Class<?> valueType = LambdaUtils.getReturnType(getter);
+        return new GetterColumnMetaProvider(entityClass, propertyName, valueType);
     }
 
     /**
      * 标准实体方法引用（如 {@code User::getName}）的列元数据提供器。
      */
-    record GetterColumnMetaProvider(Class<?> entityClass, String propertyName) implements ColumnMetaProvider {
+    record GetterColumnMetaProvider(
+            Class<?> entityClass,
+            String propertyName,
+            Class<?> valueType
+    ) implements ColumnMetaProvider {
 
         public GetterColumnMetaProvider {
             Objects.requireNonNull(entityClass, "entityClass must not be null");
             Objects.requireNonNull(propertyName, "propertyName must not be null");
+            Objects.requireNonNull(valueType, "valueType must not be null");
         }
 
         @Override
@@ -215,6 +228,11 @@ public sealed interface ColumnMetaProvider
         @Override
         public @Nullable String propertyName() {
             return expr.alias();
+        }
+
+        @Override
+        public @Nullable Class<?> valueType() {
+            return expr.resultType();
         }
 
         @Override

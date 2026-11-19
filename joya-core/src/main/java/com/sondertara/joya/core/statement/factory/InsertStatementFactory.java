@@ -5,6 +5,7 @@ import com.sondertara.joya.core.kernel.statement.SqlNodes;
 import com.sondertara.joya.core.kernel.statement.SqlRenderer;
 
 import com.sondertara.joya.core.naming.NamingPolicy;
+import com.sondertara.joya.core.kernel.statement.BatchSlot;
 import com.sondertara.joya.core.kernel.statement.BatchSqlStatement;
 import com.sondertara.joya.core.kernel.statement.ColumnBinding;
 import com.sondertara.joya.core.kernel.statement.Operation;
@@ -40,7 +41,7 @@ public final class InsertStatementFactory {
                 ? (hasExplicitPk ? meta.insertableColumnsWithPrimaryKey() : meta.insertableColumns())
                 : new ArrayList<>(ctx.declaredColumns());
 
-        requireNonNullPrimaryKey(meta, pk, pkValue);
+        meta.requireAssignedPrimaryKey(pkValue);
 
         // 2. 过滤 ignoreNull 与 insertable = false
         List<SqlNode> rowValues = new ArrayList<>();
@@ -88,18 +89,6 @@ public final class InsertStatementFactory {
     }
 
     /**
-     * 非自增主键必须由调用方赋值：否则会渲染成 {@code INSERT ... (id, ...) VALUES (NULL, ...)}，
-     * 最终只在 JDBC 层得到 {@code NULL not allowed for column "id"}，难以定位是漏了 {@code @GeneratedValue}。
-     */
-    private static void requireNonNullPrimaryKey(EntityMetadataContext meta, String pk, Object pkValue) {
-        if (pk == null || pkValue != null || meta.generatedColumns().contains(pk)) {
-            return;
-        }
-        throw new IllegalArgumentException("Primary key '" + pk + "' of " + meta.entityType().getName()
-                + " is null and is not annotated with @GeneratedValue; assign it before insert");
-    }
-
-    /**
      * 构建批量 INSERT 语句。
      */
     public static BatchSqlStatement createBatch(
@@ -139,12 +128,14 @@ public final class InsertStatementFactory {
                 .primaryKey(formattedPk)
                 .build();
         List<ColumnBinding> bindings = new ArrayList<>(columns.size());
-        for (String col : columns) {
-            bindings.add(ColumnBinding.of(col));
-        }
+        List<BatchSlot> slots = new ArrayList<>(columns.size());
         List<SqlNode> templateRow = new ArrayList<>(columns.size());
-        for (String col : columns) {
-            templateRow.add(SqlNodes.param(col, null, ParameterSource.INSERT));
+        for (int i = 0; i < columns.size(); i++) {
+            String col = columns.get(i);
+            ColumnBinding binding = ColumnBinding.of(col);
+            bindings.add(binding);
+            slots.add(new BatchSlot.Row(i, binding, ParameterSource.INSERT));
+            templateRow.add(SqlNodes.param(col, new BatchSlot.RowRef(i), ParameterSource.INSERT));
         }
         SqlNode.Insert ast = new SqlNode.Insert(
                 SqlNodes.table(meta.tableName(), tableName),
@@ -159,8 +150,7 @@ public final class InsertStatementFactory {
                 batchSize,
                 returnGeneratedKeys,
                 ast,
-                List.of(),
-                List.of()
+                slots
         );
     }
 }

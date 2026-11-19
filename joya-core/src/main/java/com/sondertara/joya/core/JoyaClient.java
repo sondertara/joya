@@ -231,7 +231,7 @@ public final class JoyaClient implements DataOps {
             this.dataSource = Objects.requireNonNull(dataSource, "dataSource must not be null");
         }
 
-        /** 追加 SQL 结构改写器（AST 级，推荐用于租户/软删/审计等结构变更）。 */
+        /** 追加 SQL 结构改写器（AST 级，推荐用于租户隔离、软删行过滤、全局审计列注入等结构变更）。 */
         public Builder rewriter(SqlRewriter rewriter) {
             Objects.requireNonNull(rewriter, "rewriter must not be null");
             this.rewriters.add(rewriter);

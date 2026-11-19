@@ -44,21 +44,24 @@ public final class Exprs {
     @SuppressWarnings("unchecked")
     public static <T, R> Expr<R> max(IGetter<T, R> column) {
         Objects.requireNonNull(column, "column must not be null");
-        return new Aggregate<>("MAX", ColumnMetaProvider.fromGetter(column), false, (Class<R>) valueType(column));
+        ColumnMetaProvider provider = ColumnMetaProvider.fromGetter(column);
+        return new Aggregate<>("MAX", provider, false, (Class<R>) resolveValueType(provider, column));
     }
 
     /** {@code MIN(col)}，返回类型跟随列类型。 */
     @SuppressWarnings("unchecked")
     public static <T, R> Expr<R> min(IGetter<T, R> column) {
         Objects.requireNonNull(column, "column must not be null");
-        return new Aggregate<>("MIN", ColumnMetaProvider.fromGetter(column), false, (Class<R>) valueType(column));
+        ColumnMetaProvider provider = ColumnMetaProvider.fromGetter(column);
+        return new Aggregate<>("MIN", provider, false, (Class<R>) resolveValueType(provider, column));
     }
 
     /** {@code SUM(col)}，返回类型跟随列类型。 */
     @SuppressWarnings("unchecked")
     public static <T, R extends Number> Expr<R> sum(IGetter<T, R> column) {
         Objects.requireNonNull(column, "column must not be null");
-        return new Aggregate<>("SUM", ColumnMetaProvider.fromGetter(column), false, (Class<R>) valueType(column));
+        ColumnMetaProvider provider = ColumnMetaProvider.fromGetter(column);
+        return new Aggregate<>("SUM", provider, false, (Class<R>) resolveValueType(provider, column));
     }
 
     /** {@code SUM(col)}，显式指定宽返回类型（如 {@code Long.class} 或 {@code BigDecimal.class}，防止整型求和窄化溢出）。 */
@@ -102,9 +105,12 @@ public final class Exprs {
 
     @SuppressWarnings("unchecked")
     private static <T, R> Expr<R> buildColumnExpr(@Nullable String tableAlias, IGetter<T, R> column) {
-        Class<?> entityClass = LambdaUtils.getReceiverClass(column);
-        String propertyName = LambdaUtils.getPropertyName(column);
-        Class<R> type = (Class<R>) boxed(valueType(column));
+        ColumnMetaProvider provider = ColumnMetaProvider.fromGetter(column);
+        Class<?> entityClass = Objects.requireNonNull(provider.entityClass(),
+                "Exprs.col requires an entity getter method reference");
+        String propertyName = Objects.requireNonNull(provider.propertyName(),
+                "Exprs.col requires an entity getter method reference");
+        Class<R> type = (Class<R>) boxed(resolveValueType(provider, column));
         return new Expr<>() {
             @Override
             public Class<R> resultType() {
@@ -215,11 +221,14 @@ public final class Exprs {
         };
     }
 
-    private static Class<?> valueType(IGetter<?, ?> column) {
-        if (column instanceof Expr<?> expr) {
+    private static Class<?> resolveValueType(ColumnMetaProvider provider, IGetter<?, ?> fallback) {
+        if (provider.valueType() != null) {
+            return provider.valueType();
+        }
+        if (fallback instanceof Expr<?> expr) {
             return expr.resultType();
         }
-        return LambdaUtils.getReturnType(column);
+        return LambdaUtils.getReturnType(fallback);
     }
 
     @SuppressWarnings("unchecked")

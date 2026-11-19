@@ -35,8 +35,6 @@ public final class TxConnection implements TxSession {
     /** 会话公共支撑：所有者线程守卫（I9）、截止时间计时与嵌套保存点栈。 */
     private final TxSessionSupport<Savepoint> support = new TxSessionSupport<>();
 
-    private final long startedAtNanos = System.nanoTime();
-
     private RestorePoint restorePoint;
     private TxState state = TxState.NONE;
     private boolean globalRollbackOnly;
@@ -232,10 +230,6 @@ public final class TxConnection implements TxSession {
     @Override
     public boolean isPhysicalRollbackConfirmed() {
         return physicalRollbackConfirmed;
-    }
-
-    public long elapsedNanos() {
-        return System.nanoTime() - startedAtNanos;
     }
 
     // ===== 关闭（I6 幂等） =====
