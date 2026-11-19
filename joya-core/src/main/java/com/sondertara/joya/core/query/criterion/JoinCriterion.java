@@ -4,7 +4,7 @@ import com.sondertara.joya.core.function.IGetter;
 import com.sondertara.joya.core.query.JoinPart;
 import com.sondertara.joya.core.query.JoinType;
 import com.sondertara.joya.core.query.ColumnMetaProvider;
-import com.sondertara.joya.core.query.LinkType;
+import com.sondertara.joya.core.query.LogicalOperator;
 import com.sondertara.joya.exceptions.DbException;
 import org.jspecify.annotations.Nullable;
 
@@ -195,7 +195,7 @@ public class JoinCriterion {
         }
         WhereCriterion onCriterion = null;
         if (onCondition != null) {
-            WhereCriterion built = onCondition.apply(new WhereCriterion(LinkType.AND));
+            WhereCriterion built = onCondition.apply(new WhereCriterion(LogicalOperator.AND));
             if (built != null && !built.isEmpty()) {
                 onCriterion = built;
             }

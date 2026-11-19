@@ -8,14 +8,13 @@ import com.sondertara.joya.core.kernel.statement.SqlNodes;
 import com.sondertara.joya.core.kernel.statement.SqlParameterList;
 import com.sondertara.joya.core.model.ColumnAlias;
 import com.sondertara.joya.core.query.ColumnMetaProvider;
-import com.sondertara.joya.core.query.LinkType;
+import com.sondertara.joya.core.query.LogicalOperator;
 import com.sondertara.joya.core.query.OnPredicate;
 import com.sondertara.joya.core.query.RenderContext;
 import com.sondertara.joya.core.query.SqlPredicate;
 import com.sondertara.joya.exceptions.DbException;
 import com.sondertara.joya.core.kernel.statement.SqlFormatUtils;
 import com.sondertara.joya.utils.Strings;
-import lombok.Getter;
 import org.jspecify.annotations.Nullable;
 
 import java.util.ArrayList;
@@ -45,24 +44,27 @@ public class WhereCriterion implements OnPredicate {
 
     private static final int MAX_IN_SIZE = 1000;
 
-    @Getter
-    private final LinkType currentOpt;
+    private final LogicalOperator operator;
 
     private final List<SqlPredicate> predicates = new ArrayList<>();
 
     public WhereCriterion() {
-        this(LinkType.AND);
+        this(LogicalOperator.AND);
     }
 
-    public WhereCriterion(LinkType linkType) {
-        this.currentOpt = Objects.requireNonNull(linkType, "linkType must not be null");
+    public WhereCriterion(LogicalOperator operator) {
+        this.operator = Objects.requireNonNull(operator, "operator must not be null");
+    }
+
+    public LogicalOperator getOperator() {
+        return operator;
     }
 
     /**
      * 静态工厂方法：创建一个空的 {@code AND} 条件构建器。
      */
     public static WhereCriterion create() {
-        return new WhereCriterion(LinkType.AND);
+        return new WhereCriterion(LogicalOperator.AND);
     }
 
     /**
@@ -105,7 +107,7 @@ public class WhereCriterion implements OnPredicate {
             if (node == null) {
                 continue;
             }
-            result = result == null ? node : new SqlNode.Binary(currentOpt.name(), result, node);
+            result = result == null ? node : new SqlNode.Binary(operator.name(), result, node);
         }
         return result;
     }
@@ -858,7 +860,7 @@ public class WhereCriterion implements OnPredicate {
      * 当当前层为 OR 时，子组会被括号包裹以保证优先级。
      */
     public WhereCriterion and(UnaryOperator<WhereCriterion> fn) {
-        return append(fn, LinkType.AND, false);
+        return append(fn, LogicalOperator.AND, false);
     }
 
     /**
@@ -866,7 +868,7 @@ public class WhereCriterion implements OnPredicate {
      *
      * <p>例如 {@code eq(active, true).or(c -> c.eq(deptId, 10).eq(age, 40))} 渲染为
      * {@code active = ? AND (dept_id = ? OR age = ?)}，而不是 {@code active = ? OR ...}。
-     * 若需要 OR 与已有条件同级，请使用 {@code new WhereCriterion(LinkType.OR)} 作为根条件
+     * 若需要 OR 与已有条件同级，请使用 {@code new WhereCriterion(LogicalOperator.OR)} 作为根条件
      * （{@code Query.where(WhereCriterion)} 会为多谓词 OR 根自动加括号）。
      *
      * <p>当子组只有一个谓词时，追加结果与 {@link #and(UnaryOperator)} 等价。这通常意味着调用方
@@ -874,16 +876,16 @@ public class WhereCriterion implements OnPredicate {
      */
     public WhereCriterion or(UnaryOperator<WhereCriterion> fn) {
         Objects.requireNonNull(fn, "criterion function must not be null");
-        WhereCriterion child = fn.apply(new WhereCriterion(LinkType.OR));
+        WhereCriterion child = fn.apply(new WhereCriterion(LogicalOperator.OR));
         if (child == null || child.isEmpty()) {
             return this;
         }
         if (!this.predicates.isEmpty() && child.predicates.size() == 1) {
             throw new IllegalArgumentException(
                     "WhereCriterion.or(...) appends an OR group which is combined with existing conditions by "
-                            + this.currentOpt.name() + "; a single-predicate group is equivalent to and(...). "
+                            + this.operator.name() + "; a single-predicate group is equivalent to and(...). "
                             + "Use anyOf(...) / andAnyOf(...) for dynamic OR groups, and(...) for an AND condition, "
-                            + "orNested(...) for a parenthesized group, or build a WhereCriterion(LinkType.OR) root "
+                            + "orNested(...) for a parenthesized group, or build a WhereCriterion(LogicalOperator.OR) root "
                             + "when a real OR with existing conditions is required.");
         }
         return appendChild(child, false);
@@ -896,7 +898,7 @@ public class WhereCriterion implements OnPredicate {
      * 即使动态过滤后子组内仅剩 1 个谓词，也会正常追加而不会抛出异常；若子组为空则自动跳过。
      */
     public WhereCriterion anyOf(UnaryOperator<WhereCriterion> fn) {
-        return append(fn, LinkType.OR, false);
+        return append(fn, LogicalOperator.OR, false);
     }
 
     /**
@@ -908,17 +910,17 @@ public class WhereCriterion implements OnPredicate {
 
     /** 追加一个强制括号包裹的 AND 子条件组。 */
     public WhereCriterion andNested(UnaryOperator<WhereCriterion> fn) {
-        return append(fn, LinkType.AND, true);
+        return append(fn, LogicalOperator.AND, true);
     }
 
     /** 追加一个强制括号包裹的 OR 子条件组；子组与当前层已有条件之间仍使用当前层的连接符。 */
     public WhereCriterion orNested(UnaryOperator<WhereCriterion> fn) {
-        return append(fn, LinkType.OR, true);
+        return append(fn, LogicalOperator.OR, true);
     }
 
-    private WhereCriterion append(UnaryOperator<WhereCriterion> fn, LinkType childLink, boolean forceGroup) {
+    private WhereCriterion append(UnaryOperator<WhereCriterion> fn, LogicalOperator childOperator, boolean forceGroup) {
         Objects.requireNonNull(fn, "criterion function must not be null");
-        WhereCriterion child = fn.apply(new WhereCriterion(childLink));
+        WhereCriterion child = fn.apply(new WhereCriterion(childOperator));
         if (child == null || child.isEmpty()) {
             return this;
         }
@@ -930,10 +932,10 @@ public class WhereCriterion implements OnPredicate {
      * 由子组自己负责内部连接符与括号，父层不再猜测需要几层括号。
      */
     private WhereCriterion appendChild(WhereCriterion child, boolean forceGroup) {
-        if (!forceGroup && this.currentOpt == child.currentOpt) {
+        if (!forceGroup && this.operator == child.operator) {
             this.predicates.addAll(child.predicates);
         } else {
-            this.predicates.add(new GroupPredicate(child.currentOpt, child.predicates, forceGroup));
+            this.predicates.add(new GroupPredicate(child.operator, child.predicates, forceGroup));
         }
         return this;
     }
@@ -942,7 +944,7 @@ public class WhereCriterion implements OnPredicate {
      * 创建当前条件构建器的独立副本（复制连接符与已收集的谓词列表，后续追加互不影响）。
      */
     public WhereCriterion copy() {
-        WhereCriterion copied = new WhereCriterion(this.currentOpt);
+        WhereCriterion copied = new WhereCriterion(this.operator);
         copied.predicates.addAll(this.predicates);
         return copied;
     }
@@ -1024,7 +1026,7 @@ public class WhereCriterion implements OnPredicate {
             snapshot.add(val);
         }
         // De Morgan 定律：col IN (A∪B) 等价于 (col IN A OR col IN B)；col NOT IN (A∪B) 等价于 (col NOT IN A AND col NOT IN B)
-        WhereCriterion chunkGroup = new WhereCriterion(notIn ? LinkType.AND : LinkType.OR);
+        WhereCriterion chunkGroup = new WhereCriterion(notIn ? LogicalOperator.AND : LogicalOperator.OR);
         for (int start = 0; start < snapshot.size(); start += MAX_IN_SIZE) {
             int end = Math.min(start + MAX_IN_SIZE, snapshot.size());
             chunkGroup.addInCondition(provider, snapshot.subList(start, end), notIn);

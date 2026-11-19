@@ -2,7 +2,7 @@ package com.sondertara.joya.core.query.criterion;
 
 import com.sondertara.joya.core.kernel.statement.ParameterSource;
 import com.sondertara.joya.core.kernel.statement.SqlNode;
-import com.sondertara.joya.core.query.LinkType;
+import com.sondertara.joya.core.query.LogicalOperator;
 import com.sondertara.joya.core.query.RenderContext;
 import com.sondertara.joya.core.query.SqlPredicate;
 
@@ -17,12 +17,12 @@ import java.util.List;
  */
 final class GroupPredicate implements SqlPredicate {
 
-    private final LinkType linkType;
+    private final LogicalOperator operator;
     private final List<SqlPredicate> children;
     private final boolean alwaysWrap;
 
-    GroupPredicate(LinkType linkType, List<SqlPredicate> children, boolean alwaysWrap) {
-        this.linkType = linkType;
+    GroupPredicate(LogicalOperator operator, List<SqlPredicate> children, boolean alwaysWrap) {
+        this.operator = operator;
         this.children = List.copyOf(children);
         this.alwaysWrap = alwaysWrap;
     }
@@ -35,7 +35,7 @@ final class GroupPredicate implements SqlPredicate {
             if (node == null) {
                 continue;
             }
-            result = result == null ? node : new SqlNode.Binary(linkType.name(), result, node);
+            result = result == null ? node : new SqlNode.Binary(operator.name(), result, node);
         }
         if (result == null) {
             return null;

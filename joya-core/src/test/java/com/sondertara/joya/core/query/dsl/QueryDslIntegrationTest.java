@@ -1,5 +1,6 @@
 package com.sondertara.joya.core.query.dsl;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sondertara.joya.core.query.Expr;
 import com.sondertara.joya.core.JoyaClient;
 import com.sondertara.joya.core.JoyaSettings;
@@ -8,9 +9,11 @@ import com.sondertara.joya.core.kernel.dialect.QuoteStyle;
 import com.sondertara.joya.core.kernel.observe.SqlExecutionContext;
 import com.sondertara.joya.core.kernel.observe.SqlExecutionListener;
 import com.sondertara.joya.core.kernel.statement.SqlStatement;
+import com.sondertara.joya.core.query.LogicalOperator;
 import com.sondertara.joya.core.query.PageResult;
 import com.sondertara.joya.core.query.dynamic.PageQueryParams;
 import com.sondertara.joya.core.query.pagination.FilterCondition;
+import com.sondertara.joya.core.query.pagination.FilterGroup;
 import com.sondertara.joya.core.query.pagination.FilterOperator;
 import com.sondertara.joya.core.query.pagination.PageQueryRequest;
 import com.sondertara.joya.core.query.pagination.PageRequest;
@@ -408,12 +411,10 @@ class QueryDslIntegrationTest {
         PageQueryRequest param = new PageQueryRequest()
                 .page(0)
                 .size(10)
-                .addFilter("deptId", FilterOperator.EQ, 10L);
-
-        PageQueryRequest.Nested nested = new PageQueryRequest.Nested()
-                .addOr("name", FilterOperator.EQ, "Alice")
-                .addOr("name", FilterOperator.EQ, "Bob");
-        param.nested(nested)
+                .addFilter("deptId", FilterOperator.EQ, 10L)
+                .addOrGroup(g -> g
+                        .addFilter("name", FilterOperator.EQ, "Alice")
+                        .addFilter("name", FilterOperator.EQ, "Bob"))
                 .addSortAsc("age");
 
         PageResult<User> result = joya.from(User.class)
@@ -577,5 +578,178 @@ class QueryDslIntegrationTest {
 
         assertTrue(exception.getMessage().contains("JOIN left"), exception.getMessage());
         assertTrue(exception.getMessage().contains("table role"), exception.getMessage());
+    }
+
+    @Test
+    void pageQueryParamsSupportsMultipleOrGroups() {
+        executedStatements.clear();
+        PageQueryRequest request = new PageQueryRequest()
+                .addOrGroup(g -> g
+                        .addFilter("deptId", FilterOperator.EQ, 10L)
+                        .addFilter("age", FilterOperator.EQ, 30))
+                .addOrGroup(g -> g
+                        .addFilter("name", FilterOperator.EQ, "Alice")
+                        .addFilter("name", FilterOperator.EQ, "Charlie"));
+
+        List<User> users = joya.from(User.class)
+                .apply(PageQueryParams.of(request))
+                .orderByAsc(User::getId)
+                .list();
+
+        assertEquals(List.of(1L), users.stream().map(User::getId).toList());
+        String sql = executedStatements.get(0).sql();
+        assertTrue(sql.contains("(t0.dept_id = ? OR t0.age = ?) AND (t0.name = ? OR t0.name = ?)"), sql);
+    }
+
+    @Test
+    void pageQueryParamsSupportsRecursiveFilterGroups() {
+        executedStatements.clear();
+        PageQueryRequest request = new PageQueryRequest()
+                .addOrGroup(rootOr -> rootOr
+                        .addFilter("name", FilterOperator.EQ, "Charlie")
+                        .addAndGroup(subAnd -> subAnd
+                                .addFilter("deptId", FilterOperator.EQ, 10L)
+                                .addFilter("age", FilterOperator.GE, 28)));
+
+        List<User> users = joya.from(User.class)
+                .apply(PageQueryParams.of(request))
+                .orderByAsc(User::getId)
+                .list();
+
+        assertEquals(List.of(1L, 3L), users.stream().map(User::getId).toList());
+        String sql = executedStatements.get(0).sql();
+        assertTrue(sql.contains("(t0.name = ? OR (t0.dept_id = ? AND t0.age >= ?))"), sql);
+    }
+
+    @Test
+    void pageQueryParamsWithOrRootOperatorIsolatesOuterTenantFilter() {
+        executedStatements.clear();
+        // Charlie 属于 deptId = 20；若 OR 根条件未被整体括号隔离，就会绕过外层 deptId = 10 的租户隔离过滤
+        PageQueryRequest request = new PageQueryRequest()
+                .rootOperator(LogicalOperator.OR)
+                .addFilter("name", FilterOperator.EQ, "Charlie")
+                .addAndGroup(g -> g
+                        .addFilter("name", FilterOperator.EQ, "Alice")
+                        .addFilter("age", FilterOperator.EQ, 30));
+
+        List<User> users = joya.from(User.class)
+                .where(w -> w.eq(User::getDeptId, 10L))
+                .apply(PageQueryParams.of(request))
+                .orderByAsc(User::getId)
+                .list();
+
+        assertEquals(List.of(1L), users.stream().map(User::getId).toList());
+        String sql = executedStatements.get(0).sql();
+        assertTrue(sql.contains("t0.dept_id = ? AND (t0.name = ? OR (t0.name = ? AND t0.age = ?))"), sql);
+    }
+
+    @Test
+    void filterGroupMaxDepthEnforcedInCopyCloneAndPageQueryParams() {
+        FilterGroup maxAllowedRoot = FilterGroup.and().addFilter("name", FilterOperator.EQ, "Alice");
+        FilterGroup cursor = maxAllowedRoot;
+        for (int i = 0; i < FilterGroup.MAX_DEPTH; i++) {
+            FilterGroup child = FilterGroup.or().addFilter("name", FilterOperator.EQ, "Alice");
+            cursor.addFilterGroup(child);
+            cursor = child;
+        }
+
+        PageQueryRequest validRequest = new PageQueryRequest().addFilterGroup(maxAllowedRoot);
+        FilterGroup copiedGroup = maxAllowedRoot.copy();
+        PageQueryRequest clonedRequest = validRequest.clone();
+        clonedRequest.getFilterGroups().get(0).addFilter("deptId", FilterOperator.EQ, 20L);
+        assertEquals(1, validRequest.getFilterGroups().get(0).getFilters().size());
+        assertEquals(1, copiedGroup.getFilters().size());
+        assertEquals(List.of(1L), joya.from(User.class).apply(PageQueryParams.of(validRequest)).list()
+                .stream().map(User::getId).toList());
+
+        // 再多一层嵌套即超过 FilterGroup.MAX_DEPTH，应直接抛出 IllegalArgumentException
+        cursor.addFilterGroup(FilterGroup.and());
+        IllegalArgumentException copyEx = assertThrows(IllegalArgumentException.class, maxAllowedRoot::copy);
+        IllegalArgumentException cloneEx = assertThrows(IllegalArgumentException.class, validRequest::clone);
+        IllegalArgumentException paramsEx = assertThrows(IllegalArgumentException.class,
+                () -> PageQueryParams.of(validRequest));
+        assertTrue(copyEx.getMessage().contains(String.valueOf(FilterGroup.MAX_DEPTH)));
+        assertTrue(cloneEx.getMessage().contains(String.valueOf(FilterGroup.MAX_DEPTH)));
+        assertTrue(paramsEx.getMessage().contains(String.valueOf(FilterGroup.MAX_DEPTH)));
+    }
+
+    @Test
+    void pageQueryRequestSupportsJacksonRoundTripWithNestedFilterGroups() throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        String payload = """
+                {
+                  "page": 0,
+                  "size": 10,
+                  "needTotal": true,
+                  "rootOperator": "OR",
+                  "filters": [
+                    { "field": "name", "operator": "EQ", "value": "Charlie" }
+                  ],
+                  "filterGroups": [
+                    {
+                      "operator": "AND",
+                      "filters": [
+                        { "field": "deptId", "operator": "EQ", "value": 10 }
+                      ],
+                      "filterGroups": [
+                        {
+                          "operator": "OR",
+                          "filters": [
+                            { "field": "name", "operator": "EQ", "value": "Alice" },
+                            { "field": "age", "operator": "EQ", "value": 25 }
+                          ]
+                        }
+                      ]
+                    }
+                  ],
+                  "sorts": [
+                    { "field": "id", "direction": "ASC" }
+                  ]
+                }
+                """;
+
+        PageQueryRequest deserialized = mapper.readValue(payload, PageQueryRequest.class);
+        String reSerialized = mapper.writeValueAsString(deserialized);
+        PageQueryRequest roundTripped = mapper.readValue(reSerialized, PageQueryRequest.class);
+        assertEquals(deserialized, roundTripped);
+
+        List<User> users = joya.from(User.class)
+                .apply(PageQueryParams.of(roundTripped))
+                .list();
+        assertEquals(List.of(1L, 2L, 3L), users.stream().map(User::getId).toList());
+    }
+
+    @Test
+    void pageQueryParamsHandlesEmptyNullGroupsAndNullOperatorSafely() throws Exception {
+        executedStatements.clear();
+        ObjectMapper mapper = new ObjectMapper();
+        FilterGroup nullOpGroup = mapper.readValue("""
+                {
+                  "operator": null,
+                  "filters": [
+                    { "field": "name", "operator": "EQ", "value": "Alice" }
+                  ]
+                }
+                """, FilterGroup.class);
+        assertEquals(LogicalOperator.AND, nullOpGroup.getOperator());
+
+        PageQueryRequest onlyEmptyGroups = new PageQueryRequest()
+                .rootOperator(LogicalOperator.OR)
+                .addFilterGroup(FilterGroup.and())
+                .addFilterGroup(null)
+                .addFilterGroup(FilterGroup.or().addFilter("name", FilterOperator.EQ, null));
+
+        List<User> dept10Users = joya.from(User.class)
+                .where(w -> w.eq(User::getDeptId, 10L))
+                .apply(PageQueryParams.of(onlyEmptyGroups))
+                .orderByAsc(User::getId)
+                .list();
+        assertEquals(List.of(1L, 2L), dept10Users.stream().map(User::getId).toList());
+
+        PageQueryRequest withNullOpGroup = new PageQueryRequest().addFilterGroup(nullOpGroup);
+        List<User> aliceOnly = joya.from(User.class)
+                .apply(PageQueryParams.of(withNullOpGroup))
+                .list();
+        assertEquals(List.of(1L), aliceOnly.stream().map(User::getId).toList());
     }
 }

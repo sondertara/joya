@@ -1,11 +1,12 @@
 package com.sondertara.joya.core.query.pagination;
 
-import com.sondertara.joya.core.query.LinkType;
+import com.sondertara.joya.core.query.LogicalOperator;
 
 import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.function.Consumer;
 
 /**
  * 通用动态分页查询请求协议（0-based 页索引）：
@@ -15,7 +16,10 @@ import java.util.Objects;
  *   "size": 20,
  *   "needTotal": true,
  *   "sorts": [ { "field": "createTime", "direction": "DESC" } ],
- *   "filters": [ { "field": "status", "operator": "EQ", "value": 1 } ]
+ *   "filters": [ { "field": "status", "operator": "EQ", "value": 1 } ],
+ *   "filterGroups": [
+ *     { "operator": "OR", "filters": [ { "field": "name", "operator": "EQ", "value": "Alice" } ] }
+ *   ]
  * }
  * }</pre>
  *
@@ -35,7 +39,7 @@ public class PageQueryRequest implements Serializable, Cloneable {
     private boolean needTotal = true;
 
     /** 顶层过滤条件之间的连接方式，默认 AND */
-    private LinkType rootOperator = LinkType.AND;
+    private LogicalOperator rootOperator = LogicalOperator.AND;
 
     /** 排序条件列表 */
     private List<SortCondition> sorts = new ArrayList<>();
@@ -43,8 +47,8 @@ public class PageQueryRequest implements Serializable, Cloneable {
     /** 过滤条件列表 */
     private List<FilterCondition> filters = new ArrayList<>();
 
-    /** 可选嵌套条件组（AND / OR 子组） */
-    private Nested nested;
+    /** 逻辑过滤条件组列表（支持 AND / OR 组合与递归嵌套） */
+    private List<FilterGroup> filterGroups = new ArrayList<>();
 
     public PageQueryRequest() {
     }
@@ -93,8 +97,8 @@ public class PageQueryRequest implements Serializable, Cloneable {
         return this;
     }
 
-    public PageQueryRequest rootOperator(LinkType rootOperator) {
-        this.rootOperator = rootOperator == null ? LinkType.AND : rootOperator;
+    public PageQueryRequest rootOperator(LogicalOperator rootOperator) {
+        this.rootOperator = rootOperator == null ? LogicalOperator.AND : rootOperator;
         return this;
     }
 
@@ -108,9 +112,33 @@ public class PageQueryRequest implements Serializable, Cloneable {
         return this;
     }
 
-    public PageQueryRequest nested(Nested nested) {
-        this.nested = nested;
+    public PageQueryRequest filterGroups(List<FilterGroup> filterGroups) {
+        this.filterGroups = filterGroups == null ? new ArrayList<>() : new ArrayList<>(filterGroups);
         return this;
+    }
+
+    public PageQueryRequest addFilterGroup(FilterGroup group) {
+        if (group != null) {
+            if (this.filterGroups == null) {
+                this.filterGroups = new ArrayList<>();
+            }
+            this.filterGroups.add(group);
+        }
+        return this;
+    }
+
+    public PageQueryRequest addAndGroup(Consumer<FilterGroup> customizer) {
+        Objects.requireNonNull(customizer, "customizer must not be null");
+        FilterGroup group = FilterGroup.and();
+        customizer.accept(group);
+        return addFilterGroup(group);
+    }
+
+    public PageQueryRequest addOrGroup(Consumer<FilterGroup> customizer) {
+        Objects.requireNonNull(customizer, "customizer must not be null");
+        FilterGroup group = FilterGroup.or();
+        customizer.accept(group);
+        return addFilterGroup(group);
     }
 
     public PageQueryRequest addFilter(FilterCondition condition) {
@@ -200,12 +228,12 @@ public class PageQueryRequest implements Serializable, Cloneable {
         this.needTotal = needTotal;
     }
 
-    public LinkType getRootOperator() {
+    public LogicalOperator getRootOperator() {
         return rootOperator;
     }
 
-    public void setRootOperator(LinkType rootOperator) {
-        this.rootOperator = rootOperator == null ? LinkType.AND : rootOperator;
+    public void setRootOperator(LogicalOperator rootOperator) {
+        this.rootOperator = rootOperator == null ? LogicalOperator.AND : rootOperator;
     }
 
     public List<SortCondition> getSorts() {
@@ -224,12 +252,12 @@ public class PageQueryRequest implements Serializable, Cloneable {
         this.filters = filters == null ? new ArrayList<>() : filters;
     }
 
-    public Nested getNested() {
-        return nested;
+    public List<FilterGroup> getFilterGroups() {
+        return filterGroups;
     }
 
-    public void setNested(Nested nested) {
-        this.nested = nested;
+    public void setFilterGroups(List<FilterGroup> filterGroups) {
+        this.filterGroups = filterGroups == null ? new ArrayList<>() : filterGroups;
     }
 
     public PageQueryRequest copy() {
@@ -257,23 +285,12 @@ public class PageQueryRequest implements Serializable, Cloneable {
             }
             copy.setSorts(copiedSorts);
         }
-        if (this.nested != null) {
-            Nested copiedNested = new Nested();
-            if (this.nested.getAnd() != null) {
-                for (FilterCondition f : this.nested.getAnd()) {
-                    if (f != null) {
-                        copiedNested.addAnd(f.getField(), f.getOperator(), f.getValue());
-                    }
-                }
+        if (this.filterGroups != null) {
+            List<FilterGroup> copiedGroups = new ArrayList<>(this.filterGroups.size());
+            for (FilterGroup g : this.filterGroups) {
+                copiedGroups.add(g == null ? null : g.copy());
             }
-            if (this.nested.getOr() != null) {
-                for (FilterCondition f : this.nested.getOr()) {
-                    if (f != null) {
-                        copiedNested.addOr(f.getField(), f.getOperator(), f.getValue());
-                    }
-                }
-            }
-            copy.setNested(copiedNested);
+            copy.setFilterGroups(copiedGroups);
         }
         return copy;
     }
@@ -292,70 +309,19 @@ public class PageQueryRequest implements Serializable, Cloneable {
                 && rootOperator == that.rootOperator
                 && Objects.equals(sorts, that.sorts)
                 && Objects.equals(filters, that.filters)
-                && Objects.equals(nested, that.nested);
+                && Objects.equals(filterGroups, that.filterGroups);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(page, size, needTotal, rootOperator, sorts, filters, nested);
+        return Objects.hash(page, size, needTotal, rootOperator, sorts, filters, filterGroups);
     }
 
     @Override
     public String toString() {
         return "PageQueryRequest{page=" + page + ", size=" + size
                 + ", needTotal=" + needTotal + ", rootOperator=" + rootOperator
-                + ", sorts=" + sorts + ", filters=" + filters + '}';
-    }
-
-    /**
-     * 嵌套过滤条件组。
-     */
-    public static final class Nested implements Serializable {
-        private static final long serialVersionUID = 1L;
-
-        private List<FilterCondition> and = new ArrayList<>();
-        private List<FilterCondition> or = new ArrayList<>();
-
-        public Nested addAnd(String field, FilterOperator operator, Object value) {
-            this.and.add(new FilterCondition(field, operator, value));
-            return this;
-        }
-
-        public Nested addOr(String field, FilterOperator operator, Object value) {
-            this.or.add(new FilterCondition(field, operator, value));
-            return this;
-        }
-
-        public List<FilterCondition> getAnd() {
-            return and;
-        }
-
-        public void setAnd(List<FilterCondition> and) {
-            this.and = and == null ? new ArrayList<>() : and;
-        }
-
-        public List<FilterCondition> getOr() {
-            return or;
-        }
-
-        public void setOr(List<FilterCondition> or) {
-            this.or = or == null ? new ArrayList<>() : or;
-        }
-
-        @Override
-        public boolean equals(Object o) {
-            if (this == o) {
-                return true;
-            }
-            if (!(o instanceof Nested nested1)) {
-                return false;
-            }
-            return Objects.equals(and, nested1.and) && Objects.equals(or, nested1.or);
-        }
-
-        @Override
-        public int hashCode() {
-            return Objects.hash(and, or);
-        }
+                + ", sorts=" + sorts + ", filters=" + filters
+                + ", filterGroups=" + filterGroups + '}';
     }
 }

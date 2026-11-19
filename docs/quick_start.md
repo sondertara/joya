@@ -8,7 +8,7 @@ Maven Project（Spring Boot 3）
 <dependency>
     <groupId>com.sondertara.joya</groupId>
     <artifactId>joya-spring-boot-starter</artifactId>
-    <version>1.1.0</version>
+    <version>1.1.1</version>
 </dependency>
 <!-- joya-spring-boot-starter 采用轻量旁路定位，不强制绑定特定连接池；
      若宿主工程尚未引入连接池（如 spring-boot-starter-data-jpa / Druid），请一并引入 spring-boot-starter-jdbc 与对应数据库驱动 -->
@@ -24,7 +24,7 @@ Maven Project（纯 Java）
 <dependency>
     <groupId>com.sondertara.joya</groupId>
     <artifactId>joya-core</artifactId>
-    <version>1.1.0</version>
+    <version>1.1.1</version>
 </dependency>
 ```
 

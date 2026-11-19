@@ -62,7 +62,7 @@ core/
 │   ├── criterion/
 │   │   ├── WhereCriterion.java         Lambda 类型安全 WHERE / HAVING 惰性条件构建器（可跨多表查询与单表改删复用）
 │   │   └── JoinCriterion.java          Lambda 类型安全 JOIN 关系收集器
-│   ├── pagination/                     PageRequest / PageQueryRequest / FilterCondition / SortCondition 等分页与动态筛选协议值类型（全链路统一 0-based page + size；不依赖 dsl / criterion）
+│   ├── pagination/                     PageRequest / PageQueryRequest / FilterGroup / FilterCondition / SortCondition 等分页与动态筛选协议值类型（全链路统一 0-based page + size；不依赖 dsl / criterion）
 │   └── dynamic/                        PageQueryParams：把动态筛选协议适配为 QueryCustomizer（强制实体元数据白名单防注入校验）
 │
 ├── tx/                                 显式值事务模块（1 Tx = 1 Connection，零 ThreadLocal 污染）

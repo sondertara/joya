@@ -7,7 +7,7 @@ import com.sondertara.joya.core.kernel.statement.Operation;
 import com.sondertara.joya.core.kernel.statement.SqlStatement;
 import com.sondertara.joya.core.listener.EntityListener;
 import com.sondertara.joya.core.query.PageResult;
-import com.sondertara.joya.core.query.LinkType;
+import com.sondertara.joya.core.query.LogicalOperator;
 import com.sondertara.joya.core.query.criterion.WhereCriterion;
 import com.sondertara.joya.core.query.dsl.Exprs;
 import com.sondertara.joya.core.query.pagination.PageRequest;
@@ -207,7 +207,7 @@ class SilentFailureRegressionTest {
 
     @Test
     void andWithNullLambda_onOrRoot_doesNotThrowNpe() {
-        WhereCriterion criterion = new WhereCriterion(LinkType.OR).eq(User::getAge, 10);
+        WhereCriterion criterion = new WhereCriterion(LogicalOperator.OR).eq(User::getAge, 10);
         assertDoesNotThrow(() -> criterion.and(c -> null));
         assertEquals(1, joya.from(User.class).where(criterion).list().size());
     }
