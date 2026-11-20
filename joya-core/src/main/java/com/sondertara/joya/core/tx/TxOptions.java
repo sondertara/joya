@@ -18,7 +18,7 @@ import java.time.Duration;
  * @param isolation     隔离级别；{@link Isolation#DEFAULT} 表示沿用连接默认值
  * @param readOnly      只读事务
  * @param timeout       事务超时；{@code null} 表示不限制。超时后后续语句抛 {@link TxTimeoutException}
- * @param retryAttempts 死锁 / 序列化失败（SQLState 40xxx）的最大尝试次数；{@code <=1} 表示不重试
+ * @param retryAttempts 死锁 / 序列化失败（SQLState 40001 / 40P01，MySQL 1213 / 1205）的最大总尝试次数（含首次执行）；{@code >= 0}，{@code <= 1} 表示不重试
  * @param requiresNew   是否强制开启独立新事务（Spring 事务下对应 {@code PROPAGATION_REQUIRES_NEW}）
  */
 public record TxOptions(
@@ -35,6 +35,9 @@ public record TxOptions(
         isolation = isolation == null ? Isolation.DEFAULT : isolation;
         if (timeout != null && (timeout.isNegative() || timeout.isZero())) {
             throw new IllegalArgumentException("timeout must be positive: " + timeout);
+        }
+        if (retryAttempts < 0) {
+            throw new IllegalArgumentException("retryAttempts must not be negative: " + retryAttempts);
         }
     }
 

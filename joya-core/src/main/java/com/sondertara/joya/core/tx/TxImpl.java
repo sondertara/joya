@@ -61,6 +61,10 @@ public final class TxImpl implements Tx {
         return outcome != null;
     }
 
+    TxOutcome outcome() {
+        return outcome;
+    }
+
     boolean isPhysicalRollbackConfirmed() {
         return outcome == TxOutcome.ROLLED_BACK && session.isPhysicalRollbackConfirmed();
     }
