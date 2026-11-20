@@ -70,18 +70,35 @@ public final class TxStarter {
     }
 
     /**
-     * 死锁 / 序列化失败（SQLState 40001 / 40P01，MySQL 1213 / 1205）时整体重试，最多尝试 {@code maxAttempts} 次。
-     * 仅对 {@link #run} / {@link #call} 生效；每次重试开启全新的 {@link Tx} 实例重跑闭包，
-     * 期间注册的 {@link Tx#afterCompletion} 仅在最终尝试完成时触发一次。
+     * 死锁 / 序列化失败（SQLState 40001 / 40P01，MySQL 1213 / 1205）时整体重试。
+     *
+     * <p>{@code maxAttempts} 为<b>最大总尝试次数（含首次执行）</b>：{@code 1} 表示不重试，至少传 {@code 2}
+     * 才会在死锁回滚后重试。仅对 {@link #run} / {@link #call} 生效（调用 {@link #begin()} 且
+     * {@code maxAttempts > 1} 将直接抛出 {@link IllegalStateException}）；在 Spring 中加入外层
+     * {@code @Transactional}（未配 {@link #requiresNew()}）时不会重放事务体。
+     * 每次重试开启全新的 {@link Tx} 实例重跑闭包，期间注册的 {@link Tx#afterCompletion} 仅在最终尝试完成时触发一次。
      */
     public TxStarter retryOnDeadlock(int maxAttempts) {
+        if (maxAttempts < 1) {
+            throw new IllegalArgumentException("maxAttempts must be at least 1: " + maxAttempts);
+        }
         return new TxStarter(kernel, txEngine, options.withRetryAttempts(maxAttempts));
     }
 
     // ===== 终端操作 =====
 
-    /** 开启事务（RAII）：必须 {@code try-with-resources}，未 {@link Tx#commit()} 的部分在 close 时回滚。 */
+    /**
+     * 开启事务（RAII）：必须 {@code try-with-resources}，未 {@link Tx#commit()} 的部分在 close 时回滚。
+     *
+     * @throws IllegalStateException 若配置了 {@link #retryOnDeadlock(int)}（{@code maxAttempts > 1}），
+     *                               手动生命周期无法编排重试，必须改用 {@link #run} 或 {@link #call}
+     */
     public Tx begin() {
+        if (options.retryAttempts() > 1) {
+            throw new IllegalStateException(
+                    "retryOnDeadlock(" + options.retryAttempts()
+                            + ") is only supported by run() and call(), not manual begin().");
+        }
         return open();
     }
 
@@ -136,13 +153,18 @@ public final class TxStarter {
             } catch (Throwable primary) {
                 boolean cleanupSucceeded = rollbackAndCloseQuietly(tx, primary);
                 boolean confirmedRolledBack = tx.isPhysicalRollbackConfirmed();
-                if (attempt < maxAttempts && cleanupSucceeded && confirmedRolledBack && isRetryable(primary)) {
-                    if (!sleepBeforeRetry(attempt, primary)) {
-                        tx.fireCompletionCallbacks();
-                        throw compose(primary);
+                if (maxAttempts > 1 && isRetryable(primary) && attempt < maxAttempts && cleanupSucceeded) {
+                    if (confirmedRolledBack) {
+                        if (!sleepBeforeRetry(attempt, primary)) {
+                            tx.fireCompletionCallbacks();
+                            throw compose(primary);
+                        }
+                        attempt++;
+                        continue;
                     }
-                    attempt++;
-                    continue;
+                    log.warn("Skipping deadlock retry (attempt={}/{}) because physical rollback was not "
+                                    + "confirmed (outcome={}; joining an outer transaction requires requiresNew() to retry).",
+                            attempt, maxAttempts, tx.outcome());
                 }
                 tx.fireCompletionCallbacks();
                 throw compose(primary);
@@ -209,13 +231,15 @@ public final class TxStarter {
         return new TxException("Transaction failed.", primary);
     }
 
-    private static boolean rollbackAndCloseQuietly(Tx tx, Throwable primary) {
+    private static boolean rollbackAndCloseQuietly(TxImpl tx, Throwable primary) {
         boolean succeeded = true;
-        try {
-            tx.rollback();
-        } catch (Throwable rollbackFailure) {
-            succeeded = false;
-            primary.addSuppressed(rollbackFailure);
+        if (!tx.isCompleted()) {
+            try {
+                tx.rollback();
+            } catch (Throwable rollbackFailure) {
+                succeeded = false;
+                primary.addSuppressed(rollbackFailure);
+            }
         }
         try {
             tx.close();

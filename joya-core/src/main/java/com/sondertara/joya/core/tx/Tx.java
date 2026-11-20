@@ -64,7 +64,15 @@ public interface Tx extends DataOps, AutoCloseable {
 
     void rollback();
 
-    /** 标记仅回滚：业务校验失败但不想抛异常时使用。 */
+    /**
+     * 标记仅回滚（不变量 I7）：毒化当前事务句柄，确保后续任何代码路径（包括 {@code joya.tx(...)} /
+     * {@code joya.txCall(...)} 结尾自动触发的 {@code commit()} 或显式调用 {@link #commit()}）均拒绝提交、
+     * 转为物理回滚并抛出 {@link UnexpectedRollbackException}。
+     *
+     * <p>若要在独立事务中主动放弃修改且不抛异常退出：在 {@code joya.tx(...)} 回调内请显式调用 {@link #rollback()}；
+     * 在 {@link TxStarter#begin()} 手动模式下请直接跳过 {@link #commit()} 退出 {@code try-with-resources}。
+     * 注意在 Spring 接入外层 {@code @Transactional} 的加入事务中，调用 {@link #rollback()} 仍会连带将外层事务标为仅回滚。
+     */
     void setRollbackOnly();
 
     boolean isRollbackOnly();

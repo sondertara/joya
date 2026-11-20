@@ -806,6 +806,59 @@ class TxSemanticsTest {
         assertTrue(log.toString().contains("fingerprint="), "脱敏后仍应保留可关联的诊断指纹");
     }
 
+    @Test
+    void retryOnDeadlock_validatesAttemptsAndRejectsBegin() {
+        ConnectionSpy spy = ConnectionSpy.autoCommitPool();
+        JoyaClient joya = client(spy);
+
+        assertThrows(IllegalArgumentException.class, () -> TxOptions.DEFAULT.withRetryAttempts(-1));
+        assertEquals(0, TxOptions.DEFAULT.retryAttempts());
+
+        assertThrows(IllegalArgumentException.class, () -> joya.tx().retryOnDeadlock(0));
+        assertThrows(IllegalArgumentException.class, () -> joya.tx().retryOnDeadlock(-2));
+
+        // 传入 1 表示显式关闭重试（总尝试次数 1），begin() 与 run() 均合法且不重试
+        java.util.concurrent.atomic.AtomicInteger singleAttempt = new java.util.concurrent.atomic.AtomicInteger();
+        assertThrows(com.sondertara.joya.exceptions.DbException.class, () ->
+                joya.tx().retryOnDeadlock(1).run(tx -> {
+                    singleAttempt.incrementAndGet();
+                    throw new com.sondertara.joya.exceptions.DbException(
+                            new java.sql.SQLException("deadlock", "40001"));
+                }));
+        assertEquals(1, singleAttempt.get());
+        int borrowsBeforeSingleBegin = spy.borrowCount();
+        try (Tx tx = joya.tx().retryOnDeadlock(1).begin()) {
+            assertEquals(borrowsBeforeSingleBegin + 1, spy.borrowCount());
+        }
+
+        // retryOnDeadlock(>1) 与 begin() 组合必须在开启连接前快速失败
+        int borrowsBefore = spy.borrowCount();
+        assertThrows(IllegalStateException.class, () -> joya.tx().retryOnDeadlock(3).begin());
+        assertEquals(borrowsBefore, spy.borrowCount(), "begin() 参数冲突不得触发借连接");
+    }
+
+    @Test
+    void exceptionAfterCompletedTx_doesNotAttachSpuriousIllegalTxStateSuppressed() {
+        ConnectionSpy spyCommitFirst = ConnectionSpy.autoCommitPool();
+        RuntimeException postCommit = assertThrows(RuntimeException.class, () ->
+                client(spyCommitFirst).tx().run(tx -> {
+                    tx.sql("UPDATE t SET a = 1").update();
+                    tx.commit();
+                    throw new RuntimeException("post-commit error");
+                }));
+        assertEquals(0, postCommit.getSuppressed().length,
+                "已手动 commit 后再抛异常不得附带多余 IllegalTxStateException suppressed");
+        assertEquals(1, spyCommitFirst.commitCount());
+        assertEquals(0, spyCommitFirst.rollbackCount());
+
+        ConnectionSpy spyMarkedRollback = ConnectionSpy.autoCommitPool();
+        UnexpectedRollbackException unexpected = assertThrows(UnexpectedRollbackException.class, () ->
+                client(spyMarkedRollback).tx().run(Tx::setRollbackOnly));
+        assertEquals(0, unexpected.getSuppressed().length,
+                "I7 触发 UnexpectedRollbackException 时不得附带多余 IllegalTxStateException suppressed");
+        assertEquals(1, spyMarkedRollback.rollbackCount());
+    }
+
     private static Throwable captureOnOtherThread(Runnable action) {
         java.util.concurrent.atomic.AtomicReference<Throwable> error = new java.util.concurrent.atomic.AtomicReference<>();
         Thread other = new Thread(() -> {

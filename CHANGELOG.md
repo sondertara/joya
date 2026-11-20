@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+### Fixed（缺陷修复与契约打磨）
+- **事务启动器与重试配置护栏收敛（`joya-core`）**：
+  - `TxOptions` 校验 `retryAttempts >= 0`，`TxStarter#retryOnDeadlock(int)` 校验总尝试次数 `maxAttempts >= 1`（传入 `<= 0` 快速抛 `IllegalArgumentException`），`TxStarter#begin()` 在已配置 `retryOnDeadlock(> 1)` 时立即抛出 `IllegalStateException` 拒绝静默失效。
+  - `TxStarter#call` 捕获异常清理时先判 `!tx.isCompleted()` 再调用 `tx.rollback()`，避免手动提前 `commit()` / `rollback()` 或 I7 触发后在主异常上附带多余 `IllegalTxStateException` suppressed；仅在实际触发可重试死锁却因 `!isPhysicalRollbackConfirmed()`（如加入外层 Spring 事务未配 `requiresNew()`）跳过重试时输出 `WARN` 诊断日志。
+  - 修正 `Tx#setRollbackOnly()` 与 `TxStarter#retryOnDeadlock(int)` Javadoc 契约说明。
+
 ## [1.1.1] - 2026-11-19
 
 ### Changed（行为与契约变更）
