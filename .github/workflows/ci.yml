@@ -26,11 +26,24 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-          cache: maven
+
+      # 显式使用 actions/cache 并提供 restore-keys 前缀回退，避免 pom.xml 版本号推进时冷启动全量重拉触发 Maven Central 429
+      - name: Cache Maven repository
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.m2/repository
+            !~/.m2/repository/com/sondertara/joya
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-
 
       # ArchitectureGuardTest 也在 test 阶段执行，分层与循环依赖会被同一道门禁拦住
       - name: Full test suite
-        run: mvn -B -ntp -q test
+        run: |
+          mvn -B -ntp -q test \
+            -Daether.connector.http.retryHandler.count=5 \
+            -Daether.connector.http.retryHandler.serviceUnavailable=429,502,503,504
 
       - name: Upload surefire reports on failure
         if: failure()

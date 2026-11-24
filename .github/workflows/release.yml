@@ -32,10 +32,20 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-          cache: maven
           server-id: central
           server-username-env-var: CENTRAL_TOKEN_USERNAME
           server-password-env-var: CENTRAL_TOKEN_PASSWORD
+
+      # 显式使用 actions/cache 并提供 restore-keys 前缀回退，复用 main 分支依赖缓存，降低发版时对 Maven Central 的并发拉取压力
+      - name: Cache Maven repository
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.m2/repository
+            !~/.m2/repository/com/sondertara/joya
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-
 
       - name: Verify Release tag matches project version
         if: github.event_name == 'release'
@@ -61,7 +71,11 @@ jobs:
       - name: Deploy to Maven Central Portal
         run: |
           SKIP_UPLOAD="${{ inputs.skip_upload == true }}"
-          mvn -B -ntp clean deploy -Pcentral -Dgpg.signer=bc -DskipUpload="$SKIP_UPLOAD"
+          mvn -B -ntp clean deploy -Pcentral \
+            -Dgpg.signer=bc \
+            -DskipUpload="$SKIP_UPLOAD" \
+            -Daether.connector.http.retryHandler.count=5 \
+            -Daether.connector.http.retryHandler.serviceUnavailable=429,502,503,504
         env:
           CENTRAL_TOKEN_USERNAME: ${{ secrets.CENTRAL_TOKEN_USERNAME }}
           CENTRAL_TOKEN_PASSWORD: ${{ secrets.CENTRAL_TOKEN_PASSWORD }}
