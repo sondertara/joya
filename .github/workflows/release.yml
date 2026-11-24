@@ -41,11 +41,22 @@ jobs:
         if: github.event_name == 'release'
         run: |
           TAG_VERSION="${GITHUB_REF_NAME#v}"
-          POM_VERSION="$(mvn -B -ntp help:evaluate -Dexpression=project.version -q -DforceStdout)"
-          if [[ "$TAG_VERSION" != "$POM_VERSION" ]]; then
-            echo "Release tag ($GITHUB_REF_NAME -> $TAG_VERSION) 与 pom.xml project.version ($POM_VERSION) 不一致"
-            exit 1
-          fi
+          python3 - "$TAG_VERSION" <<'PY'
+          import sys, xml.etree.ElementTree as ET
+
+          tag_version = sys.argv[1]
+          ns = {"m": "http://maven.apache.org/POM/4.0.0"}
+          root_pom = ET.parse("pom.xml").getroot()
+          root_ver = (root_pom.findtext("m:version", namespaces=ns) or "").strip()
+          if root_ver != tag_version:
+              sys.exit(f"Release tag (v{tag_version}) 与 pom.xml version ({root_ver}) 不一致")
+          for mod in root_pom.findall("m:modules/m:module", namespaces=ns):
+              mod_pom = f"{mod.text.strip()}/pom.xml"
+              parent_ver = (ET.parse(mod_pom).getroot().findtext("m:parent/m:version", namespaces=ns) or "").strip()
+              if parent_ver != tag_version:
+                  sys.exit(f"Release tag (v{tag_version}) 与 {mod_pom} parent.version ({parent_ver}) 不一致")
+          print(f"Verified tag v{tag_version} matches root & all module POMs.")
+          PY
 
       - name: Deploy to Maven Central Portal
         run: |
