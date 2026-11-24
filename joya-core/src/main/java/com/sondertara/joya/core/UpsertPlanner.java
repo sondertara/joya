@@ -1,27 +1,25 @@
 package com.sondertara.joya.core;
 
-import com.sondertara.joya.core.kernel.dialect.Dialect;
 import com.sondertara.joya.core.kernel.ExecutionKernel;
-import com.sondertara.joya.core.listener.EntityListener;
+import com.sondertara.joya.core.kernel.dialect.Dialect;
+import com.sondertara.joya.core.kernel.executor.BatchSlice;
+import com.sondertara.joya.core.kernel.statement.AstStatement;
+import com.sondertara.joya.core.kernel.statement.BatchAstStatement;
 import com.sondertara.joya.core.kernel.statement.Operation;
 import com.sondertara.joya.core.kernel.statement.TableRef;
 import com.sondertara.joya.core.kernel.statement.UpsertStyle;
-import com.sondertara.joya.core.kernel.executor.BatchSlice;
-import com.sondertara.joya.core.kernel.statement.BatchSqlStatement;
-import com.sondertara.joya.core.kernel.statement.SqlStatement;
+import com.sondertara.joya.core.listener.EntityListener;
+import com.sondertara.joya.core.metadata.ColumnConverter;
 import com.sondertara.joya.core.metadata.EntityMetadataContext;
-import com.sondertara.joya.core.metadata.EntitySnapshot;
 import com.sondertara.joya.core.query.criterion.WhereCriterion;
 import com.sondertara.joya.core.result.MutationResult;
-import com.sondertara.joya.core.statement.MutationContext;
-import com.sondertara.joya.core.statement.factory.SelectStatementFactory;
-import com.sondertara.joya.core.statement.factory.UpsertStatementFactory;
-import com.sondertara.joya.exceptions.DbException;
 import com.sondertara.joya.utils.ConvertUtils;
+import com.sondertara.joya.utils.SqlDataUtils;
+import com.sondertara.joya.utils.TypeUtils;
+import org.jspecify.annotations.Nullable;
 
 import java.io.Serializable;
 import java.math.BigDecimal;
-import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashSet;
@@ -33,28 +31,19 @@ import java.util.Set;
 
 /**
  * Upsert 规划器：负责单条与批量 {@code save} / {@code saveAll} 的主键存在性分片探测与插入/更新路由。
- *
- * <p><b>实现策略</b>：单条 {@code save} 与满足条件的 {@code saveAll} / {@code saveAllIgnoreNull}
- * （原生方言、无匹配改写器、主键非空）走原生 upsert；只要 {@code SELECT}/{@code INSERT}/{@code UPDATE}
- * 任一操作存在可能生效的 {@code SqlRewriter}（如多租户行级过滤、审计列注入），单条与批量一致回退到
- * 受 {@code WHERE} 保护的 select-then-write（可见则更新、不可见则插入），避免无条件冲突更新绕过行级过滤。
- * 回退路径在并发插入同一主键时存在竞态，强一致性场景请使用显式事务 + 唯一约束；
- * 批量回退在自动提交模式下跨连接执行，需要原子性时请包在 {@code joya.tx(...)} 内。
  */
 final class UpsertPlanner<T> {
 
+    private static final Set<Operation> UPSERT_GUARD_OPERATIONS =
+            Set.of(Operation.SELECT, Operation.INSERT, Operation.UPDATE);
+
     private final ExecutionKernel kernel;
     private final EntityMetadataContext meta;
-    private final EntityWriter<T> writer;
     private final EntityFinder<T> finder;
 
-    UpsertPlanner(ExecutionKernel kernel,
-                  EntityMetadataContext meta,
-                  EntityWriter<T> writer,
-                  EntityFinder<T> finder) {
+    UpsertPlanner(ExecutionKernel kernel, EntityMetadataContext meta, EntityFinder<T> finder) {
         this.kernel = Objects.requireNonNull(kernel, "kernel must not be null");
         this.meta = Objects.requireNonNull(meta, "meta must not be null");
-        this.writer = Objects.requireNonNull(writer, "writer must not be null");
         this.finder = Objects.requireNonNull(finder, "finder must not be null");
     }
 
@@ -74,16 +63,15 @@ final class UpsertPlanner<T> {
         }
         boolean exists = (pkVal instanceof Serializable s) && finder.existsById(s);
         if (!exists) {
-            return writer.insert(entity, ignoreNull);
+            return new InsertPlan<>(meta, List.of(entity), ignoreNull, "entity must not be null", Map.of())
+                    .execute(kernel);
         }
-        MutationResult updated = writer.updateByPrimaryKey(entity, ignoreNull);
+        MutationResult updated = UpdatePlan.executeByPrimaryKey(kernel, meta, entity, ignoreNull);
         return MutationResult.ofInsert(updated.affectedRows(), pkVal);
     }
 
-    /**
-     * 单条原生 upsert。返回 {@code null} 表示方言/数据不满足条件，调用方回退 select-then-write。
-     */
-    private MutationResult nativeUpsert(T entity, boolean ignoreNull, Object pkVal, boolean hasListener, Dialect dialect) {
+    private @Nullable MutationResult nativeUpsert(T entity, boolean ignoreNull, Object pkVal,
+                                                  boolean hasListener, Dialect dialect) {
         String pk = meta.primaryKey();
         if (pk == null) {
             return null;
@@ -91,26 +79,28 @@ final class UpsertPlanner<T> {
         if (hasListener && entity instanceof EntityListener listener) {
             fireUpsertListener(listener, finder.existsById((Serializable) pkVal));
         }
-        Map<String, Object> values = EntitySnapshot.snapshot(meta, entity).values();
-        List<String> columns = selectUpsertColumns(values, pk, ignoreNull);
+        Object[] snapshot = meta.snapshotValues(entity);
+        List<String> columns = selectUpsertColumns(snapshot, pk, ignoreNull);
         if (columns.isEmpty()) {
             return null;
         }
-        Set<String> declared = new java.util.LinkedHashSet<>(columns);
-        MutationContext ctx = new MutationContext(meta, values, null, declared, ignoreNull, false,
-                kernel.namingPolicy());
-        SqlStatement upsert = UpsertStatementFactory.create(ctx, columns, pk, dialect.upsertStyle(), dialect.dbType());
+        List<Object> values = new ArrayList<>(columns.size());
+        for (String col : columns) {
+            values.add(meta.convertToDatabase(col, meta.columnValue(snapshot, col)));
+        }
+        AstStatement upsert = EntityStatements.upsertAst(
+                meta, columns, values, pk, dialect.upsertStyle(), dialect.dbType(), kernel.namingPolicy());
         int affected = kernel.update(upsert);
         return MutationResult.ofInsert(affected, pkVal);
     }
 
-    private MutationResult nativeBatchGroups(List<T> rows,
-                                             String pk,
-                                             boolean ignoreNull,
-                                             int batchSize,
-                                             boolean hasListeners,
-                                             Set<Object> existing,
-                                             Dialect dialect) {
+    private @Nullable MutationResult nativeBatchGroups(List<T> rows,
+                                                       String pk,
+                                                       boolean ignoreNull,
+                                                       int batchSize,
+                                                       boolean hasListeners,
+                                                       Set<Object> existing,
+                                                       Dialect dialect) {
         if (hasListeners) {
             for (T row : rows) {
                 if (row instanceof EntityListener listener) {
@@ -121,20 +111,21 @@ final class UpsertPlanner<T> {
         }
         Map<List<String>, List<Object[]>> groups = new LinkedHashMap<>();
         for (T row : rows) {
-            Map<String, Object> values = EntitySnapshot.snapshot(meta, row).values();
-            List<String> columns = selectUpsertColumns(values, pk, ignoreNull);
+            Object[] snapshot = meta.snapshotValues(row);
+            List<String> columns = selectUpsertColumns(snapshot, pk, ignoreNull);
             if (columns.isEmpty()) {
                 return null;
             }
             Object[] args = new Object[columns.size()];
             for (int i = 0; i < columns.size(); i++) {
-                args[i] = values.get(columns.get(i));
+                String col = columns.get(i);
+                args[i] = meta.convertToDatabase(col, meta.columnValue(snapshot, col));
             }
             groups.computeIfAbsent(List.copyOf(columns), key -> new ArrayList<>()).add(args);
         }
         MutationResult total = MutationResult.EMPTY;
         for (Map.Entry<List<String>, List<Object[]>> entry : groups.entrySet()) {
-            BatchSqlStatement upsertBatch = UpsertStatementFactory.createBatch(
+            BatchAstStatement upsertBatch = EntityStatements.upsertBatchAst(
                     meta, entry.getKey(), entry.getValue(), kernel.namingPolicy(),
                     batchSize, pk, dialect.upsertStyle(), dialect.dbType());
             BatchSlice slice = kernel.batchExecute(upsertBatch);
@@ -151,14 +142,14 @@ final class UpsertPlanner<T> {
         }
     }
 
-    private List<String> selectUpsertColumns(Map<String, Object> values, String pk, boolean ignoreNull) {
+    private List<String> selectUpsertColumns(Object[] snapshot, String pk, boolean ignoreNull) {
         List<String> candidateColumns = meta.insertableColumnsWithPrimaryKey();
         if (!ignoreNull) {
             return candidateColumns;
         }
         List<String> columns = new ArrayList<>(candidateColumns.size());
         for (String column : candidateColumns) {
-            if (values.get(column) != null || column.equals(pk)) {
+            if (meta.columnValue(snapshot, column) != null || column.equals(pk)) {
                 columns.add(column);
             }
         }
@@ -173,22 +164,28 @@ final class UpsertPlanner<T> {
         String pk = meta.requirePrimaryKey();
         List<Object> primaryKeys = new ArrayList<>(rows.size());
         Set<Object> seenPrimaryKeys = new HashSet<>();
+        boolean hasListeners = false;
+        boolean allKeysAssigned = true;
         for (T row : rows) {
             Objects.requireNonNull(row, "Entity element in saveAll must not be null");
+            if (row instanceof EntityListener) {
+                hasListeners = true;
+            }
             Object pkVal = meta.readFieldValue(row, pk);
             Object normalizedPk = normalizePrimaryKey(pkVal);
-            primaryKeys.add(normalizedPk);
-            if (normalizedPk != null && !seenPrimaryKeys.add(normalizedPk)) {
+            if (normalizedPk == null) {
+                allKeysAssigned = false;
+            } else if (!seenPrimaryKeys.add(normalizedPk)) {
                 throw new IllegalArgumentException(
                         "Duplicate primary key [" + pkVal + "] in saveAll batch for entity "
                                 + meta.entityType().getName());
             }
+            primaryKeys.add(normalizedPk);
         }
 
         int batchPartitionSize = kernel.executionOptions().batchSize();
 
-        boolean hasListeners = rows.stream().anyMatch(EntityListener.class::isInstance);
-        if (primaryKeys.stream().allMatch(Objects::nonNull)) {
+        if (allKeysAssigned) {
             Dialect dialect = kernel.dialect();
             if (!requiresGuardedFallback(dialect) && canUseNativeUpsert(dialect.upsertStyle())) {
                 Set<Object> existing = hasListeners
@@ -202,6 +199,8 @@ final class UpsertPlanner<T> {
             }
         }
 
+        // 跨分片两阶段内存回写：全部 chunk 成功后再统一回写生成主键与 @Version 版本号
+        List<Runnable> deferredWriteBacks = new ArrayList<>();
         MutationResult total = MutationResult.EMPTY;
         for (int start = 0; start < rows.size(); start += batchPartitionSize) {
             int end = Math.min(start + batchPartitionSize, rows.size());
@@ -229,11 +228,21 @@ final class UpsertPlanner<T> {
                 });
             }
             if (!toUpdate.isEmpty()) {
-                total = total.merge(ignoreNull ? writer.patchAll(toUpdate) : writer.updateAll(toUpdate));
+                MutationResult updated = ignoreNull
+                        ? UpdatePlan.executePatchAll(kernel, meta, toUpdate, pk, deferredWriteBacks)
+                        : UpdatePlan.executeUpdateAll(kernel, meta, toUpdate, meta.updatableColumns(), pk, deferredWriteBacks);
+                total = total.merge(updated);
             }
             if (!toInsert.isEmpty()) {
-                total = total.merge(writer.insertAll(toInsert, ignoreNull));
+                String msg = ignoreNull
+                        ? "Entity element in insertAllIgnoreNull must not be null"
+                        : "Entity element in insertAll must not be null";
+                total = total.merge(new InsertPlan<>(meta, toInsert, ignoreNull, msg, Map.of())
+                        .execute(kernel, deferredWriteBacks));
             }
+        }
+        for (Runnable writeBack : deferredWriteBacks) {
+            writeBack.run();
         }
         return total;
     }
@@ -247,43 +256,33 @@ final class UpsertPlanner<T> {
             return Set.of();
         }
         Class<?> pkType = meta.primaryKeyType();
+        ColumnConverter pkConverter = meta.converterFor(pk);
+        Class<?> dbPkType = pkConverter != null ? pkConverter.databaseColumnType() : pkType;
+        Class<?> dbPkBoxed = dbPkType != null ? TypeUtils.getWrapClass(dbPkType) : Object.class;
+        SqlDataUtils.ColumnReader pkReader = (dbPkType != null && dbPkType != Object.class)
+                ? SqlDataUtils.readerFor(dbPkType)
+                : SqlDataUtils::getResultSetValue;
         List<Object> keyList = keys instanceof List<?> l ? new ArrayList<>(l) : new ArrayList<>(keys);
         Set<Object> existing = new HashSet<>(keyList.size());
 
         for (List<Object> chunk : Partitions.of(keyList, Partitions.MAX_IN_CLAUSE_SIZE)) {
-            WhereCriterion where = WhereCriterion.create();
-            where.in(pk, chunk);
-            SqlStatement stmt = SelectStatementFactory.create(meta, where, Set.of(pk), kernel.namingPolicy());
+            WhereCriterion where = WhereCriterion.create().inTrusted(pk, chunk);
+            AstStatement stmt = EntityStatements.selectColumnsAst(meta, where, Set.of(pk), kernel.namingPolicy());
             List<Object> rows = kernel.queryList(stmt, rs -> {
-                try {
-                    Object raw = rs.getObject(1);
-                    if (raw != null && pkType != null && !pkType.isInstance(raw)) {
-                        raw = ConvertUtils.convert(raw, pkType);
-                    }
-                    return normalizePrimaryKey(raw);
-                } catch (SQLException e) {
-                    throw new DbException(e);
+                Object raw = pkReader.read(rs, 1, null);
+                if (raw != null && dbPkType != null && dbPkType != Object.class && !dbPkBoxed.isInstance(raw)) {
+                    raw = ConvertUtils.convert(raw, dbPkType);
                 }
+                if (pkConverter != null) {
+                    raw = pkConverter.toEntity(raw);
+                }
+                return normalizePrimaryKey(raw);
             });
             existing.addAll(rows);
         }
         return existing;
     }
 
-    /**
-     * UPSERT 同时隐含 INSERT 与 UPDATE 语义，且回退路径必须先做 SELECT 存在性探测，
-     * 因此三者只要任一操作可能被改写，就必须回退到受行级 WHERE 保护的路径。
-     */
-    private static final Set<Operation> UPSERT_GUARD_OPERATIONS =
-            Set.of(Operation.SELECT, Operation.INSERT, Operation.UPDATE);
-
-    /**
-     * 是否必须回退到受行级 WHERE 保护的 select-then-write 路径。
-     *
-     * <p>判定口径与 {@code saveAll} 的既有门禁一致，但不再按「是否注册了任意改写器」一刀切：
-     * 只检查本实体、本表、{@code SELECT/INSERT/UPDATE} 三种操作是否有改写器声明支持。
-     * 这样「只处理其他实体或其他操作」的改写器不会让全库原生批量 UPSERT 失效。
-     */
     private boolean requiresGuardedFallback(Dialect dialect) {
         if (!kernel.hasRewriters()) {
             return false;
@@ -294,6 +293,9 @@ final class UpsertPlanner<T> {
     }
 
     private boolean canUseNativeUpsert(UpsertStyle style) {
+        if (meta.hasVersion()) {
+            return false;
+        }
         if (style == UpsertStyle.NONE || meta.insertableColumnsWithPrimaryKey().isEmpty()) {
             return false;
         }
@@ -308,7 +310,7 @@ final class UpsertPlanner<T> {
         return true;
     }
 
-    private static Object normalizePrimaryKey(Object key) {
+    private static @Nullable Object normalizePrimaryKey(@Nullable Object key) {
         if (key instanceof BigDecimal decimal) {
             return decimal.stripTrailingZeros();
         }

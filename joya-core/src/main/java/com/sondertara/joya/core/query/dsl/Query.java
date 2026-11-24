@@ -2,13 +2,14 @@ package com.sondertara.joya.core.query.dsl;
 
 import com.sondertara.joya.core.function.IGetter;
 import com.sondertara.joya.core.kernel.ExecutionKernel;
+import com.sondertara.joya.core.kernel.statement.AstStatement;
 import com.sondertara.joya.core.kernel.statement.LockMode;
 import com.sondertara.joya.core.kernel.statement.SqlNode;
 import com.sondertara.joya.core.kernel.statement.SqlNodes;
 import com.sondertara.joya.core.kernel.statement.SqlStatement;
 import com.sondertara.joya.core.query.ColumnMetaProvider;
 import com.sondertara.joya.core.query.PageResult;
-import com.sondertara.joya.core.query.RenderContext;
+import com.sondertara.joya.core.query.TableScope;
 import com.sondertara.joya.core.query.criterion.WhereCriterion;
 import com.sondertara.joya.core.query.pagination.PageRequest;
 import com.sondertara.joya.core.query.pagination.SortCondition;
@@ -36,31 +37,40 @@ import java.util.stream.Stream;
 public final class Query<T> implements QueryScope {
 
     private final QuerySpec<T> spec;
-    private final QueryRenderer<T> renderer;
+    private final QueryAstBuilder<T> astBuilder;
     private final QueryExecutor<T> executor;
 
     public Query(ExecutionKernel kernel, Class<T> rootType) {
         Objects.requireNonNull(rootType, "rootType must not be null");
         this.spec = new QuerySpec<>(rootType);
-        this.renderer = new QueryRenderer<>(kernel);
-        this.executor = new QueryExecutor<>(kernel, renderer);
+        this.astBuilder = new QueryAstBuilder<>(kernel);
+        this.executor = new QueryExecutor<>(kernel, astBuilder);
     }
 
-    private Query(QuerySpec<T> spec, QueryRenderer<T> renderer, QueryExecutor<T> executor) {
+    private Query(QuerySpec<T> spec, QueryAstBuilder<T> astBuilder, QueryExecutor<T> executor) {
         this.spec = spec;
-        this.renderer = renderer;
+        this.astBuilder = astBuilder;
         this.executor = executor;
     }
 
     private Query<T> fork() {
-        return new Query<>(spec.copy(), renderer, executor);
+        return new Query<>(spec.copy(), astBuilder, executor);
     }
 
     /**
-     * 离线创建查询构建器（不绑定数据源，仅用于构造与检视 {@link #toSqlStatement()}）。
+     * 离线创建查询构建器（不绑定数据源，可用于构造查询模板经 {@code db.from(query)} 执行，或检视 {@link #toSqlStatement()}）。
      */
     public static <T> Query<T> of(Class<T> rootType) {
         return new Query<>(null, rootType);
+    }
+
+    /**
+     * 将当前查询状态（含离线构建模板）绑定到目标执行内核，返回互不污染的新 {@link Query} 实例。
+     */
+    public Query<T> bind(ExecutionKernel targetKernel) {
+        Objects.requireNonNull(targetKernel, "targetKernel must not be null");
+        QueryAstBuilder<T> boundBuilder = new QueryAstBuilder<>(targetKernel);
+        return new Query<>(spec.copy(), boundBuilder, new QueryExecutor<>(targetKernel, boundBuilder));
     }
 
     @Override
@@ -68,8 +78,8 @@ public final class Query<T> implements QueryScope {
         return spec.rootType();
     }
 
-    RenderContext renderContext() {
-        return renderer.renderContext(spec);
+    TableScope tableScope() {
+        return astBuilder.tableScope(spec);
     }
 
     // ===== 1. 行级子句（全部返回 Query<T>，可任意顺序组合） =====
@@ -296,7 +306,7 @@ public final class Query<T> implements QueryScope {
 
     @Override
     public String resolveColumn(String fieldOrColumn) {
-        return renderContext().resolveIdentifier(fieldOrColumn);
+        return tableScope().resolveIdentifier(fieldOrColumn);
     }
 
     // ===== 2. 投影切换（进入只含终结方法的 Select1..8 / SelectN） =====
@@ -384,58 +394,58 @@ public final class Query<T> implements QueryScope {
 
     /** 查询主表实体列表（联表时只查主表列）。 */
     public List<T> list() {
-        return executor.executeList(spec, Projections.entity(rootType(), renderContext()));
+        return executor.executeList(spec, Projections.entity(rootType(), tableScope()));
     }
 
     /** 查询并按目标类型字段名自动推列映射。 */
     public <V> List<V> list(Class<V> type) {
-        return executor.executeList(spec, Projections.auto(type, renderContext()));
+        return executor.executeList(spec, Projections.auto(type, tableScope()));
     }
 
     /** 严格单行查询：0 行返回 empty，多于 1 行抛 {@link IllegalStateException}。 */
     public Optional<T> one() {
-        return executor.executeOne(spec, Projections.entity(rootType(), renderContext()));
+        return executor.executeOne(spec, Projections.entity(rootType(), tableScope()));
     }
 
     public <V> Optional<V> one(Class<V> type) {
-        return executor.executeOne(spec, Projections.auto(type, renderContext()));
+        return executor.executeOne(spec, Projections.auto(type, tableScope()));
     }
 
     /** 取首行（自动应用 LIMIT 1）。 */
     public Optional<T> first() {
-        return executor.executeFirst(spec, Projections.entity(rootType(), renderContext()));
+        return executor.executeFirst(spec, Projections.entity(rootType(), tableScope()));
     }
 
     public <V> Optional<V> first(Class<V> type) {
-        return executor.executeFirst(spec, Projections.auto(type, renderContext()));
+        return executor.executeFirst(spec, Projections.auto(type, tableScope()));
     }
 
     /** 流式读取（调用方必须使用 try-with-resources 关闭返回的 Stream）。 */
     public Stream<T> stream() {
-        return executor.executeStream(spec, Projections.entity(rootType(), renderContext()));
+        return executor.executeStream(spec, Projections.entity(rootType(), tableScope()));
     }
 
     public <V> Stream<V> stream(Class<V> type) {
-        return executor.executeStream(spec, Projections.auto(type, renderContext()));
+        return executor.executeStream(spec, Projections.auto(type, tableScope()));
     }
 
     /** 分页查询（自动执行 COUNT + 方言分页）。 */
     public PageResult<T> page(PageRequest page) {
-        return executor.executePage(spec, page, Projections.entity(rootType(), renderContext()));
+        return executor.executePage(spec, page, Projections.entity(rootType(), tableScope()));
     }
 
     public <V> PageResult<V> page(Class<V> type, PageRequest page) {
-        return executor.executePage(spec, page, Projections.auto(type, renderContext()));
+        return executor.executePage(spec, page, Projections.auto(type, tableScope()));
     }
 
     // ===== 4. 聚合终结方法 =====
 
     public long count() {
-        RenderContext ctx = renderContext();
+        TableScope scope = tableScope();
         List<SqlNode> nodes = spec.distinct()
-                ? Projections.entity(rootType(), ctx).nodes()
+                ? Projections.entity(rootType(), scope).nodes()
                 : List.of(SqlNodes.raw("1"));
-        return executor.count(spec, nodes, false, ctx);
+        return executor.count(spec, nodes, false, scope);
     }
 
     public boolean exists() {
@@ -470,20 +480,33 @@ public final class Query<T> implements QueryScope {
         return select(Exprs.avg(column)).one();
     }
 
-    /** 渲染为不可变 {@link SqlStatement}（默认查询主表全部列）。 */
+    /** 构建未渲染的结构化 {@link AstStatement}（默认查询主表全部列）。 */
+    public AstStatement toAstStatement() {
+        return buildAstStatement(Projections.entity(rootType(), tableScope()));
+    }
+
+    public AstStatement toAstStatement(Class<?> type) {
+        return buildAstStatement(Projections.auto(type, tableScope()));
+    }
+
+    /** 离线编译为不可变物理 {@link SqlStatement}（默认查询主表全部列）。 */
     public SqlStatement toSqlStatement() {
-        return renderStatement(Projections.entity(rootType(), renderContext()));
+        return astBuilder.renderOffline(toAstStatement());
     }
 
     public SqlStatement toSqlStatement(Class<?> type) {
-        return renderStatement(Projections.auto(type, renderContext()));
+        return astBuilder.renderOffline(toAstStatement(type));
     }
 
     // ===== 内部桥接：Select1..SelectN 使用 =====
 
+    AstStatement buildAstStatement(Projection<?> projection) {
+        TableScope scope = projection.scope() != null ? projection.scope() : tableScope();
+        return astBuilder.buildSelectAst(spec, projection.nodes(), true, scope);
+    }
+
     SqlStatement renderStatement(Projection<?> projection) {
-        RenderContext ctx = projection.context() != null ? projection.context() : renderContext();
-        return renderer.renderStatement(spec, projection.nodes(), true, ctx);
+        return astBuilder.renderOffline(buildAstStatement(projection));
     }
 
     <V> List<V> executeList(Projection<V> projection) {

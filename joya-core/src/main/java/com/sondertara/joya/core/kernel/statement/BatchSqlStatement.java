@@ -1,31 +1,26 @@
 package com.sondertara.joya.core.kernel.statement;
 
-import org.jspecify.annotations.Nullable;
-
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
 /**
- * 批处理语句 —— 一等公民独立契约，不复用单条 {@link SqlStatement} 的逐值参数模型。
- * <p>
- * 设计要点：
+ * 不可变物理批处理语句契约 —— 编译完成后的批量执行载体。
+ *
+ * <p>设计要点：
  * <ul>
- *   <li>{@code sql} 为 SQL 模板，所有行共用。</li>
- *   <li>{@code columns} 为输入行 {@code Object[]} 的列级描述，整批共享，不逐值 new。</li>
- *   <li>{@code rows} 为行值，保持裸 {@code Object[]}，零额外包装。</li>
- *   <li>{@code slots} 为按最终 SQL {@code ?} 顺序排列的占位符绑定槽位（{@link BatchSlot.Row} 与 {@link BatchSlot.Const} 可任意交错）。</li>
- *   <li>{@code batchSize} 为单 {@code PreparedStatement} 内部分片 Flush 阈值（默认 1000）。</li>
- *   <li>{@code returnGeneratedKeys} 控制是否收集数据库生成的自增主键。</li>
+ *   <li>{@code sql} 为已编译的物理 SQL 模板，所有行共用；编译前的结构树由 {@link BatchAstStatement} 独立承载。</li>
+ *   <li>{@code columns} 为输入行 {@code Object[]} 的列级描述，整批共享。</li>
+ *   <li>{@code rows} 为裸 {@code Object[]} 行值列表，零逐值包装。</li>
+ *   <li>{@code slots} 为与 SQL {@code ?} 严格一一对应的绑定槽位列表（{@link BatchSlot.Row} 与 {@link BatchSlot.Const} 可任意交错）。</li>
  * </ul>
  *
- * @param sql                 SQL 模板（INSERT/UPDATE/DELETE）
- * @param columns             输入行的列级绑定描述（每列一个）
- * @param rows                行值（每行一个 {@code Object[]}，长度 = columns.size()）
- * @param metadata            语句元数据
- * @param batchSize           单次 executeBatch 分片行数阈值（&lt;= 0 时取默认 1000）
+ * @param sql                 物理 SQL 模板（INSERT/UPDATE/DELETE）
+ * @param columns             输入行的列级绑定描述
+ * @param rows                行值列表（每行长度等于 {@code columns.size()}）
+ * @param metadata            语句级元数据
+ * @param batchSize           单次 {@code executeBatch} 分片行数阈值（&lt;= 0 时取默认 1000）
  * @param returnGeneratedKeys 是否收集数据库生成的主键
- * @param ast                 框架生成语句的内部结构树；原生 SQL 为 {@code null}
  * @param slots               与 SQL {@code ?} 一一对应的绑定槽位列表（传 {@code null} 时按 {@code columns} 顺序默认生成）
  */
 public record BatchSqlStatement(
@@ -35,7 +30,6 @@ public record BatchSqlStatement(
         StatementMetadata metadata,
         int batchSize,
         boolean returnGeneratedKeys,
-        @Nullable SqlNode ast,
         List<BatchSlot> slots
 ) {
 
@@ -70,7 +64,7 @@ public record BatchSqlStatement(
         return List.copyOf(result);
     }
 
-    /** 派生替换 SQL 文本的新批处理语句；纯文本改写使 AST 失效，并校验占位符数与绑定槽位一致。 */
+    /** 派生替换 SQL 文本的新批处理语句，并校验占位符数与绑定槽位一致。 */
     public BatchSqlStatement withSql(String newSql) {
         Objects.requireNonNull(newSql, "batch sql must not be null");
         if (sql.equals(newSql)) {
@@ -82,20 +76,12 @@ public record BatchSqlStatement(
                     "Batch SQL placeholder count (" + placeholders + ") does not match slot count ("
                             + slots.size() + "): " + newSql);
         }
-        return new BatchSqlStatement(newSql, columns, rows, metadata, batchSize, returnGeneratedKeys,
-                null, slots);
-    }
-
-    /** 带 AST 的副本（AST 与 SQL 必须来自同一次渲染）。 */
-    public BatchSqlStatement withAst(@Nullable SqlNode newAst) {
-        return new BatchSqlStatement(sql, columns, rows, metadata, batchSize, returnGeneratedKeys,
-                newAst, slots);
+        return new BatchSqlStatement(newSql, columns, rows, metadata, batchSize, returnGeneratedKeys, slots);
     }
 
     /** 派生替换元数据（如注入 {@code dbType}）的新批处理语句。 */
     public BatchSqlStatement withMetadata(StatementMetadata newMetadata) {
-        return new BatchSqlStatement(sql, columns, rows, newMetadata, batchSize, returnGeneratedKeys,
-                ast, slots);
+        return new BatchSqlStatement(sql, columns, rows, newMetadata, batchSize, returnGeneratedKeys, slots);
     }
 
     /** 从无参数的原生 SQL 模板构造批处理语句。 */
@@ -110,7 +96,7 @@ public record BatchSqlStatement(
             cols.add(ColumnBinding.of("p" + (i + 1)));
         }
         return new BatchSqlStatement(template.sql(), cols, rows == null ? List.of() : rows,
-                template.metadata(), batchSize, false, null, defaultSlots(cols));
+                template.metadata(), batchSize, false, defaultSlots(cols));
     }
 
     /** 行数。 */

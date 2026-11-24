@@ -85,9 +85,6 @@ public sealed interface BatchSlot permits BatchSlot.Row, BatchSlot.Const {
     ) implements BatchSlot {
 
         public Const {
-            if (value instanceof RowRef) {
-                throw new IllegalArgumentException("BatchSlot.Const value must not be a BatchSlot.RowRef");
-            }
             name = name == null ? "" : name;
             Objects.requireNonNull(source, "source must not be null");
             Objects.requireNonNull(binder, "binder must not be null");
@@ -102,20 +99,6 @@ public sealed interface BatchSlot permits BatchSlot.Row, BatchSlot.Const {
         @Override
         public @Nullable Object resolveValue(Object @Nullable [] row) {
             return value;
-        }
-    }
-
-    /**
-     * 批量模板 AST 中的行参数引用标记（仅作为模板 {@code SqlNode.Param.value()} 的占位载荷）。
-     *
-     * @param rowIndex 对应每行 {@code Object[]} 的列下标
-     */
-    record RowRef(int rowIndex) {
-
-        public RowRef {
-            if (rowIndex < 0) {
-                throw new IllegalArgumentException("rowIndex must be >= 0: " + rowIndex);
-            }
         }
     }
 }

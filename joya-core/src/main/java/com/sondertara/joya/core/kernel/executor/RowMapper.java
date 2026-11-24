@@ -8,6 +8,7 @@ import java.sql.SQLException;
  *
  * @author huangxiaohu
  */
+@FunctionalInterface
 public interface RowMapper<T> {
 
     /**
@@ -15,8 +16,9 @@ public interface RowMapper<T> {
      *
      * @param record 当前定位到有效行的 {@link ResultSet}
      * @return 目标对象
+     * @throws SQLException 读取结果集列值失败时抛出，由执行器统一交由 {@code SqlExceptionTranslator} 翻译
      */
-    T map(ResultSet record);
+    T map(ResultSet record) throws SQLException;
 
     /**
      * 针对给定 {@link ResultSet} 预解析一次列元数据布局并返回绑定后的行映射器（多行查询/流式查询热路径优化）。

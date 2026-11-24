@@ -62,7 +62,6 @@ public class JdbcExecutor implements Executor {
     }
 
     private Connection guardConnection(Connection target) {
-        boolean transactionControlForbidden = !connections.allowsTransactionControl();
         return (Connection) Proxy.newProxyInstance(
                 Connection.class.getClassLoader(),
                 new Class<?>[]{Connection.class},
@@ -71,9 +70,9 @@ public class JdbcExecutor implements Executor {
                     if ("close".equals(name) || "abort".equals(name)) {
                         return null;
                     }
-                    if (transactionControlForbidden && isTransactionControlMethod(name)) {
+                    if (isTransactionControlMethod(name)) {
                         throw new UnsupportedOperationException(
-                                "Cannot invoke " + name + "() directly on a Joya-managed transactional Connection; "
+                                "Cannot invoke " + name + "() directly on a Joya-managed Connection; "
                                         + "use Tx APIs (commit / rollback / savepoint) instead");
                     }
                     if ("equals".equals(name)) {
@@ -163,34 +162,21 @@ public class JdbcExecutor implements Executor {
             final Connection capturedConn = conn;
             final PreparedStatement capturedPs = ps;
             final ResultSet capturedRs = rs;
-            ResultSetSpliterator.StreamAccess streamAccess = connections instanceof ResultSetSpliterator.StreamAccess access
-                    ? access
-                    : null;
-            java.util.concurrent.atomic.AtomicBoolean cleanedUp = new java.util.concurrent.atomic.AtomicBoolean();
-            java.util.concurrent.atomic.AtomicReference<Runnable> cleanupRef =
-                    new java.util.concurrent.atomic.AtomicReference<>();
-            Runnable cleanup = () -> {
-                if (cleanedUp.compareAndSet(false, true)) {
-                    closeStreamResources(
-                            capturedRs,
-                            capturedPs,
-                            capturedConn,
-                            streamAccess != null ? () -> streamAccess.onStreamClosed(cleanupRef.get()) : null);
+            boolean txManaged = connections.managesStreamLifecycle();
+            java.util.concurrent.atomic.AtomicBoolean resourcesClosed = new java.util.concurrent.atomic.AtomicBoolean();
+            Runnable closeJdbc = () -> {
+                if (resourcesClosed.compareAndSet(false, true)) {
+                    closeStreamResources(capturedRs, capturedPs, capturedConn, null);
                 }
             };
-            cleanupRef.set(cleanup);
-            // 流关闭时才归还连接；事务边界也可通过 StreamAccess 对称清理同一组资源。
-            Stream<T> stream = new ResultSetSpliterator<>(
+            Stream<T> rawStream = new ResultSetSpliterator<>(
                     capturedRs,
                     mapper,
-                    streamAccess,
-                    sqlEx -> exceptionTranslator.translate("queryStream", statement, sqlEx))
-                    .stream()
-                    .onClose(cleanup);
-            if (streamAccess != null) {
-                streamAccess.registerStream(cleanup);
-            }
-            return stream;
+                    connections::checkStreamAccess,
+                    sqlEx -> exceptionTranslator.translate("queryStream", statement, sqlEx),
+                    txManaged ? null : closeJdbc)
+                    .stream();
+            return connections.onStreamClose(rawStream, closeJdbc);
         } catch (Throwable t) {
             closeStreamResourcesOnError(rs, ps, conn, t);
             if (t instanceof RuntimeException re) {
@@ -281,6 +267,39 @@ public class JdbcExecutor implements Executor {
         });
     }
 
+    @Override
+    public BatchSlice batchExecuteExact(BatchSqlStatement batch) {
+        if (batch == null || batch.rowCount() == 0) {
+            return BatchSlice.EMPTY;
+        }
+        int expectedColumns = batch.columnCount();
+        List<BatchSlot> slots = batch.slots();
+        List<Object[]> rows = batch.rows();
+        int totalRows = rows.size();
+
+        SqlStatement probe = SqlStatement.of(batch.sql(), List.of(), batch.metadata());
+        return withConnection(probe, conn -> {
+            int[] allCounts = new int[totalRows];
+            var dbType = batch.metadata() != null ? batch.metadata().dbType() : null;
+            try (PreparedStatement ps = prepare(conn, batch.sql(), dbType, false)) {
+                for (int r = 0; r < totalRows; r++) {
+                    Object[] row = rows.get(r);
+                    if (row == null || row.length != expectedColumns) {
+                        throw new IllegalArgumentException("Batch row at index " + r
+                                + " has invalid parameter length (expected " + expectedColumns + ")");
+                    }
+                    ps.clearParameters();
+                    for (int s = 0; s < slots.size(); s++) {
+                        slots.get(s).bind(ps, s + 1, row, dbType);
+                    }
+                    applyQueryTimeout(ps);
+                    allCounts[r] = ps.executeUpdate();
+                }
+                return BatchSlice.of(allCounts, List.of());
+            }
+        });
+    }
+
     private static int flushChunk(
             PreparedStatement ps,
             int[] allCounts,
@@ -302,8 +321,11 @@ public class JdbcExecutor implements Executor {
         countOffset += available;
         if (wantKeys) {
             try (ResultSet keys = ps.getGeneratedKeys()) {
-                while (keys != null && keys.next()) {
-                    generatedKeys.add(extractGeneratedKey(keys, pkColumn));
+                if (keys != null && keys.next()) {
+                    int keyColIndex = resolveGeneratedKeyColumnIndex(keys, pkColumn);
+                    do {
+                        generatedKeys.add(keys.getObject(keyColIndex));
+                    } while (keys.next());
                 }
             } catch (SQLException | RuntimeException | AbstractMethodError ignored) {
                 // 部分驱动在 executeBatch 后不支持 getGeneratedKeys，优雅降级不阻断主流程
@@ -314,6 +336,10 @@ public class JdbcExecutor implements Executor {
     }
 
     private static @Nullable Object extractGeneratedKey(ResultSet keys, @Nullable String pkColumn) throws SQLException {
+        return keys.getObject(resolveGeneratedKeyColumnIndex(keys, pkColumn));
+    }
+
+    private static int resolveGeneratedKeyColumnIndex(ResultSet keys, @Nullable String pkColumn) {
         if (pkColumn != null && !pkColumn.isEmpty()) {
             try {
                 ResultSetMetaData metaData = keys.getMetaData();
@@ -322,7 +348,7 @@ public class JdbcExecutor implements Executor {
                         String label = metaData.getColumnLabel(i);
                         String name = metaData.getColumnName(i);
                         if (pkColumn.equalsIgnoreCase(label) || pkColumn.equalsIgnoreCase(name)) {
-                            return keys.getObject(i);
+                            return i;
                         }
                     }
                 }
@@ -330,7 +356,7 @@ public class JdbcExecutor implements Executor {
                 // 元数据不可用时回退到第 1 列
             }
         }
-        return keys.getObject(1);
+        return 1;
     }
 
     @Override
@@ -352,7 +378,7 @@ public class JdbcExecutor implements Executor {
                 runner.setErrorLogWriter(errorWriter);
                 runner.runScript(reader);
                 return null;
-            } catch (DbException e) {
+            } catch (RuntimeException e) {
                 throw e;
             } catch (Exception e) {
                 throw new DbException(e);

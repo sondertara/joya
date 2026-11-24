@@ -8,7 +8,6 @@ import com.sondertara.joya.core.SqlOps;
 import com.sondertara.joya.core.kernel.ExecutionKernel;
 import com.sondertara.joya.core.kernel.connection.ConnectionCallback;
 import com.sondertara.joya.core.kernel.connection.ConnectionProvider;
-import com.sondertara.joya.core.kernel.executor.ResultSetSpliterator;
 import com.sondertara.joya.core.kernel.statement.DbType;
 import com.sondertara.joya.core.kernel.statement.SqlStatement;
 import com.sondertara.joya.core.query.dsl.Query;
@@ -25,8 +24,11 @@ import java.util.List;
 import java.util.Objects;
 import java.util.OptionalInt;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.UnaryOperator;
+import java.util.stream.Stream;
 
 /**
  * {@link Tx} 的统一实现：绑定一个底层 {@link TxSession}（纯 JDBC {@link TxConnection} 或 Spring 事务会话）
@@ -45,7 +47,6 @@ public final class TxImpl implements Tx {
     private final List<Runnable> streamCloseActions = new ArrayList<>();
     private final Deque<List<Runnable>> savepointAfterCommitStack = new ArrayDeque<>();
     private TxOutcome outcome;
-    private int openTransactionalStreams;
     private boolean deferCompletionCallbacks;
     private boolean completionCallbacksFired;
 
@@ -70,7 +71,7 @@ public final class TxImpl implements Tx {
     }
 
     boolean hasTransactionalStreams() {
-        return openTransactionalStreams > 0;
+        return !streamCloseActions.isEmpty();
     }
 
     // ===== DataOps：事务视图 =====
@@ -78,6 +79,11 @@ public final class TxImpl implements Tx {
     @Override
     public <T> Query<T> from(Class<T> entityType) {
         return dataOps.from(entityType);
+    }
+
+    @Override
+    public <T> Query<T> from(Query<T> query) {
+        return dataOps.from(query);
     }
 
     @Override
@@ -402,6 +408,11 @@ public final class TxImpl implements Tx {
         }
 
         @Override
+        public <T> Query<T> from(Query<T> query) {
+            return viewDataOps.from(query);
+        }
+
+        @Override
         public <T> EntityOps<T> of(Class<T> entityType) {
             return viewDataOps.of(entityType);
         }
@@ -448,7 +459,7 @@ public final class TxImpl implements Tx {
         }
     }
 
-    private final class TransactionalConnectionProvider implements ConnectionProvider, ResultSetSpliterator.StreamAccess {
+    private final class TransactionalConnectionProvider implements ConnectionProvider {
         private final TxSession delegate;
         private final int overrideTimeoutSeconds;
 
@@ -508,22 +519,26 @@ public final class TxImpl implements Tx {
         }
 
         @Override
-        public void registerStream(Runnable closeAction) {
-            openTransactionalStreams++;
-            streamCloseActions.add(closeAction);
+        public boolean managesStreamLifecycle() {
+            return true;
         }
 
         @Override
-        public void onStreamClosed() {
-            if (openTransactionalStreams > 0) {
-                openTransactionalStreams--;
-            }
-        }
-
-        @Override
-        public void onStreamClosed(Runnable closeAction) {
-            onStreamClosed();
-            streamCloseActions.remove(closeAction);
+        public <T> Stream<T> onStreamClose(Stream<T> stream, Runnable cleanup) {
+            AtomicBoolean done = new AtomicBoolean();
+            AtomicReference<Runnable> holder = new AtomicReference<>();
+            Runnable hook = () -> {
+                if (done.compareAndSet(false, true)) {
+                    try {
+                        cleanup.run();
+                    } finally {
+                        streamCloseActions.remove(holder.get());
+                    }
+                }
+            };
+            holder.set(hook);
+            streamCloseActions.add(hook);
+            return stream.onClose(hook);
         }
     }
 

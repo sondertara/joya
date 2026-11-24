@@ -1,8 +1,9 @@
 package com.sondertara.joya.core.query;
 
 import com.sondertara.joya.core.function.IGetter;
+import com.sondertara.joya.core.kernel.statement.SqlFormatUtils;
+import com.sondertara.joya.core.kernel.statement.SqlNode;
 import com.sondertara.joya.core.kernel.statement.SqlParameter;
-import com.sondertara.joya.core.model.ColumnAlias;
 import com.sondertara.joya.utils.LambdaUtils;
 import org.jspecify.annotations.Nullable;
 
@@ -10,128 +11,165 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * 查询列/表达式（用于聚合函数与逃生通道，能与 {@link IGetter} 混在 {@code select(...)} 中）。
+ * 类型化 SQL 查询列与聚合表达式契约（密封代数类型，直接编译为结构化 {@link SqlNode}，零字符串预渲染）。
  *
- * <p>继承 {@link IGetter} 仅作为类型标记；不应在内存中作为函数调用，只由查询构建器通过 {@link #render(RenderContext)} 渲染。
+ * <p>实现 {@link IGetter} 仅作为投影/分组/排序 DSL 的编译期类型标记，禁止在内存中直接调用 {@link #apply(Object)}。
  *
- * @param <R> 表达式结果 Java 类型
+ * @param <R> 表达式结果的 Java 类型
  */
-public interface Expr<R> extends IGetter<Object, R> {
+public sealed interface Expr<R> extends IGetter<Object, R>
+        permits Expr.ColumnExpr, Expr.AggregateExpr, Expr.RawExpr {
 
-    /** 表达式结果的 Java 类型（用于按位置从 ResultSet 取值）。 */
+    /** 表达式结果的装箱 Java 类型。 */
     Class<R> resultType();
 
-    /** 把表达式渲染为 SQL 片段（不带 AS 别名）。 */
-    String render(RenderContext ctx);
-
-    /** 是否为聚合表达式；用于 count/分页判断，避免扫描渲染后的 SQL 文本。 */
+    /** 是否为聚合函数表达式（供 COUNT / 分页子查询判定）。 */
     default boolean isAggregate() {
         return false;
     }
 
-    /** 可选的列别名（用于 {@code list(X.class)} 按名字映射）。 */
+    /** 可选的投影列别名（用于 {@code list(X.class)} 按名称映射）。 */
     @Nullable
     default String alias() {
         return null;
     }
 
-    /** 可选的所属实体类型（当表达式为单列引用如 {@code dsl.Exprs.col(...)} 时返回对应实体类，其余返回 {@code null}）。 */
-    default @Nullable Class<?> entityClass() {
-        return null;
-    }
-
-    /** 可选的绑定表别名（当表达式由 {@code dsl.Exprs.col(tableAlias, ...)} 创建时返回该表别名）。 */
-    default @Nullable String tableAlias() {
-        return null;
-    }
-
-    /** 可选的结构化列元数据解析（供单列引用保留完整 {@link ColumnAlias}）。 */
-    default @Nullable ColumnAlias resolveColumnAlias(RenderContext ctx) {
-        return null;
-    }
-
-    /** 表达式绑定的参数列表（默认为空）。 */
-    default List<SqlParameter> parameters() {
-        return List.of();
-    }
+    /** 在给定符号作用域内解析为结构化 {@link SqlNode}（不含外层 {@code AS} 别名包装）。 */
+    SqlNode toNode(TableScope scope);
 
     /**
-     * 为表达式指定列别名（对应 {@code SELECT expr AS alias}）。
-     *
-     * <p>别名必须是合法纯标识符；非标识符（含分号、引号、空格、点号）一律拒绝，防止 SQL 注入。
+     * 为表达式指定投影列别名（{@code SELECT expr AS alias}）；非合法纯标识符立即拒绝以杜绝注入。
      */
-    default Expr<R> as(String alias) {
-        Objects.requireNonNull(alias, "alias must not be null");
-        String trimmed = alias.trim();
-        if (!ColumnMetaProvider.SAFE_ALIAS.matcher(trimmed).matches()) {
-            throw new IllegalArgumentException(
-                    "Invalid column alias (potential SQL injection rejected): " + alias);
-        }
-        Expr<R> self = this;
-        return new Expr<>() {
-            @Override
-            public Class<R> resultType() {
-                return self.resultType();
-            }
-
-            @Override
-            public String render(RenderContext ctx) {
-                return self.render(ctx);
-            }
-
-            @Override
-            public boolean isAggregate() {
-                return self.isAggregate();
-            }
-
-            @Override
-            public String alias() {
-                return trimmed;
-            }
-
-            @Override
-            public @Nullable Class<?> entityClass() {
-                return self.entityClass();
-            }
-
-            @Override
-            public @Nullable String tableAlias() {
-                return self.tableAlias();
-            }
-
-            @Override
-            public @Nullable ColumnAlias resolveColumnAlias(RenderContext ctx) {
-                return self.resolveColumnAlias(ctx);
-            }
-
-            @Override
-            public List<SqlParameter> parameters() {
-                return self.parameters();
-            }
-        };
-    }
+    Expr<R> as(String alias);
 
     /**
-     * 用目标 DTO 的属性 getter 作为列别名：{@code Exprs.count().as(OrderVO::getOrderCount)} → {@code AS orderCount}。
-     *
-     * <p>泛型参数 {@code R} 在编译期即约束目标属性类型与表达式结果类型一致；
-     * 仅在 raw type / 通配符擦除场景下由运行期兜底校验。
+     * 使用目标 DTO 方法引用指定类型安全列别名：{@code Exprs.count().as(OrderVO::getOrderCount)}。
      */
     default <D> Expr<R> as(IGetter<D, R> targetField) {
         Objects.requireNonNull(targetField, "targetField must not be null");
-        Class<?> expected = LambdaUtils.getReturnType(targetField);
+        LambdaUtils.LambdaMeta meta = LambdaUtils.resolve(targetField);
+        Class<?> expected = meta.returnType();
         Class<R> actual = resultType();
-        if (actual != null && expected != null && !actual.isAssignableFrom(LambdaUtils.boxed(expected))) {
+        if (actual != null && expected != null && !actual.isAssignableFrom(expected)) {
             throw new IllegalArgumentException(
-                    "Alias target [" + LambdaUtils.getReceiverClass(targetField).getSimpleName()
-                            + "::" + LambdaUtils.getPropertyName(targetField) + "] returns ["
+                    "Alias target [" + meta.receiverClass().getSimpleName()
+                            + "::" + meta.propertyName() + "] returns ["
                             + expected.getName() + "] but expression result type is [" + actual.getName() + "]");
         }
-        return as(LambdaUtils.getPropertyName(targetField));
+        return as(meta.propertyName());
     }
 
     @Override
     default R apply(Object source) {
         throw new UnsupportedOperationException("Expr is a SQL expression marker and cannot be invoked in memory");
+    }
+
+    private static String validateAlias(String alias) {
+        Objects.requireNonNull(alias, "alias must not be null");
+        String trimmed = alias.trim();
+        if (!ColumnMetaProvider.isSafeAlias(trimmed)) {
+            throw new IllegalArgumentException(
+                    "Invalid column alias (potential SQL injection rejected): " + alias);
+        }
+        return trimmed;
+    }
+
+    /** 绑定可选表别名的类型化实体列引用（对应 {@code Exprs.col(...)}）。 */
+    record ColumnExpr<R>(
+            Class<?> entityClass,
+            String propertyName,
+            @Nullable String tableAlias,
+            @Nullable String alias,
+            Class<R> resultType
+    ) implements Expr<R> {
+
+        public ColumnExpr {
+            Objects.requireNonNull(entityClass, "entityClass must not be null");
+            Objects.requireNonNull(propertyName, "propertyName must not be null");
+            Objects.requireNonNull(resultType, "resultType must not be null");
+        }
+
+        public TableScope.ResolvedColumn resolveColumn(TableScope scope) {
+            return tableAlias == null
+                    ? scope.resolveGetterColumn(entityClass, propertyName)
+                    : scope.resolveAliasedGetterColumn(tableAlias, entityClass, propertyName);
+        }
+
+        @Override
+        public SqlNode toNode(TableScope scope) {
+            return resolveColumn(scope).toNode();
+        }
+
+        @Override
+        public Expr<R> as(String newAlias) {
+            return new ColumnExpr<>(entityClass, propertyName, tableAlias, validateAlias(newAlias), resultType);
+        }
+    }
+
+    /** 结构化聚合函数表达式（{@code COUNT} / {@code MAX} / {@code MIN} / {@code SUM} / {@code AVG}）。 */
+    record AggregateExpr<R>(
+            String fn,
+            @Nullable ColumnMetaProvider column,
+            boolean distinct,
+            @Nullable String alias,
+            Class<R> resultType
+    ) implements Expr<R> {
+
+        public AggregateExpr {
+            Objects.requireNonNull(fn, "fn must not be null");
+            Objects.requireNonNull(resultType, "resultType must not be null");
+        }
+
+        @Override
+        public boolean isAggregate() {
+            return true;
+        }
+
+        @Override
+        public SqlNode toNode(TableScope scope) {
+            if (column == null) {
+                return new SqlNode.Func(fn, false, true, List.of());
+            }
+            return new SqlNode.Func(fn, distinct, false, List.of(column.resolveNode(scope)));
+        }
+
+        @Override
+        public Expr<R> as(String newAlias) {
+            return new AggregateExpr<>(fn, column, distinct, validateAlias(newAlias), resultType);
+        }
+    }
+
+    /** 参数化原生 SQL 表达式逃生通道（对应 {@code Exprs.raw(...)}）。 */
+    record RawExpr<R>(
+            String jdbcSql,
+            List<SqlParameter> parameters,
+            boolean aggregate,
+            @Nullable String alias,
+            Class<R> resultType
+    ) implements Expr<R> {
+
+        public RawExpr {
+            Objects.requireNonNull(jdbcSql, "jdbcSql must not be null");
+            parameters = parameters == null ? List.of() : List.copyOf(parameters);
+            Objects.requireNonNull(resultType, "resultType must not be null");
+        }
+
+        @Override
+        public boolean isAggregate() {
+            return aggregate;
+        }
+
+        @Override
+        public SqlNode toNode(TableScope scope) {
+            String rendered = !scope.isAliased()
+                    ? SqlFormatUtils.stripTableAlias(jdbcSql)
+                    : jdbcSql;
+            return new SqlNode.Raw(rendered, parameters);
+        }
+
+        @Override
+        public Expr<R> as(String newAlias) {
+            return new RawExpr<>(jdbcSql, parameters, aggregate, validateAlias(newAlias), resultType);
+        }
     }
 }

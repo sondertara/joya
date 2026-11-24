@@ -1,42 +1,212 @@
 package com.sondertara.joya.core.kernel.statement;
 
+import com.sondertara.joya.core.naming.NamingPolicy;
 import org.jspecify.annotations.Nullable;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 
 /**
- * 统一 SQL 文本渲染器 —— 全仓唯一负责把 {@link SqlNode} 结构树渲染为标准 DQL / DML SQL 字符串的组件。
+ * 统一单趟流式 SQL 渲染器 —— 全仓唯一把 {@link SqlNode} 结构树编译为物理 SQL 与参数/批槽位的组件。
  *
- * <p>各 {@code *StatementFactory} 与查询 DSL 只负责构建结构化 {@link SqlNode}，
- * 最终 SQL 文本与有序参数统一交由 {@link #render(SqlNode, StatementMetadata)} 单点生成，
- * 消除单条、批处理、查询流之间的双轨拼接。
- *
- * <p><b>能力边界</b>：方言层的分页 / 计数包装（{@code kernel.dialect}）属于数据库特有语法，
- * 仍由各方言自行拼接，不在本类职责内。
+ * <p>核心特性：
+ * <ul>
+ *   <li><b>单 {@link StringBuilder} 直写</b>：消除逐子句、逐列的临时字符串与集合拷贝；</li>
+ *   <li><b>渲染期统一格式化</b>：列标识符在此处按 {@link NamingPolicy} 统一施加大小写与引号转义，
+ *       使 {@code SqlRewriter} 新增的列自动继承客户端命名策略；</li>
+ *   <li><b>单条与批量同源单趟编译</b>：在遍历 AST 的同时完成参数收集或 {@link BatchSlot} 槽位编译，
+ *       仅对显式 {@link SqlNode.Raw} 片段校验占位符计数，纯 AST 节点零二次词法扫描。</li>
+ * </ul>
  */
 public final class SqlRenderer {
 
     private SqlRenderer() {
     }
 
-    /**
-     * 把 AST 渲染为不可变 {@link SqlStatement}；参数按遍历顺序统一重排。
-     */
+    /** 按默认命名策略把 AST 编译为不可变 {@link SqlStatement}。 */
     public static SqlStatement render(SqlNode node, StatementMetadata metadata) {
-        SqlParameterList params = new SqlParameterList();
-        StringBuilder sql = new StringBuilder();
-        DbType dbType = metadata != null ? metadata.dbType() : null;
-        renderNode(node, sql, params, dbType);
-        return SqlStatement.of(sql.toString(), params.toList(), metadata, node);
+        return render(node, metadata, NamingPolicy.DEFAULT);
     }
 
-    private static void renderNode(SqlNode node, StringBuilder sql, SqlParameterList params, @Nullable DbType dbType) {
+    /** 按指定命名策略把 AST 编译为不可变 {@link SqlStatement}。 */
+    public static SqlStatement render(SqlNode node, StatementMetadata metadata, @Nullable NamingPolicy namingPolicy) {
+        Objects.requireNonNull(node, "node must not be null");
+        StatementMetadata effectiveMeta = metadata == null ? StatementMetadata.empty() : metadata;
+        NamingPolicy policy = namingPolicy == null ? NamingPolicy.DEFAULT : namingPolicy;
+        DbType dbType = effectiveMeta.dbType();
+        StringBuilder sql = new StringBuilder(128);
+        SingleParamSink sink = new SingleParamSink(dbType);
+        renderNode(node, sql, sink, policy, dbType);
+        return SqlStatement.of(sql.toString(), sink.toList(), effectiveMeta);
+    }
+
+    /** 按指定命名策略把 {@link AstStatement} 编译为不可变 {@link SqlStatement}。 */
+    public static SqlStatement render(AstStatement statement, @Nullable NamingPolicy namingPolicy) {
+        Objects.requireNonNull(statement, "statement must not be null");
+        return render(statement.ast(), statement.metadata(), namingPolicy);
+    }
+
+    /** 按指定命名策略把 {@link BatchAstStatement} 单趟编译为不可变物理 {@link BatchSqlStatement}。 */
+    public static BatchSqlStatement render(BatchAstStatement batch, @Nullable NamingPolicy namingPolicy) {
+        Objects.requireNonNull(batch, "batch must not be null");
+        NamingPolicy policy = namingPolicy == null ? NamingPolicy.DEFAULT : namingPolicy;
+        DbType dbType = batch.metadata().dbType();
+        StringBuilder sql = new StringBuilder(128);
+        BatchSlotSink sink = new BatchSlotSink(batch.columns(), dbType);
+        renderNode(batch.ast(), sql, sink, policy, dbType);
+        List<BatchSlot> slots = sink.finish();
+        return new BatchSqlStatement(
+                sql.toString(),
+                batch.columns(),
+                batch.rows(),
+                batch.metadata(),
+                batch.batchSize(),
+                batch.returnGeneratedKeys(),
+                slots);
+    }
+
+    private interface ParamSink {
+        void onParam(String name, SqlNode.Param.Binding binding, ParameterSource source);
+
+        void onRaw(SqlNode.Raw raw);
+    }
+
+    private static final class SingleParamSink implements ParamSink {
+        private final @Nullable DbType dbType;
+        private List<SqlParameter> params;
+
+        SingleParamSink(@Nullable DbType dbType) {
+            this.dbType = dbType;
+        }
+
+        @Override
+        public void onParam(String name, SqlNode.Param.Binding binding, ParameterSource source) {
+            if (binding instanceof SqlNode.Param.RowSlot slot) {
+                throw new IllegalStateException(
+                        "Batch template parameter RowSlot(" + slot.rowIndex()
+                                + ") must not appear in a single-row SqlStatement");
+            }
+            Object value = ((SqlNode.Param.Bound) binding).value();
+            if (params == null) {
+                params = new ArrayList<>(8);
+            }
+            int idx = params.size() + 1;
+            String effectiveName = (name == null || name.isBlank()) ? "p" + idx : name;
+            params.add(SqlParameter.of(idx, effectiveName, value, source));
+        }
+
+        @Override
+        public void onRaw(SqlNode.Raw raw) {
+            validateRawPlaceholders(raw, dbType);
+            List<SqlParameter> rawParams = raw.parameters();
+            if (rawParams.isEmpty()) {
+                return;
+            }
+            if (params == null) {
+                params = new ArrayList<>(Math.max(8, rawParams.size()));
+            }
+            for (SqlParameter p : rawParams) {
+                int idx = params.size() + 1;
+                params.add(SqlParameter.of(idx, p.name(), p.value(), p.source(), p.binder()));
+            }
+        }
+
+        List<SqlParameter> toList() {
+            return params == null ? List.of() : List.copyOf(params);
+        }
+    }
+
+    private static final class BatchSlotSink implements ParamSink {
+        private final List<ColumnBinding> columns;
+        private final boolean[] seenRow;
+        private final @Nullable DbType dbType;
+        private final List<BatchSlot> slots;
+        private int seenCount;
+
+        BatchSlotSink(List<ColumnBinding> columns, @Nullable DbType dbType) {
+            this.columns = columns;
+            this.seenRow = new boolean[columns.size()];
+            this.dbType = dbType;
+            this.slots = new ArrayList<>(columns.size() + 2);
+        }
+
+        @Override
+        public void onParam(String name, SqlNode.Param.Binding binding, ParameterSource source) {
+            if (binding instanceof SqlNode.Param.RowSlot slot) {
+                int idx = slot.rowIndex();
+                int baseCount = columns.size();
+                if (idx < 0 || idx >= baseCount) {
+                    throw new IllegalStateException(
+                            "Batch template referenced out-of-bounds row column index " + idx
+                                    + " (column count=" + baseCount + ")");
+                }
+                if (seenRow[idx]) {
+                    throw new IllegalStateException(
+                            "Batch template must not duplicate base row parameter '"
+                                    + columns.get(idx).name() + "'");
+                }
+                seenRow[idx] = true;
+                seenCount++;
+                slots.add(new BatchSlot.Row(idx, columns.get(idx), source));
+            } else {
+                Object value = ((SqlNode.Param.Bound) binding).value();
+                appendConstSlot(name, value, source, null);
+            }
+        }
+
+        @Override
+        public void onRaw(SqlNode.Raw raw) {
+            validateRawPlaceholders(raw, dbType);
+            for (SqlParameter p : raw.parameters()) {
+                appendConstSlot(p.name(), p.value(), p.source(), p.binder());
+            }
+        }
+
+        private void appendConstSlot(String name, @Nullable Object value, ParameterSource source,
+                                     @Nullable ParameterBinder binder) {
+            String effectiveName = (name == null || name.isBlank()) ? "const_" + (slots.size() + 1) : name;
+            slots.add(new BatchSlot.Const(effectiveName, value, source,
+                    Objects.requireNonNullElse(binder, ParameterBinder.DEFAULT)));
+        }
+
+        List<BatchSlot> finish() {
+            int baseCount = columns.size();
+            if (seenCount != baseCount) {
+                for (int i = 0; i < baseCount; i++) {
+                    if (!seenRow[i]) {
+                        throw new IllegalStateException(
+                                "Batch template missing base row parameter '"
+                                        + columns.get(i).name() + "' at index " + i);
+                    }
+                }
+            }
+            return List.copyOf(slots);
+        }
+    }
+
+    private static void validateRawPlaceholders(SqlNode.Raw raw, @Nullable DbType dbType) {
+        int placeholders = SqlFormatUtils.countPlaceholders(raw.sql(), dbType);
+        int provided = raw.parameters().size();
+        if (placeholders != provided) {
+            throw new IllegalArgumentException(
+                    "SQL placeholder count (" + placeholders + ") does not match parameter count ("
+                            + provided + ") in Raw node: " + raw.sql());
+        }
+    }
+
+    private static String formatColumn(String columnName, NamingPolicy policy) {
+        if ("*".equals(columnName)) {
+            return "*";
+        }
+        return Objects.requireNonNullElse(policy.formatColumn(columnName), columnName);
+    }
+
+    private static void renderNode(SqlNode node, StringBuilder sql, ParamSink sink,
+                                   NamingPolicy policy, @Nullable DbType dbType) {
         if (node instanceof SqlNode.Raw raw) {
             sql.append(raw.sql());
-            for (SqlParameter parameter : raw.parameters()) {
-                params.add(parameter);
-            }
+            sink.onRaw(raw);
             return;
         }
         if (node instanceof SqlNode.Table table) {
@@ -50,63 +220,69 @@ public final class SqlRenderer {
             if (column.table() != null && !column.table().alias().isBlank()) {
                 sql.append(column.table().alias()).append('.');
             }
-            sql.append(column.name());
+            sql.append(formatColumn(column.name(), policy));
             return;
         }
         if (node instanceof SqlNode.Param param) {
             sql.append('?');
-            params.add(param.name(), param.value(), param.source());
+            sink.onParam(param.name(), param.binding(), param.source());
             return;
         }
-        if (node instanceof SqlNode.Binary binary) {
-            renderOperand(binary.left(), binary.op(), sql, params, dbType);
-            if (binary.left() != null) {
-                sql.append(' ').append(binary.op()).append(' ');
-            }
-            renderOperand(binary.right(), binary.op(), sql, params, dbType);
-            return;
-        }
-        if (node instanceof SqlNode.Between between) {
-            renderNode(between.value(), sql, params, dbType);
-            sql.append(between.negated() ? " NOT BETWEEN " : " BETWEEN ");
-            renderNode(between.lower(), sql, params, dbType);
-            sql.append(" AND ");
-            renderNode(between.upper(), sql, params, dbType);
-            return;
-        }
-        if (node instanceof SqlNode.In in) {
-            renderNode(in.value(), sql, params, dbType);
-            sql.append(in.negated() ? " NOT IN (" : " IN (");
-            for (int i = 0; i < in.values().size(); i++) {
-                if (i > 0) {
-                    sql.append(", ");
+        if (node instanceof SqlNode.Func func) {
+            sql.append(func.name()).append('(');
+            if (func.star()) {
+                sql.append('*');
+            } else {
+                if (func.distinct()) {
+                    sql.append("DISTINCT ");
                 }
-                renderNode(in.values().get(i), sql, params, dbType);
+                renderSeparated(func.args(), sql, sink, policy, dbType);
             }
             sql.append(')');
             return;
         }
+        if (node instanceof SqlNode.Binary binary) {
+            renderOperand(binary.left(), binary.op(), false, sql, sink, policy, dbType);
+            sql.append(' ').append(binary.op().symbol()).append(' ');
+            renderOperand(binary.right(), binary.op(), true, sql, sink, policy, dbType);
+            return;
+        }
+        if (node instanceof SqlNode.Between between) {
+            renderNode(between.value(), sql, sink, policy, dbType);
+            sql.append(between.negated() ? " NOT BETWEEN " : " BETWEEN ");
+            renderNode(between.lower(), sql, sink, policy, dbType);
+            sql.append(" AND ");
+            renderNode(between.upper(), sql, sink, policy, dbType);
+            return;
+        }
+        if (node instanceof SqlNode.In in) {
+            renderNode(in.value(), sql, sink, policy, dbType);
+            sql.append(in.negated() ? " NOT IN (" : " IN (");
+            renderSeparated(in.values(), sql, sink, policy, dbType);
+            sql.append(')');
+            return;
+        }
         if (node instanceof SqlNode.Unary unary) {
-            renderNode(unary.operand(), sql, params, dbType);
-            sql.append(' ').append(unary.op());
+            renderNode(unary.operand(), sql, sink, policy, dbType);
+            sql.append(' ').append(unary.op().sql());
             return;
         }
         if (node instanceof SqlNode.Like like) {
-            renderNode(like.value(), sql, params, dbType);
+            renderNode(like.value(), sql, sink, policy, dbType);
             sql.append(like.negated() ? " NOT LIKE " : " LIKE ");
-            renderNode(like.pattern(), sql, params, dbType);
+            renderNode(like.pattern(), sql, sink, policy, dbType);
             if (like.escaped()) {
                 sql.append(dbType != null && dbType.isLikeMysql() ? " ESCAPE '\\\\'" : " ESCAPE '\\'");
             }
             return;
         }
         if (node instanceof SqlNode.Order order) {
-            renderNode(order.expression(), sql, params, dbType);
-            sql.append(' ').append(order.direction());
+            renderNode(order.expression(), sql, sink, policy, dbType);
+            sql.append(' ').append(order.direction().name());
             return;
         }
         if (node instanceof SqlNode.Alias alias) {
-            renderNode(alias.expression(), sql, params, dbType);
+            renderNode(alias.expression(), sql, sink, policy, dbType);
             if (!alias.alias().isBlank()) {
                 sql.append(" AS ").append(alias.alias());
             }
@@ -114,152 +290,128 @@ public final class SqlRenderer {
         }
         if (node instanceof SqlNode.Group group) {
             sql.append('(');
-            renderNode(group.body(), sql, params, dbType);
+            renderNode(group.body(), sql, sink, policy, dbType);
             sql.append(')');
             return;
         }
         if (node instanceof SqlNode.Assignment assignment) {
-            sql.append(assignment.column()).append(" = ");
-            renderNode(assignment.value(), sql, params, dbType);
+            sql.append(formatColumn(assignment.column(), policy)).append(" = ");
+            renderNode(assignment.value(), sql, sink, policy, dbType);
             return;
         }
         if (node instanceof SqlNode.From from) {
-            renderNode(from.root(), sql, params, dbType);
+            renderNode(from.root(), sql, sink, policy, dbType);
             for (SqlNode.Join join : from.joins()) {
-                sql.append(' ').append(join.type()).append(' ');
-                renderNode(join.table(), sql, params, dbType);
+                sql.append(' ').append(join.kind().sql()).append(' ');
+                renderNode(join.table(), sql, sink, policy, dbType);
                 sql.append(" ON ");
-                renderNode(join.on(), sql, params, dbType);
+                renderNode(join.on(), sql, sink, policy, dbType);
             }
             return;
         }
         if (node instanceof SqlNode.Join join) {
-            sql.append(join.type()).append(' ');
-            renderNode(join.table(), sql, params, dbType);
+            sql.append(join.kind().sql()).append(' ');
+            renderNode(join.table(), sql, sink, policy, dbType);
             sql.append(" ON ");
-            renderNode(join.on(), sql, params, dbType);
+            renderNode(join.on(), sql, sink, policy, dbType);
             return;
         }
         if (node instanceof SqlNode.Count count) {
-            StringBuilder inner = new StringBuilder();
-            renderNode(count.select().withLockMode(LockMode.NONE), inner, params, dbType);
-            String alias = uniqueCountAlias(inner);
-            sql.append("SELECT COUNT(*) FROM (").append(inner).append(") ").append(alias);
+            sql.append("SELECT COUNT(*) FROM (");
+            int innerStart = sql.length();
+            renderSelectNode(count.select(), false, sql, sink, policy, dbType);
+            String alias = SqlFormatUtils.chooseUniqueIdentifier(sql.subSequence(innerStart, sql.length()), "TEMP_T");
+            sql.append(") ").append(alias);
             return;
         }
         if (node instanceof SqlNode.Select select) {
-            renderSelectNode(select, sql, params, dbType);
+            renderSelectNode(select, true, sql, sink, policy, dbType);
             return;
         }
         if (node instanceof SqlNode.Insert insert) {
-            renderInsertNode(insert, sql, params, dbType);
+            renderInsertNode(insert, sql, sink, policy, dbType);
             return;
         }
         if (node instanceof SqlNode.Upsert upsert) {
-            renderUpsertNode(upsert, sql, params, dbType);
+            renderUpsertNode(upsert, sql, sink, policy, dbType);
             return;
         }
         if (node instanceof SqlNode.Update update) {
-            renderUpdateNode(update, sql, params, dbType);
+            renderUpdateNode(update, sql, sink, policy, dbType);
             return;
         }
         if (node instanceof SqlNode.Delete delete) {
-            renderDeleteNode(delete, sql, params, dbType);
+            renderDeleteNode(delete, sql, sink, policy, dbType);
             return;
         }
         if (node instanceof SqlNode.Truncate truncate) {
             sql.append("TRUNCATE TABLE ");
-            renderNode(truncate.table(), sql, params, dbType);
+            renderNode(truncate.table(), sql, sink, policy, dbType);
             return;
         }
         throw new IllegalStateException("Unknown SqlNode: " + node.getClass().getName());
     }
 
-    /** 计数包装别名：避免与内层查询中的同名表/CTE/列冲突。 */
-    private static String uniqueCountAlias(CharSequence inner) {
-        String candidate = "TEMP_T";
-        int suffix = 1;
-        while (containsIdentifier(inner, candidate)) {
-            candidate = "TEMP_T_" + suffix++;
-        }
-        return candidate;
-    }
-
-    private static boolean containsIdentifier(CharSequence sql, String identifier) {
-        String text = sql.toString();
-        int from = 0;
-        while (true) {
-            int index = text.toLowerCase(java.util.Locale.ROOT)
-                    .indexOf(identifier.toLowerCase(java.util.Locale.ROOT), from);
-            if (index < 0) {
-                return false;
+    private static void renderSeparated(List<SqlNode> nodes, StringBuilder sql, ParamSink sink,
+                                        NamingPolicy policy, @Nullable DbType dbType) {
+        for (int i = 0; i < nodes.size(); i++) {
+            if (i > 0) {
+                sql.append(", ");
             }
-            boolean left = index == 0 || !isIdentifierPart(text.charAt(index - 1));
-            int end = index + identifier.length();
-            boolean right = end == text.length() || !isIdentifierPart(text.charAt(end));
-            if (left && right) {
-                return true;
-            }
-            from = index + 1;
+            renderNode(nodes.get(i), sql, sink, policy, dbType);
         }
     }
 
-    private static boolean isIdentifierPart(char c) {
-        return Character.isLetterOrDigit(c) || c == '_' || c == '$' || c == '#';
-    }
-
-    private static void renderOperand(@Nullable SqlNode operand, String parentOp,
-                                      StringBuilder sql, SqlParameterList params, @Nullable DbType dbType) {
-        if (operand == null) {
-            return;
-        }
+    private static void renderOperand(SqlNode operand, SqlNode.BinaryOp parentOp, boolean rightSide,
+                                      StringBuilder sql, ParamSink sink,
+                                      NamingPolicy policy, @Nullable DbType dbType) {
         boolean wrap = operand instanceof SqlNode.Binary child
-                && precedence(child.op()) < precedence(parentOp);
+                && parentOp.requiresParens(child.op(), rightSide);
         if (wrap) {
             sql.append('(');
         }
-        renderNode(operand, sql, params, dbType);
+        renderNode(operand, sql, sink, policy, dbType);
         if (wrap) {
             sql.append(')');
         }
     }
 
-    private static int precedence(String op) {
-        if ("OR".equalsIgnoreCase(op)) {
-            return 1;
-        }
-        if ("AND".equalsIgnoreCase(op)) {
-            return 2;
-        }
-        return 3;
-    }
-
-    private static void renderSelectNode(SqlNode.Select select, StringBuilder sql,
-                                         SqlParameterList params, @Nullable DbType dbType) {
-        String selectPart = renderList(select.projections(), params, dbType);
-        String fromPart = renderFragment(select.from(), params, dbType);
-        String wherePart = select.where() == null ? null : renderFragment(select.where(), params, dbType);
-        String groupByPart = select.groupBy().isEmpty() ? null : renderList(select.groupBy(), params, dbType);
-        String havingPart = select.having() == null ? null : renderFragment(select.having(), params, dbType);
-        String orderByPart = select.orderBy().isEmpty() ? null : renderList(select.orderBy(), params, dbType);
+    private static void renderSelectNode(SqlNode.Select select, boolean includeLock,
+                                         StringBuilder sql, ParamSink sink,
+                                         NamingPolicy policy, @Nullable DbType dbType) {
         sql.append("SELECT ");
         if (select.distinct()) {
             sql.append("DISTINCT ");
         }
-        sql.append(selectPart).append(" FROM ").append(fromPart);
-        if (notBlank(wherePart)) {
-            sql.append(" WHERE ").append(wherePart);
+        renderSeparated(select.projections(), sql, sink, policy, dbType);
+        sql.append(" FROM ");
+        renderNode(select.from(), sql, sink, policy, dbType);
+        appendClause(" WHERE ", select.where(), sql, sink, policy, dbType);
+        if (!select.groupBy().isEmpty()) {
+            sql.append(" GROUP BY ");
+            renderSeparated(select.groupBy(), sql, sink, policy, dbType);
         }
-        if (notBlank(groupByPart)) {
-            sql.append(" GROUP BY ").append(groupByPart);
+        appendClause(" HAVING ", select.having(), sql, sink, policy, dbType);
+        if (!select.orderBy().isEmpty()) {
+            sql.append(" ORDER BY ");
+            renderSeparated(select.orderBy(), sql, sink, policy, dbType);
         }
-        if (notBlank(havingPart)) {
-            sql.append(" HAVING ").append(havingPart);
+        if (includeLock) {
+            renderLockClause(select.lockMode(), sql, dbType);
         }
-        if (notBlank(orderByPart)) {
-            sql.append(" ORDER BY ").append(orderByPart);
+    }
+
+    private static void appendClause(String prefix, @Nullable SqlNode clause,
+                                     StringBuilder sql, ParamSink sink,
+                                     NamingPolicy policy, @Nullable DbType dbType) {
+        if (clause == null) {
+            return;
         }
-        renderLockClause(select.lockMode(), sql, dbType);
+        if (clause instanceof SqlNode.Raw raw && raw.sql().isBlank()) {
+            return;
+        }
+        sql.append(prefix);
+        renderNode(clause, sql, sink, policy, dbType);
     }
 
     private static void renderLockClause(LockMode lockMode, StringBuilder sql, @Nullable DbType dbType) {
@@ -278,117 +430,109 @@ public final class SqlRenderer {
         }
     }
 
-    private static void renderInsertNode(SqlNode.Insert insert, StringBuilder sql,
-                                         SqlParameterList params, @Nullable DbType dbType) {
-        String table = renderFragment(insert.table(), params, dbType);
-        if (insert.columns().isEmpty()) {
-            sql.append("INSERT INTO ").append(table).append(" DEFAULT VALUES");
+    private static void renderInsertNode(SqlNode.Insert insert, StringBuilder sql, ParamSink sink,
+                                         NamingPolicy policy, @Nullable DbType dbType) {
+        sql.append("INSERT INTO ");
+        renderNode(insert.table(), sql, sink, policy, dbType);
+        List<String> columns = insert.columns();
+        if (columns.isEmpty()) {
+            sql.append(" DEFAULT VALUES");
             return;
         }
-        sql.append("INSERT INTO ").append(table)
-                .append(" (").append(String.join(", ", insert.columns())).append(") VALUES ");
-        renderValues(insert.rows(), sql, params, dbType);
+        sql.append(" (");
+        appendFormattedColumns(columns, sql, policy);
+        sql.append(") VALUES ");
+        renderValues(insert.rows(), sql, sink, policy, dbType);
     }
 
-    private static void renderUpsertNode(SqlNode.Upsert upsert, StringBuilder sql,
-                                         SqlParameterList params, @Nullable DbType dbType) {
+    private static void appendFormattedColumns(List<String> columns, StringBuilder sql, NamingPolicy policy) {
+        for (int i = 0; i < columns.size(); i++) {
+            if (i > 0) {
+                sql.append(", ");
+            }
+            sql.append(formatColumn(columns.get(i), policy));
+        }
+    }
+
+    private static void renderUpsertNode(SqlNode.Upsert upsert, StringBuilder sql, ParamSink sink,
+                                         NamingPolicy policy, @Nullable DbType dbType) {
         SqlNode.Insert insert = upsert.insert();
+        String keyCol = formatColumn(upsert.keyColumn(), policy);
         if (upsert.style() == UpsertStyle.MERGE) {
             sql.append("MERGE INTO ");
-            renderNode(insert.table(), sql, params, dbType);
-            sql.append(" (").append(String.join(", ", insert.columns())).append(") KEY (")
-                    .append(upsert.keyColumn()).append(") VALUES ");
-            renderValues(insert.rows(), sql, params, dbType);
+            renderNode(insert.table(), sql, sink, policy, dbType);
+            sql.append(" (");
+            appendFormattedColumns(insert.columns(), sql, policy);
+            sql.append(") KEY (").append(keyCol).append(") VALUES ");
+            renderValues(insert.rows(), sql, sink, policy, dbType);
             return;
         }
-        renderInsertNode(insert, sql, params, dbType);
+        renderInsertNode(insert, sql, sink, policy, dbType);
         List<String> updateColumns = upsert.updateColumns();
         if (upsert.style() == UpsertStyle.ON_CONFLICT) {
             if (updateColumns.isEmpty()) {
-                sql.append(" ON CONFLICT (").append(upsert.keyColumn()).append(") DO NOTHING");
+                sql.append(" ON CONFLICT (").append(keyCol).append(") DO NOTHING");
                 return;
             }
-            sql.append(" ON CONFLICT (").append(upsert.keyColumn()).append(") DO UPDATE SET ");
+            sql.append(" ON CONFLICT (").append(keyCol).append(") DO UPDATE SET ");
             for (int i = 0; i < updateColumns.size(); i++) {
                 if (i > 0) {
                     sql.append(", ");
                 }
-                sql.append(updateColumns.get(i)).append(" = EXCLUDED.").append(updateColumns.get(i));
+                String col = formatColumn(updateColumns.get(i), policy);
+                sql.append(col).append(" = EXCLUDED.").append(col);
             }
             return;
         }
         if (upsert.style() == UpsertStyle.ON_DUPLICATE_KEY) {
             sql.append(" ON DUPLICATE KEY UPDATE ");
             if (updateColumns.isEmpty()) {
-                sql.append(upsert.keyColumn()).append(" = ").append(upsert.keyColumn());
+                sql.append(keyCol).append(" = ").append(keyCol);
                 return;
             }
             for (int i = 0; i < updateColumns.size(); i++) {
                 if (i > 0) {
                     sql.append(", ");
                 }
-                sql.append(updateColumns.get(i)).append(" = VALUES(").append(updateColumns.get(i)).append(')');
+                String col = formatColumn(updateColumns.get(i), policy);
+                sql.append(col).append(" = VALUES(").append(col).append(')');
             }
             return;
         }
         throw new IllegalStateException("Unsupported upsert style: " + upsert.style());
     }
 
-    private static void renderValues(List<List<SqlNode>> rows, StringBuilder sql,
-                                     SqlParameterList params, @Nullable DbType dbType) {
+    private static void renderValues(List<List<SqlNode>> rows, StringBuilder sql, ParamSink sink,
+                                     NamingPolicy policy, @Nullable DbType dbType) {
         for (int rowIndex = 0; rowIndex < rows.size(); rowIndex++) {
             if (rowIndex > 0) {
                 sql.append(", ");
             }
             sql.append('(');
-            List<SqlNode> row = rows.get(rowIndex);
-            for (int i = 0; i < row.size(); i++) {
-                if (i > 0) {
-                    sql.append(", ");
-                }
-                renderNode(row.get(i), sql, params, dbType);
-            }
+            renderSeparated(rows.get(rowIndex), sql, sink, policy, dbType);
             sql.append(')');
         }
     }
 
-    private static void renderUpdateNode(SqlNode.Update update, StringBuilder sql,
-                                         SqlParameterList params, @Nullable DbType dbType) {
-        sql.append("UPDATE ").append(renderFragment(update.table(), params, dbType)).append(" SET ");
-        for (int i = 0; i < update.assignments().size(); i++) {
+    private static void renderUpdateNode(SqlNode.Update update, StringBuilder sql, ParamSink sink,
+                                         NamingPolicy policy, @Nullable DbType dbType) {
+        sql.append("UPDATE ");
+        renderNode(update.table(), sql, sink, policy, dbType);
+        sql.append(" SET ");
+        List<SqlNode.Assignment> assignments = update.assignments();
+        for (int i = 0; i < assignments.size(); i++) {
             if (i > 0) {
                 sql.append(", ");
             }
-            renderNode(update.assignments().get(i), sql, params, dbType);
+            renderNode(assignments.get(i), sql, sink, policy, dbType);
         }
-        if (update.where() != null) {
-            sql.append(" WHERE ").append(renderFragment(update.where(), params, dbType));
-        }
+        appendClause(" WHERE ", update.where(), sql, sink, policy, dbType);
     }
 
-    private static void renderDeleteNode(SqlNode.Delete delete, StringBuilder sql,
-                                         SqlParameterList params, @Nullable DbType dbType) {
-        sql.append("DELETE FROM ").append(renderFragment(delete.table(), params, dbType));
-        if (delete.where() != null) {
-            sql.append(" WHERE ").append(renderFragment(delete.where(), params, dbType));
-        }
-    }
-
-    private static String renderList(List<SqlNode> nodes, SqlParameterList params, @Nullable DbType dbType) {
-        List<String> parts = new ArrayList<>(nodes.size());
-        for (SqlNode node : nodes) {
-            parts.add(renderFragment(node, params, dbType));
-        }
-        return String.join(", ", parts);
-    }
-
-    private static String renderFragment(SqlNode node, SqlParameterList params, @Nullable DbType dbType) {
-        StringBuilder fragment = new StringBuilder();
-        renderNode(node, fragment, params, dbType);
-        return fragment.toString();
-    }
-
-    private static boolean notBlank(@Nullable String value) {
-        return value != null && !value.isBlank();
+    private static void renderDeleteNode(SqlNode.Delete delete, StringBuilder sql, ParamSink sink,
+                                         NamingPolicy policy, @Nullable DbType dbType) {
+        sql.append("DELETE FROM ");
+        renderNode(delete.table(), sql, sink, policy, dbType);
+        appendClause(" WHERE ", delete.where(), sql, sink, policy, dbType);
     }
 }

@@ -17,8 +17,7 @@ import com.sondertara.joya.core.kernel.observe.SqlExecutionListener;
 import com.sondertara.joya.core.metadata.EntityMetadataContext;
 import com.sondertara.joya.core.naming.NamingPolicy;
 import com.sondertara.joya.core.query.criterion.WhereCriterion;
-import com.sondertara.joya.core.statement.factory.InsertStatementFactory;
-import com.sondertara.joya.core.statement.factory.UpdateStatementFactory;
+import com.sondertara.joya.core.kernel.statement.SqlRenderer;
 import com.sondertara.joya.exceptions.DbException;
 import com.sondertara.joya.utils.ConvertUtils;
 import com.sondertara.joya.utils.SqlDataUtils;
@@ -944,7 +943,7 @@ class EntityAndMapperIntegrationTest {
         assertEquals(0L, ops.count());
 
         EntityMetadataContext meta = LocalTableMetaCache.getMetadataContext(GeneratedOnlyEntity.class);
-        assertThrows(IllegalStateException.class, () -> InsertStatementFactory.createBatch(
+        assertThrows(IllegalStateException.class, () -> EntityStatements.insertBatchAst(
                 meta, List.of(), List.of(), NamingPolicy.DEFAULT, 100, false));
 
         ops.insert(new GeneratedOnlyEntity(1L));
@@ -956,18 +955,18 @@ class EntityAndMapperIntegrationTest {
     void batchFactories_rejectReadonlyAndGeneratedColumns_andKeepExplicitPrimaryKey() {
         EntityMetadataContext meta = LocalTableMetaCache.getMetadataContext(BatchGuardEntity.class);
 
-        BatchSqlStatement explicitKeyInsert = InsertStatementFactory.createBatch(
+        BatchSqlStatement explicitKeyInsert = SqlRenderer.render(EntityStatements.insertBatchAst(
                 meta,
                 List.of("id", "name"),
                 List.<Object[]>of(new Object[]{7L, "ok"}),
                 NamingPolicy.DEFAULT,
                 100,
-                false);
+                false), NamingPolicy.DEFAULT);
         assertEquals("INSERT INTO t_batch_guard (id, name) VALUES (?, ?)", explicitKeyInsert.sql());
 
         IllegalArgumentException readonlyInsert = assertThrows(
                 IllegalArgumentException.class,
-                () -> InsertStatementFactory.createBatch(
+                () -> EntityStatements.insertBatchAst(
                         meta,
                         List.of("readonly_col"),
                         List.<Object[]>of(new Object[]{"x"}),
@@ -975,7 +974,7 @@ class EntityAndMapperIntegrationTest {
                         100,
                         false));
         assertTrue(readonlyInsert.getMessage().contains("insertable=false"), readonlyInsert.getMessage());
-        assertThrows(IllegalArgumentException.class, () -> InsertStatementFactory.createBatch(
+        assertThrows(IllegalArgumentException.class, () -> EntityStatements.insertBatchAst(
                 meta,
                 List.of("generated_col"),
                 List.<Object[]>of(new Object[]{1L}),
@@ -983,18 +982,18 @@ class EntityAndMapperIntegrationTest {
                 100,
                 false));
 
-        BatchSqlStatement validUpdate = UpdateStatementFactory.createBatchByPrimaryKey(
+        BatchSqlStatement validUpdate = SqlRenderer.render(EntityStatements.updateBatchByPkAst(
                 meta,
                 List.of("name"),
                 "id",
                 List.<Object[]>of(new Object[]{"renamed", 7L}),
                 NamingPolicy.DEFAULT,
-                100);
+                100), NamingPolicy.DEFAULT);
         assertEquals("UPDATE t_batch_guard SET name = ? WHERE id = ?", validUpdate.sql());
 
         IllegalArgumentException readonlyUpdate = assertThrows(
                 IllegalArgumentException.class,
-                () -> UpdateStatementFactory.createBatchByPrimaryKey(
+                () -> EntityStatements.updateBatchByPkAst(
                         meta,
                         List.of("readonly_col"),
                         "id",
@@ -1002,7 +1001,7 @@ class EntityAndMapperIntegrationTest {
                         NamingPolicy.DEFAULT,
                         100));
         assertTrue(readonlyUpdate.getMessage().contains("updatable=false"), readonlyUpdate.getMessage());
-        assertThrows(IllegalArgumentException.class, () -> UpdateStatementFactory.createBatchByPrimaryKey(
+        assertThrows(IllegalArgumentException.class, () -> EntityStatements.updateBatchByPkAst(
                 meta,
                 List.of("generated_col"),
                 "id",

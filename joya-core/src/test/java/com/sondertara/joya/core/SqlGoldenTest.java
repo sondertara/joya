@@ -6,16 +6,12 @@ import com.sondertara.joya.core.kernel.statement.DbType;
 import com.sondertara.joya.core.kernel.dialect.Dialect;
 import com.sondertara.joya.core.kernel.dialect.PaginationStyle;
 import com.sondertara.joya.core.kernel.dialect.QuoteStyle;
+import com.sondertara.joya.core.kernel.statement.SqlRenderer;
 import com.sondertara.joya.core.kernel.statement.SqlStatement;
 import com.sondertara.joya.core.metadata.EntityMetadataContext;
-import com.sondertara.joya.core.statement.MutationContext;
 import com.sondertara.joya.core.query.criterion.WhereCriterion;
 import com.sondertara.joya.core.query.dsl.Exprs;
 import com.sondertara.joya.core.query.dsl.Query;
-import com.sondertara.joya.core.statement.factory.DeleteStatementFactory;
-import com.sondertara.joya.core.statement.factory.InsertStatementFactory;
-import com.sondertara.joya.core.statement.factory.SelectStatementFactory;
-import com.sondertara.joya.core.statement.factory.UpdateStatementFactory;
 import org.junit.jupiter.api.Test;
 
 import javax.persistence.Column;
@@ -127,10 +123,19 @@ class SqlGoldenTest {
         return LocalTableMetaCache.getMetadataContext(type);
     }
 
-    private static MutationContext ctx(Class<?> type, Map<String, Object> values, boolean ignoreNull, NamingPolicy policy) {
+    private static SqlStatement renderInsert(Class<?> type, Map<String, Object> values, boolean ignoreNull, NamingPolicy policy) {
         EntityMetadataContext meta = meta(type);
-        Set<String> columns = new LinkedHashSet<>(meta.columnNames());
-        return new MutationContext(meta, values, null, columns, ignoreNull, false, policy);
+        java.util.List<String> cols = new java.util.ArrayList<>();
+        java.util.List<Object> vals = new java.util.ArrayList<>();
+        for (String col : meta.columnNames()) {
+            Object v = values.get(col);
+            if (ignoreNull && v == null) {
+                continue;
+            }
+            cols.add(col);
+            vals.add(v);
+        }
+        return SqlRenderer.render(EntityStatements.insertAst(meta, cols, vals, policy), policy);
     }
 
     private static void check(String name, SqlStatement stmt, String expectedSql, String expectedArgs) {
@@ -198,10 +203,12 @@ class SqlGoldenTest {
                 "SELECT t0.OrderNo, t0.Amount FROM t_order t0",
                 "[]");
 
+        NamingPolicy upperPolicy = new NamingPolicy(10, true, true);
         check("select_upper",
-                SelectStatementFactory.create(meta(User.class),
-                        new WhereCriterion().eq(User::getId, 1L), null,
-                        new NamingPolicy(10, true, true)),
+                SqlRenderer.render(
+                        EntityStatements.selectColumnsAst(meta(User.class),
+                                new WhereCriterion().eq(User::getId, 1L), null, upperPolicy),
+                        upperPolicy),
                 "SELECT * FROM T_USER t0 WHERE t0.ID = ?",
                 "[1]");
     }
@@ -287,48 +294,46 @@ class SqlGoldenTest {
         NamingPolicy plain = NamingPolicy.DEFAULT;
 
         check("insert_plain",
-                InsertStatementFactory.create(ctx(User.class,
-                        values("id", 1L, "dept_id", 2L, "name", "alice", "email", null, "age", 20), false, plain)),
+                renderInsert(User.class,
+                        values("id", 1L, "dept_id", 2L, "name", "alice", "email", null, "age", 20), false, plain),
                 "INSERT INTO t_user (id, dept_id, name, email, age) VALUES (?, ?, ?, ?, ?)",
                 "[1, 2, alice, null, 20]");
 
         check("insert_ignore_null",
-                InsertStatementFactory.create(ctx(User.class,
-                        values("id", 1L, "dept_id", 2L, "name", "alice", "email", null, "age", 20), true, plain)),
+                renderInsert(User.class,
+                        values("id", 1L, "dept_id", 2L, "name", "alice", "email", null, "age", 20), true, plain),
                 "INSERT INTO t_user (id, dept_id, name, age) VALUES (?, ?, ?, ?)",
                 "[1, 2, alice, 20]");
 
         check("insert_upper",
-                InsertStatementFactory.create(ctx(User.class,
+                renderInsert(User.class,
                         values("id", 1L, "dept_id", 2L, "name", "alice", "email", "a@b.c", "age", 20), false,
-                        new NamingPolicy(10, true, true))),
+                        new NamingPolicy(10, true, true)),
                 "INSERT INTO T_USER (ID, DEPT_ID, NAME, EMAIL, AGE) VALUES (?, ?, ?, ?, ?)",
                 "[1, 2, alice, a@b.c, 20]");
 
         check("insert_mixed_case",
-                InsertStatementFactory.create(ctx(Order.class,
-                        values("OrderNo", "A-1", "Amount", 100L), false, plain)),
+                renderInsert(Order.class,
+                        values("OrderNo", "A-1", "Amount", 100L), false, plain),
                 "INSERT INTO t_order (OrderNo, Amount) VALUES (?, ?)",
                 "[A-1, 100]");
 
         check("update_where",
-                UpdateStatementFactory.create(new MutationContext(meta(User.class),
+                SqlRenderer.render(UpdatePlan.buildExplicitAst(meta(User.class),
                         values("name", "bob", "age", 30),
-                        new WhereCriterion().eq(User::getId, 9L),
-                        orderedSet("name", "age"), false, false, plain)),
+                        new WhereCriterion().eq(User::getId, 9L), false, plain), plain),
                 "UPDATE t_user SET name = ?, age = ? WHERE id = ?",
                 "[bob, 30, 9]");
 
         check("delete_where",
-                DeleteStatementFactory.create(new MutationContext(meta(User.class), Map.of(),
-                        new WhereCriterion().eq(User::getId, 9L),
-                        Set.of(), false, false, plain)),
+                SqlRenderer.render(EntityStatements.deleteAst(meta(User.class),
+                        new WhereCriterion().eq(User::getId, 9L), false, plain), plain),
                 "DELETE FROM t_user WHERE id = ?",
                 "[9]");
 
         check("delete_allow_all",
-                DeleteStatementFactory.create(new MutationContext(meta(User.class), Map.of(),
-                        null, Set.of(), false, true, plain)),
+                SqlRenderer.render(EntityStatements.deleteAst(meta(User.class),
+                        null, true, plain), plain),
                 "DELETE FROM t_user",
                 "[]");
 

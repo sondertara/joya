@@ -1,14 +1,19 @@
 package com.sondertara.joya.spring.autoconfigure;
 
 import com.sondertara.joya.spring.support.JpaTransactionManagerSupport;
+import com.sondertara.joya.spring.support.JoyaManagedTransactionManager;
 import com.sondertara.joya.spring.support.SpringTxEngine;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ListableBeanFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
+import org.springframework.core.annotation.AnnotationAwareOrderComparator;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.ResourceTransactionManager;
 
 import javax.sql.DataSource;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -22,6 +27,51 @@ final class JoyaTransactionManagerResolver {
     }
 
     /**
+     * 以强类型（{@code allowFactoryBeanInit = false}，不触发 Bean 实例化）判断指定 Bean 是否为 Joya 自管事务管理器，
+     * 避免装配期循环依赖且不依赖任何方法名或属性字符串约定。
+     */
+    static boolean isJoyaManagedTransactionManager(ListableBeanFactory beanFactory, String beanName) {
+        if (beanFactory == null) {
+            return false;
+        }
+        Class<?> beanType = beanFactory.getType(beanName, false);
+        return beanType != null && JoyaManagedTransactionManager.class.isAssignableFrom(beanType);
+    }
+
+    /** 检查容器是否存在任何外部（非 Joya 自管）{@link PlatformTransactionManager} Bean 定义。 */
+    static boolean hasExternalTransactionManager(ListableBeanFactory beanFactory) {
+        if (beanFactory == null) {
+            return false;
+        }
+        for (String name : beanFactory.getBeanNamesForType(PlatformTransactionManager.class, true, false)) {
+            if (!isJoyaManagedTransactionManager(beanFactory, name)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** 仅解析外部 {@link PlatformTransactionManager} Bean（跳过 Joya 自身工厂方法注册的 TM，彻底消除循环依赖）。 */
+    static List<PlatformTransactionManager> resolveExternalManagers(ConfigurableListableBeanFactory beanFactory) {
+        if (beanFactory == null) {
+            return List.of();
+        }
+        String[] names = beanFactory.getBeanNamesForType(PlatformTransactionManager.class, true, false);
+        if (names.length == 0) {
+            return List.of();
+        }
+        List<PlatformTransactionManager> result = new ArrayList<>(names.length);
+        for (String name : names) {
+            if (isJoyaManagedTransactionManager(beanFactory, name)) {
+                continue;
+            }
+            result.add(beanFactory.getBean(name, PlatformTransactionManager.class));
+        }
+        AnnotationAwareOrderComparator.sort(result);
+        return result;
+    }
+
+    /**
      * 解析规则：
      * <ol>
      *   <li>{@link ResourceTransactionManager#getResourceFactory()} 与主 DataSource 精确匹配者优先，多个匹配视为配置歧义；</li>
@@ -31,8 +81,12 @@ final class JoyaTransactionManagerResolver {
      */
     static PlatformTransactionManager resolve(DataSource primaryDataSource,
                                               ObjectProvider<PlatformTransactionManager> txManagerProvider) {
-        List<PlatformTransactionManager> managers = txManagerProvider.orderedStream().toList();
-        if (managers.isEmpty()) {
+        return resolve(primaryDataSource, txManagerProvider.orderedStream().toList());
+    }
+
+    static PlatformTransactionManager resolve(DataSource primaryDataSource,
+                                              List<PlatformTransactionManager> managers) {
+        if (managers == null || managers.isEmpty()) {
             log.info("No Spring PlatformTransactionManager found; Joya uses its plain JDBC transaction engine "
                     + "and @Transactional connection sharing is disabled.");
             return null;
@@ -73,8 +127,12 @@ final class JoyaTransactionManagerResolver {
         if (dataSource == null || txManagerProvider == null) {
             return null;
         }
-        List<PlatformTransactionManager> managers = txManagerProvider.orderedStream().toList();
-        if (managers.isEmpty()) {
+        return resolveOptional(dataSource, txManagerProvider.orderedStream().toList());
+    }
+
+    static PlatformTransactionManager resolveOptional(DataSource dataSource,
+                                                      List<PlatformTransactionManager> managers) {
+        if (dataSource == null || managers == null || managers.isEmpty()) {
             return null;
         }
         return findMatchingManager(managers, dataSource, "DataSource");

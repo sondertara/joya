@@ -720,22 +720,15 @@ class DialectBatchAndMappingTest {
         assertTrue(releasedOnRuntimeError.get(), "Connection must be released when queryStream throws RuntimeException");
 
         // 2. ScriptRunner 在显式事务连接（autoCommit=false）下执行不得无条件回滚外层已执行的写操作
-        joya.withConnection(conn -> {
-            boolean prevAuto = conn.getAutoCommit();
-            conn.setAutoCommit(false);
-            try {
-                try (Statement st = conn.createStatement()) {
-                    st.executeUpdate("UPDATE t_chain_user SET internal_note = 'BeforeScript' WHERE id = 1");
-                }
-                com.sondertara.joya.core.kernel.support.ScriptRunner runner =
-                        new com.sondertara.joya.core.kernel.support.ScriptRunner(conn);
-                runner.runScript(new java.io.StringReader("UPDATE t_chain_user SET internal_note = 'AfterScript' WHERE id = 3;"));
-                conn.commit();
-            } finally {
-                conn.setAutoCommit(prevAuto);
+        joya.tx(tx -> tx.withConnection(conn -> {
+            try (Statement st = conn.createStatement()) {
+                st.executeUpdate("UPDATE t_chain_user SET internal_note = 'BeforeScript' WHERE id = 1");
             }
+            com.sondertara.joya.core.kernel.support.ScriptRunner runner =
+                    new com.sondertara.joya.core.kernel.support.ScriptRunner(conn);
+            runner.runScript(new java.io.StringReader("UPDATE t_chain_user SET internal_note = 'AfterScript' WHERE id = 3;"));
             return null;
-        });
+        }));
         assertEquals("BeforeScript", joya.of(ChainUser.class).findById(1L).orElseThrow().internalNote);
         assertEquals("AfterScript", joya.of(ChainUser.class).findById(3L).orElseThrow().internalNote);
 
@@ -767,16 +760,7 @@ class DialectBatchAndMappingTest {
         entity.setId("manual-id-01");
         entity.setTitle("Hello");
         entity.setReadonlyCol("ShouldBeIgnored");
-        com.sondertara.joya.core.statement.MutationContext mutCtx =
-                new com.sondertara.joya.core.statement.MutationContext(
-                        p0Meta,
-                        com.sondertara.joya.core.metadata.EntitySnapshot.snapshot(p0Meta, entity).values(),
-                        null,
-                        java.util.Set.of(),
-                        false,
-                        false,
-                        com.sondertara.joya.core.naming.NamingPolicy.DEFAULT);
-        SqlStatement insStmt = com.sondertara.joya.core.statement.factory.InsertStatementFactory.create(mutCtx);
+        SqlStatement insStmt = joya.of(P0MetaEntity.class).insert().values(entity).toSqlStatement();
         assertEquals("INSERT INTO t_p0_meta (id, title) VALUES (?, ?)", insStmt.sql());
         assertEquals(List.of("manual-id-01", "Hello"), insStmt.args());
 
@@ -877,10 +861,12 @@ class DialectBatchAndMappingTest {
         JoyaSettings quotedSettings = JoyaSettings.builder()
                 .quoteStyle(QuoteStyle.BACKTICK)
                 .build();
-        SqlStatement quotedSelect = com.sondertara.joya.core.statement.factory.SelectStatementFactory.create(
-                com.sondertara.joya.core.metadata.LocalTableMetaCache.getMetadataContext(SchemaScopedAudit.class),
-                com.sondertara.joya.core.query.criterion.WhereCriterion.create().eq(SchemaScopedAudit::getId, 1L),
-                null,
+        SqlStatement quotedSelect = com.sondertara.joya.core.kernel.statement.SqlRenderer.render(
+                EntityStatements.selectColumnsAst(
+                        com.sondertara.joya.core.metadata.LocalTableMetaCache.getMetadataContext(SchemaScopedAudit.class),
+                        com.sondertara.joya.core.query.criterion.WhereCriterion.create().eq(SchemaScopedAudit::getId, 1L),
+                        null,
+                        quotedSettings.namingPolicy()),
                 quotedSettings.namingPolicy());
         assertEquals("SELECT * FROM `sec_schema`.`t_audit` t0 WHERE t0.`id` = ?", quotedSelect.sql());
 

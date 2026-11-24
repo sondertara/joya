@@ -1,7 +1,6 @@
 package com.sondertara.joya.core.jdbc.resultset.mapper;
 
 import com.sondertara.joya.core.kernel.executor.RowMapper;
-import com.sondertara.joya.exceptions.DbException;
 import com.sondertara.joya.utils.LinkedCaseInsensitiveMap;
 import com.sondertara.joya.utils.SqlDataUtils;
 import com.sondertara.joya.utils.Strings;
@@ -37,12 +36,8 @@ public class MapRowMapper implements RowMapper<Map<String, Object>> {
     }
 
     @Override
-    public Map<String, Object> map(ResultSet row) {
-        try {
-            return forResultSet(row).map(row);
-        } catch (SQLException e) {
-            throw new DbException(e);
-        }
+    public Map<String, Object> map(ResultSet row) throws SQLException {
+        return forResultSet(row).map(row);
     }
 
     private static Map<String, Object> mapWithLayout(
@@ -51,20 +46,16 @@ public class MapRowMapper implements RowMapper<Map<String, Object>> {
             String[] rawKeys,
             String[] strippedKeys,
             String[] colClassNames
-    ) {
+    ) throws SQLException {
         Map<String, Object> map = new LinkedCaseInsensitiveMap<>(count);
-        try {
-            for (int i = 0; i < count; i++) {
-                String key = rawKeys[i];
-                String stripped = strippedKeys[i];
-                if (stripped != null && !map.containsKey(stripped)) {
-                    key = stripped;
-                }
-                Object value = SqlDataUtils.getResultSetValue(row, i + 1, colClassNames[i]);
-                map.put(key, value);
+        for (int i = 0; i < count; i++) {
+            String key = rawKeys[i];
+            String stripped = strippedKeys[i];
+            if (stripped != null && !map.containsKey(stripped)) {
+                key = stripped;
             }
-        } catch (SQLException e) {
-            throw new DbException(e);
+            Object value = SqlDataUtils.getResultSetValue(row, i + 1, colClassNames[i]);
+            map.put(key, value);
         }
         return map;
     }

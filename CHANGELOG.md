@@ -2,13 +2,41 @@
 
 本文件记录 Joya 各版本的架构契约、安全修复与重要行为变更。
 
-## [Unreleased]
+## [1.2.0] - 2026-11-24
+
+### Added（新增能力）
+- **AST 2.0 单趟流式编译器与离线查询复用（`joya-core`）**：
+  - 统一 `SqlNode` 强类型 AST 与密封 `SqlNode.Param.Binding`（`Bound` / `RowSlot`），补齐二元表达式结合律自动加括号与 `SqlNode.Insert.rows` 深冻结；`SqlRenderer` 在单 `StringBuilder` 内单趟完成物理 SQL、参数与 `BatchSlot` 编译，彻底消除两趟渲染与正则二次改写。
+  - 新增 `DataOps.from(Query<T>)` 支持将离线构造的 `Query.of(...)` 绑定至任意 `JoyaClient` 或 `Tx` 执行。
+- **标准 JPA `@Convert` 双向列转换与 JSR-310 `Instant` 一等支持（`joya-core`）**：
+  - 新增 `ColumnConverter` 封装标准 JPA `AttributeConverter<X, Y>`（同时兼容 `jakarta.persistence` 与 `javax.persistence`，经 `ClassValue` 与预绑定 `MethodHandle.invokeExact` 实现热路径零反射开销；支持 Field 与 Getter/Record 访问器单源一致解析）。
+  - 全链路贯通实体写入/批量/Upsert、`WhereCriterion` 条件、实体/Record 读取、单列与位置投影、`MAX`/`MIN` 聚合回转，以及普通 DTO/Record 自动透传源实体列转换器（含非标量字段如 `List<String>`）；同步内置 `java.time.Instant` JDBC 双向读写兼容。
+- **`@Version` 乐观锁全生命周期与 `batchExecuteExact` 精确批执行（`joya-core`）**：
+  - 新增 `VersionMetadata`（支持 `short/Short`、`int/Integer`、`long/Long`）与 `OptimisticLockException`；`insert` / `insertAll` / `EntityInsert` 自动初始化 `null` 版本为 `0` 并回写实体。
+  - 单条与批量更新/删除（`update`/`patch`/`updateAll`/`patchAll`/`delete(entity)`/`deleteAll(entities)`）统一注入 `WHERE pk = ? AND version = ?`，批量路径走新增的 `Executor.batchExecuteExact`（单连接复用单条 `PreparedStatement` 逐行 `executeUpdate()`），彻底杜绝 JDBC `SUCCESS_NO_INFO (-2)` 造成的静默并发冲突漏判，并采用跨分组/跨分片**两阶段内存版本号回写**（全部数据库行确认成功后统一推进内存版本）。
+  - `save` / `saveAll` 对 `@Version` 实体自动禁用原生 UPSERT 改为先查后写；`deleteById` / `deleteByIds` 保持按主键强制删除语义。
+- **Spring Boot 3 主 ORM 级集成、`@JoyaTest` 与 Micrometer Observation（`joya-spring-boot-starter`）**：
+  - Starter 升级为主 ORM 与旁路多数据源一体：`JoyaAutoConfiguration` 严格排在 `DataSource`、`DataSourceTransactionManager`、`HibernateJpa`、`Jta`、`Flyway`、`Liquibase` 之后、`TransactionAutoConfiguration` 之前。
+  - 支持自管数据源事务桥接（`JoyaManagedTransactionManager` 强类型识别，零循环依赖）：自建主库（`joya.primary.use-spring=false`）在无外部 `TransactionManager` 时自动暴露 `@Primary transactionManager` 并触发 `@EnableTransactionManagement`；扩展库支持 `expose-transaction-manager=true` 暴露非 `@Primary` `<name>TransactionManager`（自动提升容器唯一默认 TM 为 `@Primary` 保护无限定 `@Transactional`，并在无主 TM 时自动兜底激活事务代理）。
+  - 自建 `HikariDataSource` 建池即确立默认 `joya-<name>` 池名，存在 `MeterRegistry` 时由 `JoyaActuatorAutoConfiguration` 自动绑定 `MicrometerMetricsTrackerFactory`。
+  - 新增 `JoyaObservationAutoConfiguration` 与 `JoyaObservationExecutionListener`（基于 Micrometer `ObservationRegistry`，零 `ThreadLocal` 泄漏，覆盖流式查询 `onStreamClosed` 生命周期并以 `WeakReference + ReferenceQueue` 防止遗弃流内存泄漏；支持 `joya.observation.enabled` 与 `joya.observation.include-sql`）。
+  - 新增数据访问层切片测试注解 `@JoyaTest`（对标 `@JdbcTest`，自动过滤 `@Service`/`@Controller`，默认 `@Transactional` 回滚并支持 `properties` 覆写与 `@JoyaMapperScan`）。
+
+### Changed（行为与契约变更）
+- **废弃自定义转换注解与历史内部中间层（Breaking）**：
+  - **Breaking**：移除 `@FieldAlias` 与 `TypedConverter`；迁移指引：列别名请改用标准 `@Column(name = ...)`，列值双向转换请改用标准 JPA `@Convert(converter = ...)` + `AttributeConverter<X, Y>`。
+  - **Breaking**：移除 `TaraException`；迁移指引：请统一捕获 `DbException`（乐观锁冲突请捕获子类 `OptimisticLockException`）。
+  - **Breaking**：移除旧两趟渲染与内部工厂类（`RenderContext`、`QueryRenderer`、`ColumnAlias`、`EntitySnapshot`、`EntityWriter`、`core.statement.factory.*`），统一收敛于 `TableScope` + `EntityStatements` + `SqlRenderer`。
+- **Starter 开箱即用依赖升级**：
+  - `joya-spring-boot-starter` 默认传递引入 `spring-boot-starter-jdbc`（HikariCP + JDBC + Tx）与非可选 `jakarta.persistence-api`，纯 Joya Spring Boot 3 项目仅需引入 Starter 与数据库驱动即可开箱即用。
 
 ### Fixed（缺陷修复与契约打磨）
 - **事务启动器与重试配置护栏收敛（`joya-core`）**：
   - `TxOptions` 校验 `retryAttempts >= 0`，`TxStarter#retryOnDeadlock(int)` 校验总尝试次数 `maxAttempts >= 1`（传入 `<= 0` 快速抛 `IllegalArgumentException`），`TxStarter#begin()` 在已配置 `retryOnDeadlock(> 1)` 时立即抛出 `IllegalStateException` 拒绝静默失效。
   - `TxStarter#call` 捕获异常清理时先判 `!tx.isCompleted()` 再调用 `tx.rollback()`，避免手动提前 `commit()` / `rollback()` 或 I7 触发后在主异常上附带多余 `IllegalTxStateException` suppressed；仅在实际触发可重试死锁却因 `!isPhysicalRollbackConfirmed()`（如加入外层 Spring 事务未配 `requiresNew()`）跳过重试时输出 `WARN` 诊断日志。
   - 修正 `Tx#setRollbackOnly()` 与 `TxStarter#retryOnDeadlock(int)` Javadoc 契约说明。
+- **执行内核资源安全与映射热路径加固**：
+  - 通过 `ConnectionProvider.onStreamClose` 将流式查询资源释放与事务托管生命周期正交化；加固 `DialectStrategy` 单飞探测缓存、单连接异常翻译与 `BeanRowMapper` 预适配 `MethodHandle.invokeExact` 安全发布。
 
 ## [1.1.1] - 2026-11-19
 

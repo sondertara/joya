@@ -1,8 +1,9 @@
 package com.sondertara.joya.utils;
 
 import com.sondertara.joya.core.function.IGetter;
-import com.sondertara.joya.exceptions.TaraException;
+import com.sondertara.joya.exceptions.DbException;
 
+import java.beans.Introspector;
 import java.lang.invoke.SerializedLambda;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -11,14 +12,15 @@ import java.util.Objects;
 /**
  * Lambda 方法引用元数据解析与 {@link ClassValue} 强缓存工具：
  * <ul>
- *   <li>使用 JDK {@link ClassValue} 将解析出的不可变 {@link LambdaMeta} 直接关联在 Lambda 合成 {@link Class} 上；</li>
- *   <li>避免 {@code WeakReference<SerializedLambda>} 在每次 Young GC 后被清空导致的重复反射开销；</li>
- *   <li>同时在首次解析时一次性计算好 {@code receiverClass}、{@code returnType} 与 {@code propertyName}，后续查询调用均为 O(1) 字段直读。</li>
+ *   <li>仅对无捕获（{@code getDeclaredFields().length == 0}）的合成方法引用类按 {@link ClassValue} 缓存 {@link LambdaMeta}，
+ *       有状态/捕获型实现每次按实例解析，彻底杜绝跨实例串列污染；</li>
+ *   <li>首次解析时一次性计算 {@code implMethodName}、{@code receiverClass}、{@code returnType} 与 {@code propertyName}，
+ *       并提供 {@link #resolve(IGetter)} 单次获取完整元数据，避免重复查找。</li>
  * </ul>
  */
 public final class LambdaUtils {
 
-    private record LambdaMeta(
+    public record LambdaMeta(
             String implMethodName,
             Class<?> receiverClass,
             Class<?> returnType,
@@ -27,13 +29,18 @@ public final class LambdaUtils {
     }
 
     private static final class Holder {
+        final boolean stateless;
         volatile LambdaMeta meta;
+
+        Holder(boolean stateless) {
+            this.stateless = stateless;
+        }
     }
 
     private static final ClassValue<Holder> LAMBDA_CACHE = new ClassValue<>() {
         @Override
         protected Holder computeValue(Class<?> type) {
-            return new Holder();
+            return new Holder(type.getDeclaredFields().length == 0);
         }
     };
 
@@ -41,25 +48,41 @@ public final class LambdaUtils {
     }
 
     /**
+     * 单次解析并返回方法引用的完整元数据（对无状态方法引用享受 O(1) {@link ClassValue} 缓存）。
+     */
+    public static LambdaMeta resolve(IGetter<?, ?> function) {
+        Objects.requireNonNull(function, "Lambda function must not be null");
+        Holder holder = LAMBDA_CACHE.get(function.getClass());
+        if (!holder.stateless) {
+            return parseMeta(function);
+        }
+        LambdaMeta meta = holder.meta;
+        if (meta == null) {
+            meta = parseMeta(function);
+            holder.meta = meta;
+        }
+        return meta;
+    }
+
+    /**
      * 获取方法引用的底层方法名（如 {@code getUserName}）。
      */
     public static <T> String getImplMethodName(IGetter<T, ?> function) {
-        return resolveMeta(function).implMethodName();
+        return resolve(function).implMethodName();
     }
 
     /**
      * 解析方法引用的接收者类型：{@code User::getId} 返回 {@code User.class}。
-     * <p>优先使用 {@code instantiatedMethodType}，即使 getter 声明在父类也返回子类接收者类型。
      */
     public static Class<?> getReceiverClass(IGetter<?, ?> function) {
-        return resolveMeta(function).receiverClass();
+        return resolve(function).receiverClass();
     }
 
     /**
      * 解析方法引用的返回值类型（基本类型自动装箱）：{@code User::getAge} 返回 {@code Integer.class}。
      */
     public static Class<?> getReturnType(IGetter<?, ?> function) {
-        return resolveMeta(function).returnType();
+        return resolve(function).returnType();
     }
 
     /**
@@ -67,18 +90,7 @@ public final class LambdaUtils {
      * record 访问器 {@code name} → {@code name}。
      */
     public static String getPropertyName(IGetter<?, ?> function) {
-        return resolveMeta(function).propertyName();
-    }
-
-    private static LambdaMeta resolveMeta(IGetter<?, ?> function) {
-        Objects.requireNonNull(function, "Lambda function must not be null");
-        Holder holder = LAMBDA_CACHE.get(function.getClass());
-        LambdaMeta meta = holder.meta;
-        if (meta == null) {
-            meta = parseMeta(function);
-            holder.meta = meta;
-        }
-        return meta;
+        return resolve(function).propertyName();
     }
 
     private static LambdaMeta parseMeta(IGetter<?, ?> function) {
@@ -97,11 +109,11 @@ public final class LambdaUtils {
             writeMethod.setAccessible(true);
             SerializedLambda serializedLambda = (SerializedLambda) writeMethod.invoke(function);
             if (serializedLambda == null) {
-                throw new TaraException("Unable to parse lambda: " + function);
+                throw new DbException("Unable to parse lambda: " + function);
             }
             return serializedLambda;
         } catch (NoSuchMethodException | IllegalAccessException | InvocationTargetException e) {
-            throw new TaraException("Failed to extract SerializedLambda from " + function, e);
+            throw new DbException("Failed to extract SerializedLambda from " + function, e);
         }
     }
 
@@ -126,17 +138,17 @@ public final class LambdaUtils {
 
     private static String parsePropertyName(String method) {
         if (method.length() > 3 && method.startsWith("get") && Character.isUpperCase(method.charAt(3))) {
-            return java.beans.Introspector.decapitalize(method.substring(3));
+            return Introspector.decapitalize(method.substring(3));
         }
         if (method.length() > 2 && method.startsWith("is") && Character.isUpperCase(method.charAt(2))) {
-            return java.beans.Introspector.decapitalize(method.substring(2));
+            return Introspector.decapitalize(method.substring(2));
         }
         return method;
     }
 
     /** 基本类型装箱；非基本类型原样返回。 */
     public static Class<?> boxed(Class<?> type) {
-        return com.sondertara.joya.utils.TypeUtils.getWrapClass(type);
+        return TypeUtils.getWrapClass(type);
     }
 
     private static Class<?> descriptorToClass(String descriptor, ClassLoader preferredLoader) {
@@ -152,7 +164,7 @@ public final class LambdaUtils {
             case 'V' -> void.class;
             case 'L' -> loadClass(descriptor.substring(1, descriptor.length() - 1).replace('/', '.'), preferredLoader);
             case '[' -> loadClass(descriptor.replace('/', '.'), preferredLoader);
-            default -> throw new TaraException("Unsupported type descriptor: " + descriptor);
+            default -> throw new DbException("Unsupported type descriptor: " + descriptor);
         };
     }
 
@@ -181,7 +193,7 @@ public final class LambdaUtils {
         try {
             return Class.forName(className);
         } catch (ClassNotFoundException e) {
-            throw new TaraException(e);
+            throw new DbException(e);
         }
     }
 }

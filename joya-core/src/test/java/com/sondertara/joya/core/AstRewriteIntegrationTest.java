@@ -16,8 +16,9 @@ import com.sondertara.joya.core.kernel.statement.UpsertStyle;
 import com.sondertara.joya.core.metadata.LocalTableMetaCache;
 import com.sondertara.joya.core.naming.NamingPolicy;
 import com.sondertara.joya.core.query.PageResult;
+import com.sondertara.joya.core.kernel.statement.AstStatement;
+import com.sondertara.joya.core.kernel.statement.BatchAstStatement;
 import com.sondertara.joya.core.query.pagination.PageRequest;
-import com.sondertara.joya.core.statement.factory.UpsertStatementFactory;
 import com.sondertara.joya.exceptions.DbException;
 import org.h2.jdbcx.JdbcDataSource;
 import org.junit.jupiter.api.BeforeEach;
@@ -333,12 +334,12 @@ class AstRewriteIntegrationTest {
     @Test
     void joinOnAndLikePredicates_produceStructuredAstWithoutRawHoles() {
         JoyaClient joya = JoyaClient.builder(dataSource).build();
-        SqlStatement stmt = joya.from(AstUser.class)
+        AstStatement stmt = joya.from(AstUser.class)
                 .leftJoin(AstUser::getId, PlainUser::getId, on -> on.like(PlainUser::getName, "p%"))
                 .where(w -> w.eq(AstUser::getName, PlainUser::getName)
                         .notLike(AstUser::getTenantId, "x%")
                         .contains(AstUser::getName, "a%b"))
-                .toSqlStatement();
+                .toAstStatement();
 
         SqlNode.Select select = (SqlNode.Select) stmt.ast();
         SqlNode.From from = (SqlNode.From) select.from();
@@ -348,9 +349,9 @@ class AstRewriteIntegrationTest {
         assertTrue(join.on() instanceof SqlNode.Binary, "JOIN ON 应为结构化 Binary 节点");
         SqlNode.Binary joinAnd = (SqlNode.Binary) join.on();
         assertTrue(joinAnd.left() instanceof SqlNode.Binary eq
-                && "=".equals(eq.op())
+                && eq.op() == SqlNode.BinaryOp.EQ
                 && eq.left() instanceof SqlNode.Column
-                && eq.right() instanceof SqlNode.Column, "JOIN 等值键应为 Binary('=', Column, Column)");
+                && eq.right() instanceof SqlNode.Column, "JOIN 等值键应为 Binary(EQ, Column, Column)");
         assertTrue(joinAnd.right() instanceof SqlNode.Like joinLike && !joinLike.negated() && !joinLike.escaped(),
                 "JOIN ON 附加 like 条件应为 SqlNode.Like");
 
@@ -372,7 +373,7 @@ class AstRewriteIntegrationTest {
                 .rewriter((node, ctx) -> {
                     if (node instanceof SqlNode.Select select && select.from() instanceof SqlNode.From from) {
                         List<SqlNode.Join> joins = new ArrayList<>(from.joins());
-                        joins.add(new SqlNode.Join("INNER JOIN",
+                        joins.add(new SqlNode.Join(SqlNode.JoinKind.INNER_JOIN,
                                 SqlNodes.table("t_ast_plain", "t_ast_plain", "t_acl"),
                                 SqlNodes.eq(SqlNodes.column("t0", "id"), SqlNodes.column("t_acl", "id"))));
                         return new SqlNode.Select(select.distinct(), select.projections(),
@@ -421,7 +422,7 @@ class AstRewriteIntegrationTest {
 
     @Test
     void batchUpsert_preservesUpsertAstAndSupportsBatchRewriter() {
-        BatchSqlStatement batch = UpsertStatementFactory.createBatch(
+        BatchAstStatement batch = EntityStatements.upsertBatchAst(
                 LocalTableMetaCache.getMetadataContext(PlainUser.class),
                 List.of("id", "name"),
                 List.of(new Object[]{40L, "u40"}, new Object[]{41L, "u41"}),
@@ -618,7 +619,7 @@ class AstRewriteIntegrationTest {
                 assignments.add(SqlNodes.assignment("remark",
                         SqlNodes.param("remark", null, ParameterSource.AUDIT)));
                 assignments.add(SqlNodes.assignment("rev",
-                        SqlNodes.binary("+", SqlNodes.column((SqlNode.Table) null, "rev"), SqlNodes.raw("1"))));
+                        SqlNodes.add(SqlNodes.column((SqlNode.Table) null, "rev"), SqlNodes.raw("1"))));
                 return new SqlNode.Update(update.table(), assignments, update.where());
             }
             return node;
@@ -696,20 +697,15 @@ class AstRewriteIntegrationTest {
             return node;
         };
         var plainMeta = LocalTableMetaCache.getMetadataContext(PlainUser.class);
-        SqlStatement singleUpsert = UpsertStatementFactory.create(
-                new com.sondertara.joya.core.statement.MutationContext(
-                        plainMeta,
-                        java.util.Map.of("id", 70L, "name", "u70"),
-                        null,
-                        java.util.Set.of("id", "name"),
-                        false,
-                        false,
-                        NamingPolicy.DEFAULT),
+        AstStatement singleUpsert = EntityStatements.upsertAst(
+                plainMeta,
                 List.of("id", "name"),
+                List.of(70L, "u70"),
                 "id",
                 UpsertStyle.MERGE,
-                null);
-        BatchSqlStatement upsertBatch = UpsertStatementFactory.createBatch(
+                null,
+                NamingPolicy.DEFAULT);
+        BatchAstStatement upsertBatch = EntityStatements.upsertBatchAst(
                 plainMeta,
                 List.of("id", "name"),
                 List.<Object[]>of(new Object[]{71L, "u71"}),
@@ -826,17 +822,25 @@ class AstRewriteIntegrationTest {
 
         // 2. 隐式计数分页对带 AST 的语句只执行一次改写，再派生 countSql 与 pageSql
         AtomicInteger rewriteCount = new AtomicInteger();
-        JoyaClient pageClient = JoyaClient.builder(dataSource)
-                .rewriter((node, ctx) -> {
-                    rewriteCount.incrementAndGet();
-                    return new TenantRewriter("t1").rewrite(node, ctx);
-                })
-                .build();
-        SqlStatement astSelect = pageClient.from(AstUser.class).toSqlStatement();
-        com.sondertara.joya.core.query.PageResult<AstUser> page = pageClient.sql(astSelect)
-                .page(AstUser.class, com.sondertara.joya.core.query.pagination.PageRequest.of(0, 10));
-        assertEquals(2L, page.total());
-        assertEquals(2, page.items().size());
+        com.sondertara.joya.core.kernel.ExecutionKernel pageKernel =
+                new com.sondertara.joya.core.kernel.ExecutionKernel(new com.sondertara.joya.core.kernel.ExecutionKernel.Config(
+                        List.of((node, ctx) -> {
+                            rewriteCount.incrementAndGet();
+                            return new TenantRewriter("t1").rewrite(node, ctx);
+                        }),
+                        List.of(),
+                        new com.sondertara.joya.core.kernel.connection.DataSourceConnectionProvider(dataSource, 0),
+                        com.sondertara.joya.core.kernel.dialect.DialectStrategy.cached(dataSource),
+                        null, null,
+                        com.sondertara.joya.core.jdbc.resultset.mapper.DefaultRowMapperFactory.INSTANCE,
+                        null, null));
+        AstStatement astSelect = JoyaClient.builder(dataSource).build().from(AstUser.class).toAstStatement();
+        var slice = pageKernel.queryPage(
+                astSelect,
+                pageKernel.mapperFor(com.sondertara.joya.core.kernel.executor.ResultType.BEAN, AstUser.class),
+                0, 10);
+        assertEquals(2L, slice.total());
+        assertEquals(2, slice.rows().size());
         assertEquals(1, rewriteCount.get(), "隐式计数分页只应对基础 AST 语句触发一次 SqlRewriter");
     }
 

@@ -1,3 +1,4 @@
+com.sondertara.joya.spring.autoconfigure.JoyaObservationAutoConfiguration
 com.sondertara.joya.spring.autoconfigure.JoyaAutoConfiguration
 com.sondertara.joya.spring.autoconfigure.JoyaNamedClientsAutoConfiguration
 com.sondertara.joya.spring.autoconfigure.JoyaActuatorAutoConfiguration

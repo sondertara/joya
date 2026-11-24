@@ -1,7 +1,6 @@
 package com.sondertara.joya.utils;
 
 import com.sondertara.joya.exceptions.DbException;
-import com.sondertara.joya.exceptions.TaraException;
 import lombok.extern.slf4j.Slf4j;
 import org.jspecify.annotations.Nullable;
 
@@ -93,18 +92,52 @@ public final class SqlDataUtils {
             r.transferTo(writer);
             return checkNullString(writer.toString());
         } catch (IOException e) {
-            throw new TaraException("Failed to read character stream from ResultSet", e);
+            throw new DbException("Failed to read character stream from ResultSet", e);
         }
     }
 
-    private static String readClobAsString(Clob clob) {
+    private static String readClobAsString(Clob clob) throws SQLException {
         if (clob == null) {
             return null;
         }
         try {
             return readReaderAsString(clob.getCharacterStream());
-        } catch (SQLException e) {
-            throw new TaraException("Failed to read Clob character stream from ResultSet", e);
+        } finally {
+            freeQuietly(clob);
+        }
+    }
+
+    private static byte[] readBlobAsBytes(Blob blob) throws SQLException {
+        if (blob == null) {
+            return null;
+        }
+        try {
+            long length = blob.length();
+            if (length == 0L) {
+                return new byte[0];
+            }
+            if (length > Integer.MAX_VALUE) {
+                throw new DbException("Blob length [" + length + "] exceeds Integer.MAX_VALUE");
+            }
+            return blob.getBytes(1L, (int) length);
+        } finally {
+            freeQuietly(blob);
+        }
+    }
+
+    private static void freeQuietly(Blob blob) {
+        try {
+            blob.free();
+        } catch (SQLException | RuntimeException | AbstractMethodError ignored) {
+            // 部分驱动在只读或自动释放模式下不支持显式 free()
+        }
+    }
+
+    private static void freeQuietly(Clob clob) {
+        try {
+            clob.free();
+        } catch (SQLException | RuntimeException | AbstractMethodError ignored) {
+            // 部分驱动在只读或自动释放模式下不支持显式 free()
         }
     }
 
@@ -184,6 +217,12 @@ public final class SqlDataUtils {
         }
         if (java.sql.Timestamp.class == requiredType || java.util.Date.class == requiredType) {
             return (rs, index, colClass) -> rs.getTimestamp(index);
+        }
+        if (java.time.Instant.class == requiredType) {
+            return (rs, index, colClass) -> {
+                java.sql.Timestamp ts = rs.getTimestamp(index);
+                return ts == null ? null : ts.toInstant();
+            };
         }
         if (byte[].class == requiredType) {
             return (rs, index, colClass) -> rs.getBytes(index);
@@ -388,7 +427,7 @@ public final class SqlDataUtils {
         if (obj instanceof String s) {
             return checkNullString(s);
         } else if (obj instanceof Blob blob) {
-            obj = blob.getBytes(1, (int) blob.length());
+            obj = readBlobAsBytes(blob);
         } else if (obj instanceof Clob clob) {
             obj = readClobAsString(clob);
         } else if ("oracle.sql.TIMESTAMP".equals(className) || "oracle.sql.TIMESTAMPTZ".equals(className)) {

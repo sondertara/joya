@@ -60,10 +60,17 @@ final class JoyaDataSourceFactory {
                         + "Mark your primary DataSource with @Primary or set joya.primary.use-spring=false.");
     }
 
-    /**
-     * 按配置构造独立数据源，并把 {@code hikari} 子属性严格绑定到实例上（未知或拼写错误的属性立即失败）。
-     */
     static DataSource buildSelfManaged(String propertyPath, JoyaDataSourceProperties props) {
+        return buildSelfManaged(propertyPath, props != null ? props.getName() : null, props);
+    }
+
+    /**
+     * 按配置构造独立数据源，在首次建连前预设默认 Hikari 池名（{@code joya-<name>}），
+     * 并把 {@code hikari} 子属性严格绑定到实例上（未知或拼写错误的属性立即失败）。
+     */
+    static DataSource buildSelfManaged(String propertyPath,
+                                       @Nullable String clientName,
+                                       JoyaDataSourceProperties props) {
         if (Strings.isBlank(props.getUrl())) {
             throw new IllegalStateException(
                     "Failed to create self-managed Joya DataSource under '" + propertyPath
@@ -78,8 +85,7 @@ final class JoyaDataSourceFactory {
             throw new IllegalStateException(
                     "Failed to create self-managed Joya DataSource under '" + propertyPath
                             + "': no supported connection pool implementation (such as HikariCP) was found on the classpath. "
-                            + "joya-spring-boot-starter is a lightweight sidecar and does not bundle a connection pool by default; "
-                            + "add 'org.springframework.boot:spring-boot-starter-jdbc' (or 'com.zaxxer:HikariCP'), "
+                            + "Ensure 'com.zaxxer:HikariCP' (provided by 'spring-boot-starter-jdbc') is on the classpath, "
                             + "or explicitly configure '" + propertyPath + ".type'.");
         }
         String url = props.getUrl().trim();
@@ -103,6 +109,14 @@ final class JoyaDataSourceFactory {
         }
         DataSource dataSource = builder.build();
         Map<String, Object> hikariProps = props.getHikari();
+        boolean hasExplicitPoolName = hasExplicitHikariPoolName(hikariProps);
+        if (!hasExplicitPoolName
+                && Strings.isNotBlank(clientName)
+                && "com.zaxxer.hikari.HikariDataSource".equals(dataSource.getClass().getName())) {
+            // 在首次建连封板前即确立清晰可观测的默认连接池名，避免早于 Actuator 初始化建连后退化为 HikariPool-N
+            new Binder(new MapConfigurationPropertySource(Map.of("pool-name", "joya-" + clientName.trim())))
+                    .bind(ConfigurationPropertyName.EMPTY, Bindable.ofInstance(dataSource));
+        }
         if (hikariProps != null && !hikariProps.isEmpty()) {
             try {
                 MapConfigurationPropertySource source = new MapConfigurationPropertySource(hikariProps);
@@ -111,13 +125,42 @@ final class JoyaDataSourceFactory {
                         BindHandler.DEFAULT,
                         cp -> cp == source);
                 binder.bind(ConfigurationPropertyName.EMPTY, Bindable.ofInstance(dataSource), strictHandler);
-            } catch (Exception e) {
-                throw new IllegalStateException(
-                        "Failed to bind '" + propertyPath + ".hikari' properties onto DataSource of type "
-                                + dataSource.getClass().getName(), e);
+            } catch (Throwable t) {
+                Throwable failure = (t instanceof Error)
+                        ? t
+                        : new IllegalStateException(
+                                "Failed to bind '" + propertyPath + ".hikari' properties onto DataSource of type "
+                                        + dataSource.getClass().getName(), t);
+                if (dataSource instanceof AutoCloseable closeable) {
+                    try {
+                        closeable.close();
+                    } catch (Throwable closeErr) {
+                        failure.addSuppressed(closeErr);
+                    }
+                }
+                if (failure instanceof Error err) {
+                    throw err;
+                }
+                throw (RuntimeException) failure;
             }
         }
         return dataSource;
+    }
+
+    private static boolean hasExplicitHikariPoolName(@Nullable Map<String, Object> hikariProps) {
+        if (hikariProps == null || hikariProps.isEmpty()) {
+            return false;
+        }
+        for (String key : hikariProps.keySet()) {
+            if (key == null) {
+                continue;
+            }
+            String normalized = key.replace("-", "").replace("_", "");
+            if ("poolname".equalsIgnoreCase(normalized)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -167,6 +210,9 @@ final class JoyaDataSourceFactory {
         }
         if (props.getHikari() != null && !props.getHikari().isEmpty()) {
             conflicts.add(propertyPath + ".hikari");
+        }
+        if (Boolean.TRUE.equals(props.getExposeTransactionManager())) {
+            conflicts.add(propertyPath + ".expose-transaction-manager");
         }
         conflicts.addAll(collectUnsupportedJndiOrXa(propertyPath, environment));
         if (!conflicts.isEmpty()) {

@@ -12,7 +12,6 @@ import com.sondertara.joya.core.kernel.statement.SqlStatement;
 import com.sondertara.joya.core.metadata.LocalTableMetaCache;
 import com.sondertara.joya.core.naming.NamingPolicy;
 import com.sondertara.joya.core.query.PageResult;
-import com.sondertara.joya.core.statement.factory.DeleteStatementFactory;
 import com.sondertara.joya.exceptions.DbException;
 import org.h2.jdbcx.JdbcDataSource;
 import org.junit.jupiter.api.Test;
@@ -178,7 +177,7 @@ class AuditRegressionTest {
     void truncateAndDdl_carryAccurateOperation() {
         var meta = LocalTableMetaCache.getMetadataContext(ProbeEntity.class);
         assertEquals(Operation.TRUNCATE,
-                DeleteStatementFactory.createTruncate(meta, NamingPolicy.DEFAULT).metadata().operation());
+                EntityStatements.truncateAst(meta, NamingPolicy.DEFAULT).metadata().operation());
         assertEquals(Operation.TRUNCATE, SqlFormatUtils.inferDmlOperation("TRUNCATE TABLE r_probe"));
         assertEquals(Operation.DDL, SqlFormatUtils.inferDmlOperation("CREATE TABLE t (id INT)"));
         assertEquals(Operation.DDL, SqlFormatUtils.inferDmlOperation("ALTER TABLE t ADD c INT"));
@@ -277,11 +276,11 @@ class AuditRegressionTest {
                 .toSqlStatement();
         assertTrue(stmt.sql().contains("ESCAPE '\\\\'"), stmt.sql());
 
-        // P1-1：离线构建的 Query（dbType == null）进入 joya.sql(stmt) 时必须按目标方言重渲 AST
-        SqlStatement offlineLike = com.sondertara.joya.core.query.dsl.Query.of(ProbeEntity.class)
-                .where(w -> w.contains(ProbeEntity::getName, "50%"))
-                .toSqlStatement();
-        assertEquals("SELECT t0.id, t0.status, t0.name FROM r_probe t0 WHERE t0.name LIKE ? ESCAPE '\\'", offlineLike.sql());
+        // P1-1：离线构建的 Query（dbType == null）经目标客户端 from(query) 执行时必须按目标方言编译 AST
+        var offlineQuery = com.sondertara.joya.core.query.dsl.Query.of(ProbeEntity.class)
+                .where(w -> w.contains(ProbeEntity::getName, "50%"));
+        assertEquals("SELECT t0.id, t0.status, t0.name FROM r_probe t0 WHERE t0.name LIKE ? ESCAPE '\\'",
+                offlineQuery.toSqlStatement().sql());
         List<String> executedSql = new ArrayList<>();
         JoyaClient mysqlClient = JoyaClient.builder(ds)
                 .dialect(DbType.mysql)
@@ -296,17 +295,16 @@ class AuditRegressionTest {
                         new Class<?>[]{com.sondertara.joya.core.kernel.executor.Executor.class},
                         (proxy, method, args) -> "queryList".equals(method.getName()) ? List.of() : null))
                 .build();
-        mysqlClient.sql(offlineLike).list(ProbeEntity.class);
+        mysqlClient.from(offlineQuery).list();
         assertEquals(1, executedSql.size());
         assertTrue(executedSql.get(0).contains("ESCAPE '\\\\'"), executedSql.get(0));
 
-        // 离线构建含 FOR UPDATE 的 Query 进入 SQLite 方言客户端时，重渲必须触发 UnsupportedOperationException
-        SqlStatement offlineForUpdate = com.sondertara.joya.core.query.dsl.Query.of(ProbeEntity.class)
-                .forUpdate()
-                .toSqlStatement();
+        // 离线构建含 FOR UPDATE 的 Query 进入 SQLite 方言客户端时，编译 AST 必须触发 UnsupportedOperationException
+        var offlineForUpdate = com.sondertara.joya.core.query.dsl.Query.of(ProbeEntity.class)
+                .forUpdate();
         JoyaClient sqliteClient = JoyaClient.builder(ds).dialect(DbType.sqlite).build();
         assertThrows(UnsupportedOperationException.class,
-                () -> sqliteClient.sql(offlineForUpdate).list(ProbeEntity.class));
+                () -> sqliteClient.from(offlineForUpdate).list());
     }
 
     @Test

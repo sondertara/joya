@@ -81,16 +81,32 @@ class ArchitectureGuardTest {
     }
 
     @Test
-    void statementLayerMayNotDependOnCoreFacadesOrJdbc() throws IOException {
-        assertOnlyAllowedImports(corePackage("statement"), Set.of(
-                "com.sondertara.joya.core.statement",
-                "com.sondertara.joya.core.query",
-                "com.sondertara.joya.core.metadata",
-                "com.sondertara.joya.core.naming",
-                "com.sondertara.joya.core.kernel",
-                "com.sondertara.joya.utils",
-                "com.sondertara.joya.exceptions"
-        ));
+    void legacyStatementAndModelPackagesMustRemainRemoved() {
+        assertTrue(Files.notExists(corePackage("statement")),
+                "Legacy core.statement package must not be reintroduced; use EntityStatements / AstStatement");
+        assertTrue(Files.notExists(corePackage("model")),
+                "Legacy core.model package must not be reintroduced; use TableScope.ResolvedColumn");
+        assertTrue(Files.notExists(corePackage("metadata/EntitySnapshot.java")),
+                "Orphan EntitySnapshot must not be reintroduced; use EntityMetadataContext.snapshotValues");
+    }
+
+    @Test
+    void topLevelDataOpsAndSqlOpsMustNotExposeInternalAstTypes() {
+        for (Class<?> facade : List.of(DataOps.class, SqlOps.class, EntityInsert.class, EntityUpdate.class, EntityDelete.class)) {
+            for (Method method : facade.getDeclaredMethods()) {
+                if (!Modifier.isPublic(method.getModifiers())) {
+                    continue;
+                }
+                String ret = method.getReturnType().getName();
+                assertTrue(!ret.contains("AstStatement") && !ret.contains("SqlNode"),
+                        facade.getSimpleName() + " public method must not return internal AST type: " + method);
+                for (Class<?> p : method.getParameterTypes()) {
+                    String pn = p.getName();
+                    assertTrue(!pn.contains("AstStatement") && !pn.contains("SqlNode"),
+                            facade.getSimpleName() + " public method must not accept internal AST type: " + method);
+                }
+            }
+        }
     }
 
     @Test
@@ -107,13 +123,6 @@ class ArchitectureGuardTest {
     void namingMayNotDependOnAnyOtherProjectPackage() throws IOException {
         assertOnlyAllowedImports(corePackage("naming"), Set.of(
                 "com.sondertara.joya.core.naming"
-        ));
-    }
-
-    @Test
-    void modelMayNotDependOnQueryOrKernel() throws IOException {
-        assertOnlyAllowedImports(corePackage("model"), Set.of(
-                "com.sondertara.joya.core.model"
         ));
     }
 
@@ -250,7 +259,6 @@ class ArchitectureGuardTest {
                 "com.sondertara.joya.core.jdbc",
                 "com.sondertara.joya.core.function",
                 "com.sondertara.joya.core.metadata",
-                "com.sondertara.joya.core.model",
                 "com.sondertara.joya.core.naming",
                 "com.sondertara.joya.core.kernel",
                 "com.sondertara.joya.utils",
@@ -264,7 +272,6 @@ class ArchitectureGuardTest {
                 "com.sondertara.joya.core.query",
                 "com.sondertara.joya.core.kernel",
                 "com.sondertara.joya.core.metadata",
-                "com.sondertara.joya.core.model",
                 "com.sondertara.joya.core.naming",
                 "com.sondertara.joya.core.function",
                 "com.sondertara.joya.utils",
@@ -273,8 +280,8 @@ class ArchitectureGuardTest {
     }
 
     @Test
-    void queryStatementAndMapperLayersMustNotBypassTemplateExecution() throws IOException {
-        for (String sub : List.of("query", "statement", "mapper")) {
+    void queryAndMapperLayersMustNotBypassTemplateExecution() throws IOException {
+        for (String sub : List.of("query", "mapper")) {
             try (Stream<Path> paths = Files.walk(corePackage(sub))) {
                 for (Path file : paths.filter(p -> p.toString().endsWith(".java")).toList()) {
                     assertSourceDoesNotContain(file, ".connections()", ".dataSource()");
@@ -366,24 +373,33 @@ class ArchitectureGuardTest {
 
     @Test
     void sqlRendererExposesOnlyAstRenderEntryPoint() {
-        List<String> publicMethods = new ArrayList<>();
+        Set<String> publicMethods = new java.util.TreeSet<>();
         for (Method method : SqlRenderer.class.getDeclaredMethods()) {
             if (Modifier.isPublic(method.getModifiers())) {
                 publicMethods.add(method.getName());
             }
         }
-        assertEquals(List.of("render"), publicMethods,
-                "SqlRenderer must only expose AST-based render(SqlNode, StatementMetadata)");
+        assertEquals(Set.of("render"), publicMethods,
+                "SqlRenderer must only expose AST-based render(...) entry points");
+    }
+
+    @Test
+    void physicalSqlStatementsDoNotExposeAst() {
+        for (var rc : com.sondertara.joya.core.kernel.statement.SqlStatement.class.getRecordComponents()) {
+            assertTrue(!rc.getType().getName().contains("SqlNode"),
+                    "SqlStatement must remain a pure physical contract without AST component: " + rc);
+        }
+        for (var rc : com.sondertara.joya.core.kernel.statement.BatchSqlStatement.class.getRecordComponents()) {
+            assertTrue(!rc.getType().getName().contains("SqlNode"),
+                    "BatchSqlStatement must remain a pure physical contract without AST component: " + rc);
+        }
     }
 
     @Test
     void allPackagesEnforceClassLevelCycleGuardsExceptCohesiveGroups() throws IOException {
         assertNoClassCycles(corePackage(""));
-        assertNoClassCycles(corePackage("statement"));
-        assertNoClassCycles(corePackage("statement/factory"));
         assertNoClassCycles(corePackage("metadata"));
         assertNoClassCycles(corePackage("naming"));
-        assertNoClassCycles(corePackage("model"));
         assertNoClassCycles(corePackage("function"));
         assertNoClassCycles(corePackage("listener"));
         assertNoClassCycles(corePackage("query/criterion"));
@@ -405,19 +421,21 @@ class ArchitectureGuardTest {
                 Set.of(Set.of("IllegalTxStateException", "TxState"),
                         Set.of("Tx", "TxCallback", "TxConsumer")));
         assertNoClassCycles(corePackage("query"),
-                Set.of(Set.of("ColumnMetaProvider", "Expr", "JoinPart", "OnPredicate", "RenderContext", "SqlPredicate")));
+                Set.of(Set.of("ColumnMetaProvider", "Expr", "JoinPart", "OnPredicate", "TableScope", "SqlPredicate")));
         assertNoClassCycles(corePackage("query/dsl"),
                 Set.of(Set.of("Query", "Select1", "Select2", "Select3", "Select4", "Select5",
                         "Select6", "Select7", "Select8", "SelectN")));
     }
 
     @Test
-    void statementFactoriesMustNotUseRawNodesForTablesOrSelects() throws IOException {
-        try (Stream<Path> files = Files.list(corePackage("statement/factory"))) {
-            for (Path file : files.filter(p -> p.toString().endsWith(".java")).toList()) {
-                assertSourceDoesNotContain(file, "SqlNodes.raw(", "new SqlNode.Raw(");
-            }
-        }
+    void entityStatementsAndTableScopeMustNotUseRawNodes() throws IOException {
+        assertSourceDoesNotContain(corePackage("EntityStatements.java"), "SqlNodes.raw(", "new SqlNode.Raw(");
+        assertSourceDoesNotContain(corePackage("query/TableScope.java"), "SqlNodes.raw(", "new SqlNode.Raw(");
+        assertSourceDoesNotContain(corePackage("EntityOps.java"), "com.sondertara.joya.core.kernel.statement");
+        assertTrue(!Files.exists(corePackage("function/FieldAlias.java")),
+                "FieldAlias 已由标准 JPA @Convert + @Column 替代，禁止回流");
+        assertTrue(!Files.exists(corePackage("function/TypedConverter.java")),
+                "TypedConverter 已由标准 JPA AttributeConverter 替代，禁止回流");
     }
 
     @Test
@@ -440,6 +458,16 @@ class ArchitectureGuardTest {
             ));
             assertNoClassCycles(springRoot.resolve("support"));
             assertNoClassCycles(springRoot.resolve("autoconfigure"));
+            for (String runtimeSubPkg : List.of("autoconfigure", "support", "mapper", "annotation")) {
+                Path pkgDir = springRoot.resolve(runtimeSubPkg);
+                if (Files.isDirectory(pkgDir)) {
+                    try (Stream<Path> files = Files.walk(pkgDir)) {
+                        for (Path file : files.filter(p -> p.toString().endsWith(".java")).toList()) {
+                            assertSourceDoesNotContain(file, "com.sondertara.joya.spring.test");
+                        }
+                    }
+                }
+            }
         }
     }
 

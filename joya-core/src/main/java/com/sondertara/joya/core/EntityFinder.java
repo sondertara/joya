@@ -13,9 +13,7 @@ import java.util.Objects;
 import java.util.Optional;
 
 /**
- * 实体读取器 —— 只负责"按主键/集合/条件读"，不参与任何写入。
- *
- * <p>独立读取器：批量写规划器不应出现 {@code find} 语义。
+ * 实体读取器 —— 只负责按主键或集合读取实体。
  */
 final class EntityFinder<T> {
 
@@ -33,7 +31,7 @@ final class EntityFinder<T> {
         Objects.requireNonNull(id, "id must not be null");
         String pk = meta.requirePrimaryKey();
         return new Query<>(kernel, entityType)
-                .where(w -> w.eq(pk, id))
+                .where(w -> w.eqTrusted(pk, id))
                 .one();
     }
 
@@ -69,7 +67,7 @@ final class EntityFinder<T> {
     boolean existsById(Serializable id) {
         Objects.requireNonNull(id, "id must not be null");
         String pk = meta.requirePrimaryKey();
-        return new Query<>(kernel, entityType).where(w -> w.eq(pk, id)).exists();
+        return new Query<>(kernel, entityType).where(w -> w.eqTrusted(pk, id)).exists();
     }
 
     long count() {
@@ -77,6 +75,6 @@ final class EntityFinder<T> {
     }
 
     private List<T> queryByIds(String pk, Collection<? extends Serializable> ids) {
-        return new Query<>(kernel, entityType).where(w -> w.in(pk, ids)).list();
+        return new Query<>(kernel, entityType).where(w -> w.inTrusted(pk, ids)).list();
     }
 }

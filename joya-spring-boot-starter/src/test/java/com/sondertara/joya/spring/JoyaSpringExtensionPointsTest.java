@@ -310,8 +310,14 @@ class JoyaSpringExtensionPointsTest {
                 .withPropertyValues("joya.sql-log=true")
                 .run(context -> {
                     assertEquals(null, context.getStartupFailure());
-                    assertEquals(1, context.getBeansOfType(SqlExecutionListener.class).size(),
+                    var listeners = context.getBeansOfType(SqlExecutionListener.class);
+                    long nonObservationCount = listeners.entrySet().stream()
+                            .filter(e -> !"joyaObservationExecutionListener".equals(e.getKey()))
+                            .count();
+                    assertEquals(1, nonObservationCount,
                             "用户定义同名 joyaSqlLogListener 时默认监听器必须退让，不产生双挂载");
+                    assertTrue(listeners.get("joyaSqlLogListener").getClass().getName()
+                            .contains("CustomSqlLogListenerConfig"));
                     JoyaClientRegistry registry = context.getBean(JoyaClientRegistry.class);
                     registry.primary().sql("SELECT 1").value(Integer.class);
                     registry.get("order").sql("SELECT 2").value(Integer.class);

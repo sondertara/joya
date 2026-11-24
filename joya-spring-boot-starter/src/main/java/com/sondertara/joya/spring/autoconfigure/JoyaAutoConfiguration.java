@@ -2,6 +2,7 @@ package com.sondertara.joya.spring.autoconfigure;
 
 import com.sondertara.joya.core.JoyaClient;
 import com.sondertara.joya.core.kernel.observe.SqlExecutionListener;
+import com.sondertara.joya.spring.support.JoyaManagedTransactionManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
@@ -23,7 +24,7 @@ import org.springframework.context.annotation.ConfigurationCondition;
 import org.springframework.context.annotation.Primary;
 import org.springframework.core.env.Environment;
 import org.springframework.core.type.AnnotatedTypeMetadata;
-import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionManager;
 
 import javax.sql.DataSource;
 
@@ -37,12 +38,24 @@ import javax.sql.DataSource;
  *       {@link JoyaTransactionManagerResolver} / {@link JoyaExtensionPointResolver}。</li>
  * </ul>
  */
-@AutoConfiguration(afterName = {
-        // 必须排在主 DataSource 与事务管理器装配之后，否则解析时事务管理器 Bean 定义尚未注册
-        "org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration",
-        "org.springframework.boot.autoconfigure.transaction.TransactionAutoConfiguration",
-        "org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration"
-})
+@AutoConfiguration(
+        afterName = {
+                // 必须排在主 DataSource、Spring 事务管理器及 Flyway/Liquibase 迁移之后：
+                // 1) 确保外部 DataSourceTransactionManager/JpaTransactionManager BeanDefinition 已注册；
+                // 2) 确保数据库迁移在 Joya 客户端初始化与任意启动期查询之前完成建表。
+                "org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration",
+                "org.springframework.boot.autoconfigure.jdbc.DataSourceTransactionManagerAutoConfiguration",
+                "org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration",
+                "org.springframework.boot.autoconfigure.transaction.jta.JtaAutoConfiguration",
+                "org.springframework.boot.autoconfigure.flyway.FlywayAutoConfiguration",
+                "org.springframework.boot.autoconfigure.liquibase.LiquibaseAutoConfiguration"
+        },
+        beforeName = {
+                // 排在 TransactionAutoConfiguration 之前，使自建主库自动暴露的 transactionManager 能够触发
+                // Spring Boot 原生 @EnableTransactionManagement 与 TransactionTemplate 自动装配
+                "org.springframework.boot.autoconfigure.transaction.TransactionAutoConfiguration"
+        }
+)
 @ConditionalOnClass({DataSource.class, JoyaClient.class})
 @ConditionalOnProperty(prefix = "joya", name = "enabled", havingValue = "true", matchIfMissing = true)
 @Conditional(JoyaAutoConfiguration.OnJoyaDataSourceAvailableCondition.class)
@@ -55,12 +68,11 @@ public class JoyaAutoConfiguration {
     @ConditionalOnMissingBean
     public JoyaClientRegistry joyaClientRegistry(
             ObjectProvider<DataSource> springDataSourceProvider,
-            ObjectProvider<PlatformTransactionManager> txManagerProvider,
             JoyaProperties properties,
             Environment environment,
             ConfigurableListableBeanFactory beanFactory,
             ObjectProvider<JoyaClientCustomizer> customizersProvider) {
-        return new JoyaClientAssembler(properties, environment, springDataSourceProvider, txManagerProvider, beanFactory)
+        return new JoyaClientAssembler(properties, environment, springDataSourceProvider, beanFactory)
                 .assemble(customizersProvider.orderedStream().toList());
     }
 
@@ -69,6 +81,18 @@ public class JoyaAutoConfiguration {
     @Conditional(OnMissingPrimaryJoyaClientCondition.class)
     public JoyaClient joyaClient(JoyaClientRegistry registry) {
         return registry.primary();
+    }
+
+    /**
+     * 自建主库（{@code joya.primary.use-spring=false} 且无外部 {@link TransactionManager} Bean）时，
+     * 自动暴露主 {@code transactionManager}，使纯 Joya 服务开箱即用声明式 {@code @Transactional}。
+     */
+    @Bean(name = "transactionManager")
+    @Primary
+    @ConditionalOnMissingBean(TransactionManager.class)
+    @Conditional(OnSelfManagedPrimaryTxManagerCondition.class)
+    public JoyaManagedTransactionManager joyaPrimaryTransactionManager(JoyaClientRegistry registry) {
+        return registry.primaryTransactionManager();
     }
 
     @Bean
@@ -183,6 +207,37 @@ public class JoyaAutoConfiguration {
             }
             return ConditionOutcome.noMatch(ConditionMessage.forCondition("JoyaSqlLog")
                     .didNotFind("enabled joya.sql-log or positive joya.slow-sql-threshold-ms").atAll());
+        }
+    }
+
+    static final class OnSelfManagedPrimaryTxManagerCondition extends SpringBootCondition
+            implements ConfigurationCondition {
+
+        @Override
+        public ConfigurationPhase getConfigurationPhase() {
+            return ConfigurationPhase.REGISTER_BEAN;
+        }
+
+        @Override
+        public ConditionOutcome getMatchOutcome(ConditionContext context, AnnotatedTypeMetadata metadata) {
+            Binder binder = Binder.get(context.getEnvironment());
+            boolean useSpring = binder.bind("joya.primary.use-spring", Boolean.class).orElse(true);
+            if (useSpring) {
+                return ConditionOutcome.noMatch(ConditionMessage.forCondition("JoyaSelfManagedPrimaryTxManager")
+                        .because("joya.primary.use-spring is true"));
+            }
+            String dsBean = binder.bind("joya.primary.data-source-bean", String.class).orElse("");
+            if (!dsBean.isBlank()) {
+                return ConditionOutcome.noMatch(ConditionMessage.forCondition("JoyaSelfManagedPrimaryTxManager")
+                        .because("joya.primary.data-source-bean is configured"));
+            }
+            Boolean expose = binder.bind("joya.primary.expose-transaction-manager", Boolean.class).orElse(null);
+            if (Boolean.FALSE.equals(expose)) {
+                return ConditionOutcome.noMatch(ConditionMessage.forCondition("JoyaSelfManagedPrimaryTxManager")
+                        .because("joya.primary.expose-transaction-manager is false"));
+            }
+            return ConditionOutcome.match(ConditionMessage.forCondition("JoyaSelfManagedPrimaryTxManager")
+                    .found("self-managed primary DataSource without expose-transaction-manager=false").atAll());
         }
     }
 }

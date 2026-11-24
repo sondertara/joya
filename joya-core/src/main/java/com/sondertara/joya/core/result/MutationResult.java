@@ -55,7 +55,7 @@ public record MutationResult(
      * 构造带生成键列表的批量变更结果。
      */
     public static MutationResult ofBatch(int[] batchCounts, @Nullable List<Object> generatedKeys) {
-        int[] safeCounts = batchCounts == null ? EMPTY_COUNTS : batchCounts;
+        int[] safeCounts = (batchCounts == null || batchCounts.length == 0) ? EMPTY_COUNTS : batchCounts.clone();
         long totalAffected = sumBatchCounts(safeCounts);
         List<Object> safeKeys = (generatedKeys == null || generatedKeys.isEmpty())
                 ? Collections.emptyList()
@@ -113,7 +113,7 @@ public record MutationResult(
      */
     public int[] batchCounts() {
         if (serverInfo != null && serverInfo.get(KEY_BATCH_COUNTS) instanceof int[] counts) {
-            return counts;
+            return counts.length == 0 ? EMPTY_COUNTS : counts.clone();
         }
         return EMPTY_COUNTS;
     }

@@ -136,6 +136,8 @@ public class ScriptRunner {
             if (stopOnError || e instanceof SQLWarning) {
                 throw new DbException(message, e);
             }
+        } catch (RuntimeException e) {
+            throw e;
         } catch (Exception e) {
             String message = "Error executing: " + commandDescription(stmt.sql())
                     + " (line " + stmt.line() + ").  Cause: " + e;

@@ -1,5 +1,9 @@
 package com.sondertara.joya.core.kernel.executor;
 
+import com.sondertara.joya.utils.SqlDataUtils;
+
+import java.util.Map;
+
 /**
  * 结果类型到 {@link RowMapper} 的解析端口。
  *
@@ -17,6 +21,20 @@ public interface RowMapperFactory {
      * @param <V>      行结果类型
      */
     <V> RowMapper<V> create(ResultType type, Class<V> javaType);
+
+    /**
+     * 创建附带源列自定义读取器的行映射器（例如查询投影向未标注 {@code @Convert} 的普通 DTO/Record
+     * 透传源实体列的 {@code ColumnConverter} 读取器）；默认实现退回 {@link #create(ResultType, Class)}。
+     *
+     * @param type                  结果类型分类
+     * @param javaType              目标 Java 类型
+     * @param columnReaderOverrides 按列别名/属性名索引的列读取器覆盖表
+     */
+    default <V> RowMapper<V> create(ResultType type,
+                                    Class<V> javaType,
+                                    Map<String, SqlDataUtils.ColumnReader> columnReaderOverrides) {
+        return create(type, javaType);
+    }
 
     /**
      * 最小默认实现：仅支持标量；用于直接构造 {@code ExecutionKernel} 的底层测试或场景。

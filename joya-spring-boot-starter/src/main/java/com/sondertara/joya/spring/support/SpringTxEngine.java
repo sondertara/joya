@@ -333,7 +333,7 @@ public final class SpringTxEngine implements TxEngine {
 
         @Override
         public OptionalInt deadlineTimeoutSeconds() {
-            OptionalInt ownDeadline = support.resolveQueryTimeoutSeconds(OptionalInt.empty());
+            OptionalInt ownDeadline = support.resolveQueryTimeoutSeconds(OptionalInt.empty(), this::markRollbackOnly);
             OptionalInt holderDeadline;
             try {
                 holderDeadline = SpringConnectionProvider.currentTransactionDeadlineSeconds(dataSource);

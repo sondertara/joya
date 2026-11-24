@@ -2,11 +2,13 @@ package com.sondertara.joya.core;
 
 import com.sondertara.joya.core.function.IGetter;
 import com.sondertara.joya.core.kernel.ExecutionKernel;
+import com.sondertara.joya.core.kernel.statement.AstStatement;
 import com.sondertara.joya.core.kernel.statement.ParameterSource;
 import com.sondertara.joya.core.kernel.statement.SqlFormatUtils;
 import com.sondertara.joya.core.kernel.statement.SqlNode;
 import com.sondertara.joya.core.kernel.statement.SqlNodes;
 import com.sondertara.joya.core.kernel.statement.SqlParameter;
+import com.sondertara.joya.core.kernel.statement.SqlRenderer;
 import com.sondertara.joya.core.kernel.statement.SqlStatement;
 import com.sondertara.joya.core.metadata.EntityMetadataContext;
 import com.sondertara.joya.core.query.criterion.WhereCriterion;
@@ -22,9 +24,6 @@ import java.util.function.UnaryOperator;
 
 /**
  * 实体链式更新构建器 —— 由 {@link EntityOps#update()} 创建。
- *
- * <p>仅更新通过 {@link #set} 显式声明的列，绝不会将实体中未声明的列覆盖为 {@code NULL}。
- * 默认要求非空 WHERE 条件，全表更新须显式调用 {@link #allowAll()}。
  *
  * @param <T> 实体类型
  */
@@ -42,14 +41,12 @@ public final class EntityUpdate<T> {
         this.meta = Objects.requireNonNull(meta, "meta must not be null");
     }
 
-    /** 按 Lambda 属性引用设置待更新列。 */
     public <V> EntityUpdate<T> set(IGetter<T, V> column, @Nullable V value) {
         String colName = validateUpdatableColumn(meta.resolveColumn(column));
         values.put(colName, value);
         return this;
     }
 
-    /** 当值非 {@code null} 时按 Lambda 属性引用设置待更新列（列名与可更新性始终立即校验）。 */
     public <V> EntityUpdate<T> setIfPresent(IGetter<T, V> column, @Nullable V value) {
         String colName = validateUpdatableColumn(meta.resolveColumn(column));
         if (value != null) {
@@ -58,14 +55,12 @@ public final class EntityUpdate<T> {
         return this;
     }
 
-    /** 按列名或字段名设置待更新列。 */
     public EntityUpdate<T> set(String columnOrField, @Nullable Object value) {
         String colName = validateUpdatableColumn(meta.resolveColumnName(columnOrField));
         values.put(colName, value);
         return this;
     }
 
-    /** 当值非 {@code null} 时按列名或字段名设置待更新列（列名与可更新性始终立即校验）。 */
     public EntityUpdate<T> setIfPresent(String columnOrField, @Nullable Object value) {
         String colName = validateUpdatableColumn(meta.resolveColumnName(columnOrField));
         if (value != null) {
@@ -74,65 +69,50 @@ public final class EntityUpdate<T> {
         return this;
     }
 
-    /** 批量设置待更新列。 */
     public EntityUpdate<T> set(Map<String, ?> map) {
         Objects.requireNonNull(map, "values map must not be null");
         map.forEach(this::set);
         return this;
     }
 
-    /**
-     * 按 Lambda 属性引用执行列级原子增减（渲染为 {@code col = col + ?}，传入负数即为原子自减）。
-     */
+    /** 按 Lambda 属性引用执行列级原子增减（渲染为 {@code col = col + ?}）。 */
     public <N extends Number> EntityUpdate<T> incr(IGetter<T, N> column, Number delta) {
         Objects.requireNonNull(delta, "delta must not be null");
         String colName = validateUpdatableColumn(meta.resolveColumn(column));
-        String formattedCol = meta.formatColumn(colName, kernel.namingPolicy());
-        values.put(colName, new SqlNode.Binary("+",
-                SqlNodes.column((SqlNode.Table) null, formattedCol),
+        values.put(colName, SqlNodes.add(
+                SqlNodes.column((SqlNode.Table) null, colName),
                 SqlNodes.param(colName, delta, ParameterSource.SET)));
         return this;
     }
 
-    /**
-     * 按列名或字段名执行列级原子增减（渲染为 {@code col = col + ?}，传入负数即为原子自减）。
-     */
+    /** 按列名或字段名执行列级原子增减（渲染为 {@code col = col + ?}）。 */
     public EntityUpdate<T> incr(String columnOrField, Number delta) {
         Objects.requireNonNull(delta, "delta must not be null");
         String colName = validateUpdatableColumn(meta.resolveColumnName(columnOrField));
-        String formattedCol = meta.formatColumn(colName, kernel.namingPolicy());
-        values.put(colName, new SqlNode.Binary("+",
-                SqlNodes.column((SqlNode.Table) null, formattedCol),
+        values.put(colName, SqlNodes.add(
+                SqlNodes.column((SqlNode.Table) null, colName),
                 SqlNodes.param(colName, delta, ParameterSource.SET)));
         return this;
     }
 
-    /**
-     * 按 Lambda 属性引用设置参数化 SQL 表达式（如 {@code setExpr(User::getScore, "GREATEST(score - ?, 0)", 10)}）。
-     */
     public <V> EntityUpdate<T> setExpr(IGetter<T, V> column, String sqlExpr, Object... args) {
         String colName = validateUpdatableColumn(meta.resolveColumn(column));
         values.put(colName, buildExprNode(colName, sqlExpr, args));
         return this;
     }
 
-    /**
-     * 按列名或字段名设置参数化 SQL 表达式。
-     */
     public EntityUpdate<T> setExpr(String columnOrField, String sqlExpr, Object... args) {
         String colName = validateUpdatableColumn(meta.resolveColumnName(columnOrField));
         values.put(colName, buildExprNode(colName, sqlExpr, args));
         return this;
     }
 
-    /** 追加 WHERE 过滤条件（多次调用以 AND 合并）。 */
     public EntityUpdate<T> where(UnaryOperator<WhereCriterion> condition) {
         Objects.requireNonNull(condition, "where condition must not be null");
         this.whereCallbacks.add(condition);
         return this;
     }
 
-    /** 追加预构建的 {@link WhereCriterion}（多次调用以 AND 合并）。 */
     public EntityUpdate<T> where(WhereCriterion criterion) {
         Objects.requireNonNull(criterion, "criterion must not be null");
         WhereCriterion snapshot = criterion.copy();
@@ -141,29 +121,31 @@ public final class EntityUpdate<T> {
         return this;
     }
 
-    /** 显式放行无 WHERE 条件的全表更新。 */
     public EntityUpdate<T> allowAll() {
         this.allowAll = true;
         return this;
     }
 
-    /** 渲染为不可变 {@link SqlStatement}。 */
+    /** 构建未渲染的结构化 {@link AstStatement}（包内使用）。 */
+    AstStatement toAstStatement() {
+        if (values.isEmpty()) {
+            throw new IllegalStateException("Update values must not be empty");
+        }
+        return UpdatePlan.buildExplicitAst(meta, values, buildWhere(), allowAll, kernel.namingPolicy());
+    }
+
+    /** 离线编译为不可变物理 {@link SqlStatement}。 */
     public SqlStatement toSqlStatement() {
-        if (values.isEmpty()) {
-            throw new IllegalStateException("Update values must not be empty");
-        }
-        return UpdatePlan.explicit(meta, values, buildWhere(), allowAll).toSqlStatement(kernel);
+        return SqlRenderer.render(toAstStatement(), kernel.namingPolicy());
     }
 
-    /** 执行更新并返回 {@link MutationResult}。 */
+    /** 执行更新并返回 {@link MutationResult}（在线路径单趟编译）。 */
     public MutationResult execute() {
-        if (values.isEmpty()) {
-            throw new IllegalStateException("Update values must not be empty");
-        }
-        return UpdatePlan.explicit(meta, values, buildWhere(), allowAll).execute(kernel);
+        long affected = kernel.update(toAstStatement());
+        return MutationResult.ofAffected(affected);
     }
 
-    private WhereCriterion buildWhere() {
+    private @Nullable WhereCriterion buildWhere() {
         if (explicitCriteria.size() == 1 && whereCallbacks.size() == 1) {
             return explicitCriteria.get(0).copy();
         }
@@ -171,16 +153,7 @@ public final class EntityUpdate<T> {
     }
 
     private String validateUpdatableColumn(String colName) {
-        if (meta.nonUpdatableColumns().contains(colName)) {
-            throw new IllegalArgumentException(
-                    "Column '" + colName + "' is marked as updatable=false on entity " + meta.entityType().getName());
-        }
-        if (meta.generatedColumns().contains(colName)) {
-            throw new IllegalArgumentException(
-                    "Column '" + colName + "' is database-generated and cannot be updated on entity "
-                            + meta.entityType().getName());
-        }
-        return colName;
+        return meta.requireUpdatableColumn(colName);
     }
 
     private static SqlNode buildExprNode(String colName, String sqlExpr, @Nullable Object[] args) {

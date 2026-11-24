@@ -63,11 +63,20 @@ public final class SqlFormatUtils {
         if (sql == null || sql.isEmpty() || sql.indexOf('?') < 0) {
             return List.of();
         }
+        List<Placeholder> placeholders = new ArrayList<>(4);
+        scanPlaceholdersInto(sql, dbType, placeholders);
+        return placeholders;
+    }
+
+    private static int scanPlaceholdersInto(String sql, @Nullable DbType dbType, @Nullable List<Placeholder> sink) {
+        if (sql == null || sql.isEmpty() || sql.indexOf('?') < 0) {
+            return 0;
+        }
         boolean genericMode = (dbType == null);
         boolean allowBracketQuote = genericMode || dbType.isLikeSqlServer();
         boolean allowDollarQuote = genericMode || dbType.isLikePostgres() || dbType == DbType.h2 || dbType == DbType.other;
 
-        List<Placeholder> placeholders = new ArrayList<>();
+        int count = 0;
         int len = sql.length();
         int i = 0;
         while (i < len) {
@@ -128,13 +137,16 @@ public final class SqlFormatUtils {
                                 "Numbered SQL parameter index must be greater than zero: ?" + sql.substring(i + 1, end));
                     }
                 }
-                placeholders.add(new Placeholder(i, end, index));
+                if (sink != null) {
+                    sink.add(new Placeholder(i, end, index));
+                }
+                count++;
                 i = end;
                 continue;
             }
             i++;
         }
-        return placeholders;
+        return count;
     }
 
     static boolean usesBackslashEscape(String sql, int quoteStart, char quote, @Nullable DbType dbType) {
@@ -305,13 +317,44 @@ public final class SqlFormatUtils {
         return value == '_' || Character.isLetterOrDigit(value);
     }
 
+    /**
+     * 快速判定 SQL 中是否可能包含编号参数候选（{@code ?} 后紧跟数字）。
+     * 不含时无需重写为 JDBC {@code ?} 风格，可直接零分配复用原字符串。
+     */
+    public static boolean mayContainNumberedPlaceholder(@Nullable String sql) {
+        if (sql == null) {
+            return false;
+        }
+        int len = sql.length();
+        for (int i = sql.indexOf('?'); i >= 0 && i + 1 < len; i = sql.indexOf('?', i + 1)) {
+            char next = sql.charAt(i + 1);
+            if (next >= '0' && next <= '9') {
+                return true;
+            }
+        }
+        return false;
+    }
+
     public static String getJdbcStyleSql(String sql) {
         return getJdbcStyleSql(sql, null);
     }
 
     public static String getJdbcStyleSql(String sql, @Nullable DbType dbType) {
+        if (!mayContainNumberedPlaceholder(sql)) {
+            return sql;
+        }
         List<Placeholder> placeholders = scanPlaceholders(sql, dbType);
         if (placeholders.isEmpty()) {
+            return sql;
+        }
+        boolean hasNumbered = false;
+        for (Placeholder placeholder : placeholders) {
+            if (placeholder.isNumbered()) {
+                hasNumbered = true;
+                break;
+            }
+        }
+        if (!hasNumbered) {
             return sql;
         }
         StringBuilder sb = new StringBuilder(sql.length());
@@ -326,14 +369,69 @@ public final class SqlFormatUtils {
     }
 
     /**
-     * 统计 SQL 中有效占位符（{@code ?} 或 {@code ?1}）数量。
+     * 统计 SQL 中有效占位符（{@code ?} 或 {@code ?1}）数量（零集合分配）。
      */
     public static int countPlaceholders(String sql) {
         return countPlaceholders(sql, null);
     }
 
     public static int countPlaceholders(String sql, @Nullable DbType dbType) {
-        return scanPlaceholders(sql, dbType).size();
+        return scanPlaceholdersInto(sql, dbType, null);
+    }
+
+    /**
+     * 生成不与 {@code sql} 中已有标识符冲突的子查询唯一别名（如 {@code TEMP_T}、{@code TEMP_T_1}），零全串拷贝。
+     */
+    public static String chooseUniqueIdentifier(CharSequence sql, String baseName) {
+        String candidate = baseName;
+        int suffix = 1;
+        while (containsIdentifierIgnoreCase(sql, candidate)) {
+            candidate = baseName + "_" + suffix++;
+        }
+        return candidate;
+    }
+
+    private static boolean containsIdentifierIgnoreCase(@Nullable CharSequence sql, @Nullable String identifier) {
+        if (sql == null || identifier == null || identifier.isEmpty()) {
+            return false;
+        }
+        int sqlLen = sql.length();
+        int idLen = identifier.length();
+        if (sqlLen < idLen) {
+            return false;
+        }
+        int limit = sqlLen - idLen;
+        for (int i = 0; i <= limit; i++) {
+            if (!regionMatchesIgnoreCaseAsciiOrUnicode(sql, i, identifier, idLen)) {
+                continue;
+            }
+            boolean leftOk = i == 0 || !isSqlIdentifierChar(sql.charAt(i - 1));
+            int end = i + idLen;
+            boolean rightOk = end == sqlLen || !isSqlIdentifierChar(sql.charAt(end));
+            if (leftOk && rightOk) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean regionMatchesIgnoreCaseAsciiOrUnicode(CharSequence cs, int offset, String target, int len) {
+        for (int k = 0; k < len; k++) {
+            char a = cs.charAt(offset + k);
+            char b = target.charAt(k);
+            if (a == b) {
+                continue;
+            }
+            if (Character.toLowerCase(a) != Character.toLowerCase(b)
+                    && Character.toUpperCase(a) != Character.toUpperCase(b)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean isSqlIdentifierChar(char c) {
+        return Character.isLetterOrDigit(c) || c == '_' || c == '$' || c == '#';
     }
 
     /**

@@ -1,6 +1,5 @@
 package com.sondertara.joya.core.metadata;
 
-import com.sondertara.joya.core.function.FieldAlias;
 import com.sondertara.joya.exceptions.DbException;
 import com.sondertara.joya.utils.Strings;
 import com.sondertara.joya.utils.TypeUtils;
@@ -99,30 +98,43 @@ public final class LocalTableMetaCache {
                     .orElseGet(() -> Strings.toUnderlineCase(field.getName()));
 
             boolean scalar = TypeUtils.isColumnType(field.getType());
-            boolean fieldAlias = field.isAnnotationPresent(FieldAlias.class);
+            Optional<ColumnConverter> converterOpt = PersistenceAnnotations.findConverter(entityClass, field);
+            boolean hasConverter = converterOpt.isPresent();
             boolean idField = PersistenceAnnotations.isIdPresent(field);
-            if (!scalar && !fieldAlias) {
+            boolean versionField = PersistenceAnnotations.isVersionPresent(field);
+            if (!scalar && !hasConverter) {
                 if (idField) {
                     throw new DbException("Primary key field [" + field.getName() + "] on entity ["
-                            + entityClass.getName() + "] must be a scalar column type; composite/embedded "
-                            + "primary keys are not supported (got [" + field.getType().getName() + "])");
+                            + entityClass.getName() + "] must be a scalar column type or declare @Convert; "
+                            + "composite/embedded primary keys are not supported (got [" + field.getType().getName() + "])");
                 }
-                // 关联字段、集合、嵌套对象：不是列，Joya 不解析任何 JPA 关联注解。
+                if (versionField) {
+                    VersionMetadata.validateType(entityClass, field.getName(), field.getType());
+                }
+                // 关联字段、集合、嵌套对象：未标注 @Convert 则不是列，Joya 不解析任何 JPA 关联注解。
                 continue;
             }
-            if (fieldAlias && !scalar) {
-                // 自定义读转换器：可读，但 Joya 不知道如何写回数据库。
-                builder.nonInsertableColumn(colName);
-                builder.nonUpdatableColumn(colName);
+            if (hasConverter) {
+                ColumnConverter converter = converterOpt.get();
+                if (idField && !TypeUtils.isColumnType(converter.databaseColumnType())
+                        && converter.databaseColumnType() != Object.class) {
+                    throw new DbException("Primary key field [" + field.getName() + "] on entity ["
+                            + entityClass.getName() + "] @Convert database column type must be scalar (got ["
+                            + converter.databaseColumnType().getName() + "])");
+                }
+                builder.columnConverter(colName, converter);
             }
+            boolean nonUpdatable = false;
             if (columnMeta.isPresent()) {
                 if (!columnMeta.get().insertable()) {
                     builder.nonInsertableColumn(colName);
                 }
                 if (!columnMeta.get().updatable()) {
                     builder.nonUpdatableColumn(colName);
+                    nonUpdatable = true;
                 }
             }
+            boolean generated = PersistenceAnnotations.isGeneratedValuePresent(field);
             if (idField) {
                 if (field.getType().isPrimitive()) {
                     throw new DbException("Primary key field [" + field.getName() + "] on entity ["
@@ -136,8 +148,28 @@ public final class LocalTableMetaCache {
                     throw new DbException(e.getMessage(), e);
                 }
             }
-            if (PersistenceAnnotations.isGeneratedValuePresent(field)) {
+            if (generated) {
                 builder.generatedColumn(colName);
+            }
+            if (versionField) {
+                if (idField) {
+                    throw new DbException("@Version field [" + field.getName() + "] cannot also be @Id on entity ["
+                            + entityClass.getName() + "]");
+                }
+                if (generated) {
+                    throw new DbException("@Version field [" + field.getName() + "] cannot be @GeneratedValue on entity ["
+                            + entityClass.getName() + "]");
+                }
+                if (nonUpdatable) {
+                    throw new DbException("@Version field [" + field.getName() + "] cannot be @Column(updatable = false) on entity ["
+                            + entityClass.getName() + "]");
+                }
+                if (hasConverter) {
+                    throw new DbException("@Version field [" + field.getName() + "] cannot combine @Convert on entity ["
+                            + entityClass.getName() + "]");
+                }
+                VersionMetadata.validateType(entityClass, field.getName(), field.getType());
+                builder.versionColumn(colName, field.getType());
             }
             builder.column(colName, field.getName(), field);
         }

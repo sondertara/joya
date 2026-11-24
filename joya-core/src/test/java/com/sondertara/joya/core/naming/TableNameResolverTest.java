@@ -1,22 +1,24 @@
 package com.sondertara.joya.core.naming;
 
-import com.sondertara.joya.core.metadata.LocalTableMetaCache;
-import com.sondertara.joya.core.kernel.statement.BatchSqlStatement;
+import com.sondertara.joya.core.JoyaClient;
+import com.sondertara.joya.core.JoyaSettings;
+import com.sondertara.joya.core.kernel.observe.SqlExecutionContext;
+import com.sondertara.joya.core.kernel.observe.SqlExecutionListener;
+import com.sondertara.joya.core.kernel.statement.SqlRenderer;
 import com.sondertara.joya.core.kernel.statement.SqlStatement;
+import com.sondertara.joya.core.kernel.statement.StatementMetadata;
 import com.sondertara.joya.core.metadata.EntityMetadataContext;
-import com.sondertara.joya.core.query.RenderContext;
-import com.sondertara.joya.core.statement.MutationContext;
-import com.sondertara.joya.core.statement.factory.InsertStatementFactory;
+import com.sondertara.joya.core.metadata.LocalTableMetaCache;
+import com.sondertara.joya.core.query.TableScope;
+import org.h2.jdbcx.JdbcDataSource;
 import org.junit.jupiter.api.Test;
 
 import javax.persistence.Column;
 import javax.persistence.Entity;
 import javax.persistence.Id;
 import javax.persistence.Table;
-import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
+import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -37,6 +39,14 @@ class TableNameResolverTest {
 
         @Column(name = "name")
         private String name;
+
+        public User() {
+        }
+
+        public User(Long id, String name) {
+            this.id = id;
+            this.name = name;
+        }
 
         public Long getId() {
             return id;
@@ -75,54 +85,62 @@ class TableNameResolverTest {
 
     @Test
     void tableNameResolver_appliesToDqlRendering() {
-        RenderContext ctx = RenderContext.forSingleTable(meta(User.class),
+        TableScope scope = TableScope.forSingleTable(meta(User.class),
                 new NamingPolicy(10, false, false, MONTHLY));
 
         assertEquals("t_user_202610",
-                com.sondertara.joya.core.kernel.statement.SqlRenderer
-                        .render(ctx.toFromNode(), com.sondertara.joya.core.kernel.statement.StatementMetadata.empty())
-                        .sql());
+                SqlRenderer.render(scope.toFromNode(), StatementMetadata.empty()).sql());
     }
 
     @Test
     void tableNameResolver_appliesToDmlRendering() {
-        EntityMetadataContext meta = meta(User.class);
-        Map<String, Object> values = new LinkedHashMap<>();
-        values.put("id", 1L);
-        values.put("name", "alice");
-        MutationContext ctx = new MutationContext(meta, values, null,
-                new LinkedHashSet<>(meta.columnNames()), false, false,
-                new NamingPolicy(10, false, false, MONTHLY));
+        JdbcDataSource dataSource = new JdbcDataSource();
+        dataSource.setURL("jdbc:h2:mem:resolver_dml;DB_CLOSE_DELAY=-1");
+        JoyaClient client = JoyaClient.builder(dataSource)
+                .settings(JoyaSettings.builder().tableNameResolver(MONTHLY).build())
+                .build();
 
-        SqlStatement stmt = InsertStatementFactory.create(ctx);
+        SqlStatement stmt = client.of(User.class)
+                .insert()
+                .value(User::getId, 1L)
+                .value(User::getName, "alice")
+                .toSqlStatement();
 
         assertTrue(stmt.sql().startsWith("INSERT INTO t_user_202610 "), stmt.sql());
     }
 
     @Test
     void tableNameResolver_appliesToBatchRendering() {
-        EntityMetadataContext meta = meta(User.class);
-        BatchSqlStatement batch = InsertStatementFactory.createBatch(
-                meta,
-                List.of("id", "name"),
-                List.<Object[]>of(new Object[]{1L, "alice"}),
-                new NamingPolicy(10, false, false, MONTHLY),
-                100,
-                false);
+        JdbcDataSource dataSource = new JdbcDataSource();
+        dataSource.setURL("jdbc:h2:mem:resolver_batch;DB_CLOSE_DELAY=-1");
+        JoyaClient.create(dataSource).sql("CREATE TABLE t_user_202610 (id BIGINT PRIMARY KEY, name VARCHAR(32))").update();
 
-        assertTrue(batch.sql().startsWith("INSERT INTO t_user_202610 "), batch.sql());
-        assertEquals("t_user_202610", batch.metadata().tables().iterator().next().qualifiedName());
+        List<SqlStatement> observed = new ArrayList<>();
+        JoyaClient client = JoyaClient.builder(dataSource)
+                .settings(JoyaSettings.builder().tableNameResolver(MONTHLY).build())
+                .executionListener(new SqlExecutionListener() {
+                    @Override
+                    public void beforeExecute(SqlExecutionContext ctx) {
+                        observed.add(ctx.statement());
+                    }
+                })
+                .build();
+
+        client.of(User.class).insertAll(List.of(new User(1L, "alice"), new User(2L, "bob")));
+
+        assertEquals(1, observed.size());
+        SqlStatement batchProbe = observed.get(0);
+        assertTrue(batchProbe.sql().startsWith("INSERT INTO t_user_202610 "), batchProbe.sql());
+        assertEquals("t_user_202610", batchProbe.metadata().tables().iterator().next().qualifiedName());
     }
 
     @Test
     void tableNameResolver_preservesSchemaWhenItChoosesTo() {
-        RenderContext ctx = RenderContext.forSingleTable(meta(Audit.class),
+        TableScope scope = TableScope.forSingleTable(meta(Audit.class),
                 new NamingPolicy(10, false, false, MONTHLY));
 
         assertEquals("sec.t_audit_202610",
-                com.sondertara.joya.core.kernel.statement.SqlRenderer
-                        .render(ctx.toFromNode(), com.sondertara.joya.core.kernel.statement.StatementMetadata.empty())
-                        .sql());
+                SqlRenderer.render(scope.toFromNode(), StatementMetadata.empty()).sql());
     }
 
     @Test
@@ -135,11 +153,11 @@ class TableNameResolverTest {
 
     @Test
     void clientSettingsPropagateResolverToQueryRendering() {
-        org.h2.jdbcx.JdbcDataSource dataSource = new org.h2.jdbcx.JdbcDataSource();
+        JdbcDataSource dataSource = new JdbcDataSource();
         dataSource.setURL("jdbc:h2:mem:resolver_wiring;DB_CLOSE_DELAY=-1");
 
-        com.sondertara.joya.core.JoyaClient client = com.sondertara.joya.core.JoyaClient.builder(dataSource)
-                .settings(com.sondertara.joya.core.JoyaSettings.builder()
+        JoyaClient client = JoyaClient.builder(dataSource)
+                .settings(JoyaSettings.builder()
                         .tableNameResolver(MONTHLY)
                         .build())
                 .build();

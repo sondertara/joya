@@ -1,30 +1,28 @@
 package com.sondertara.joya.core.kernel.statement;
 
-import org.jspecify.annotations.Nullable;
-
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 /**
- * 不可变 SQL 语句值对象 —— 全框架唯一的 SQL 契约。
- * <p>
- * 设计原则：
+ * 不可变物理 SQL 语句值对象 —— 编译完成后的最终执行与观测契约。
+ *
+ * <p>设计原则：
  * <ul>
- *   <li>不可变：所有改写方法返回新实例，无副作用，天然线程安全。</li>
- *   <li>自描述：携带 {@code tables} 供 AST 改写器与执行监听器使用，无需正则解析 SQL。</li>
- *   <li>参数有序：{@code parameters} 携带名称、来源与绑定策略，替代裸 {@code Object}。</li>
- *   <li>零成本：{@code record} 无继承、无反射，{@code GraalVM native} 友好。</li>
+ *   <li>纯粹物理视图：仅承载最终可送入 JDBC 执行的 SQL 文本、有序参数与语句元数据；
+ *       结构化语法树由编译前的 {@link AstStatement} 独立承载。</li>
+ *   <li>不可变：所有派生方法返回新实例，无副作用，天然线程安全。</li>
+ *   <li>自描述：携带 {@code StatementMetadata} 供执行监听器与异常翻译器直接读取。</li>
  * </ul>
  *
- * @param sql            JDBC 风格 SQL（{@code ?} 占位符）
- * @param parameters     有序参数列表，与 SQL 中 ? 一一对应
- * @param metadata       语句级元数据（操作类型、表引用、实体类型等）
- * @param ast            框架生成语句的内部结构树；原生 SQL / 已文本改写语句为 {@code null}
+ * @param sql        JDBC 风格 SQL（{@code ?} 占位符）
+ * @param parameters 有序参数列表，与 SQL 中 {@code ?} 一一对应
+ * @param metadata   语句级元数据（操作类型、表引用、实体类型等）
  */
 public record SqlStatement(
         String sql,
         List<SqlParameter> parameters,
-        StatementMetadata metadata,
-        @Nullable SqlNode ast
+        StatementMetadata metadata
 ) {
 
     public SqlStatement {
@@ -33,14 +31,9 @@ public record SqlStatement(
         metadata = metadata == null ? StatementMetadata.empty() : metadata;
     }
 
-    /** 兼容既有调用方：无 AST 的语句。 */
-    public SqlStatement(String sql, List<SqlParameter> parameters, StatementMetadata metadata) {
-        this(sql, parameters, metadata, null);
-    }
-
     /** 从有序参数列表构建（推荐）。 */
     public static SqlStatement of(String sql, List<SqlParameter> parameters, StatementMetadata metadata) {
-        return new SqlStatement(sql, parameters, metadata, null);
+        return new SqlStatement(sql, parameters, metadata);
     }
 
     /** 按显式操作类型从可变参数构建（DDL / TRUNCATE 等非 CRUD 语句使用）。 */
@@ -48,45 +41,39 @@ public record SqlStatement(
         return fromArgs(sql, op, args);
     }
 
-    /** 从 AST 渲染结果构建。 */
-    public static SqlStatement of(String sql, List<SqlParameter> parameters,
-                                  StatementMetadata metadata, @Nullable SqlNode ast) {
-        return new SqlStatement(sql, parameters, metadata, ast);
-    }
-
     /** 导出参数值列表。 */
     public List<Object> args() {
-        return parameters.stream().map(SqlParameter::value).toList();
+        if (parameters.isEmpty()) {
+            return List.of();
+        }
+        List<Object> values = new ArrayList<>(parameters.size());
+        for (SqlParameter parameter : parameters) {
+            values.add(parameter.value());
+        }
+        return java.util.Collections.unmodifiableList(values);
     }
 
     // ===== 改写方法（返回新实例） =====
 
-    /** 改写 SQL 文本，返回新实例。文本改写会使 AST 失效，因此显式丢弃。 */
+    /** 派生替换 SQL 文本的新实例。 */
     public SqlStatement withSql(String newSql) {
-        return new SqlStatement(newSql, parameters, metadata, null);
+        return new SqlStatement(newSql, parameters, metadata);
     }
 
-    /** 改写参数列表，返回新实例。 */
+    /** 派生替换参数列表的新实例。 */
     public SqlStatement withParameters(List<SqlParameter> newParameters) {
-        return new SqlStatement(sql, newParameters, metadata, ast);
+        return new SqlStatement(sql, newParameters, metadata);
     }
 
-    /** 改写元数据，返回新实例。 */
+    /** 派生替换元数据的新实例。 */
     public SqlStatement withMetadata(StatementMetadata newMetadata) {
-        return new SqlStatement(sql, parameters, newMetadata, ast);
+        return new SqlStatement(sql, parameters, newMetadata);
     }
 
-    /** 改写数据库类型，返回新实例。 */
+    /** 派生注入数据库类型的新实例。 */
     public SqlStatement withDbType(DbType newDbType) {
-        return new SqlStatement(sql, parameters, metadata.withDbType(newDbType), ast);
+        return new SqlStatement(sql, parameters, metadata.withDbType(newDbType));
     }
-
-    /** 带 AST 的副本（AST 与 SQL 必须来自同一次渲染）。 */
-    public SqlStatement withAst(@Nullable SqlNode newAst) {
-        return new SqlStatement(sql, parameters, metadata, newAst);
-    }
-
-
 
     // ===== 静态工厂：提升调用可读性，并强制表达操作类型 =====
 
@@ -123,7 +110,7 @@ public record SqlStatement(
     }
 
     private static SqlStatement fromArgs(String sql, Operation op, Object... args) {
-        return new SqlStatement(sql, toParameters(args == null ? List.of() : java.util.Arrays.asList(args)),
+        return new SqlStatement(sql, toParameters(args == null ? List.of() : Arrays.asList(args)),
                 StatementMetadata.of(op));
     }
 
@@ -135,7 +122,7 @@ public record SqlStatement(
         if (args == null || args.isEmpty()) {
             return List.of();
         }
-        List<SqlParameter> params = new java.util.ArrayList<>(args.size());
+        List<SqlParameter> params = new ArrayList<>(args.size());
         for (int i = 0; i < args.size(); i++) {
             params.add(SqlParameter.of(i + 1, "arg_" + (i + 1), args.get(i), ParameterSource.RAW));
         }

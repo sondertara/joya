@@ -1,12 +1,19 @@
 package com.sondertara.joya.core.metadata;
 
+import com.sondertara.joya.exceptions.DbException;
+import com.sondertara.joya.utils.TypeUtils;
+import org.jspecify.annotations.Nullable;
+
 import java.lang.annotation.Annotation;
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
 import java.lang.reflect.AnnotatedElement;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.List;
-import java.util.Objects;
 import java.util.Optional;
-import java.util.stream.Stream;
 
 /**
  * 持久化注解双栈解析器：同时兼容 {@code jakarta.persistence.*}（Spring Boot 3 / JPA 3+）
@@ -36,6 +43,23 @@ public final class PersistenceAnnotations {
             "jakarta.persistence.IdClass", "javax.persistence.IdClass");
     private static final List<Class<? extends Annotation>> EMBEDDED_ID_TYPES = loadAnnotations(
             "jakarta.persistence.EmbeddedId", "javax.persistence.EmbeddedId");
+    private static final List<Class<? extends Annotation>> VERSION_TYPES = loadAnnotations(
+            "jakarta.persistence.Version", "javax.persistence.Version");
+    private static final List<Class<? extends Annotation>> CONVERT_TYPES = loadAnnotations(
+            "jakarta.persistence.Convert", "javax.persistence.Convert");
+    private static final List<Class<?>> ATTRIBUTE_CONVERTER_INTERFACES = loadInterfaces(
+            "jakarta.persistence.AttributeConverter", "javax.persistence.AttributeConverter");
+
+    private static final MethodType UNARY_OBJECT_TYPE = MethodType.methodType(Object.class, Object.class);
+    private static final MethodHandles.Lookup PUBLIC_LOOKUP = MethodHandles.publicLookup();
+
+    /** 按 AttributeConverter 实现类缓存预绑定 MethodHandle 的无状态转换器句柄。 */
+    private static final ClassValue<ColumnConverter> CONVERTER_CACHE = new ClassValue<>() {
+        @Override
+        protected ColumnConverter computeValue(Class<?> converterClass) {
+            return compileConverter(converterClass);
+        }
+    };
 
     private PersistenceAnnotations() {
     }
@@ -143,6 +167,113 @@ public final class PersistenceAnnotations {
         return isAnyPresent(element, EMBEDDED_ID_TYPES);
     }
 
+    /**
+     * 判断字段是否标注了 {@code @Version}（乐观锁版本列）。
+     */
+    public static boolean isVersionPresent(AnnotatedElement element) {
+        return isAnyPresent(element, VERSION_TYPES);
+    }
+
+    /**
+     * 解析字段或方法上的标准 JPA {@code @Convert(converter = ...)} 双向列转换器。
+     * 若未标注、或 {@code disableConversion = true}、或 {@code converter == void.class} 则返回空。
+     */
+    public static Optional<ColumnConverter> findConverter(AnnotatedElement element) {
+        for (Class<? extends Annotation> type : CONVERT_TYPES) {
+            Annotation ann = element.getAnnotation(type);
+            if (ann != null) {
+                if (invokeBoolean(ann, "disableConversion", false)) {
+                    return Optional.empty();
+                }
+                Class<?> converterClass = invokeClass(ann, "converter");
+                if (converterClass == null || converterClass == void.class) {
+                    return Optional.empty();
+                }
+                return Optional.of(CONVERTER_CACHE.get(converterClass));
+            }
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * 统一解析实体/DTO 字段及其对应 Getter/Record 访问器上的标准 JPA {@code @Convert}，
+     * 保证写路径（{@code LocalTableMetaCache}）与读路径（{@code BeanRowMapper}）采用完全一致的单一解析真源。
+     */
+    public static Optional<ColumnConverter> findConverter(Class<?> ownerType, Field field) {
+        Optional<ColumnConverter> onField = findConverter(field);
+        if (onField.isPresent()) {
+            return onField;
+        }
+        String fieldName = field.getName();
+        if (fieldName.isEmpty()) {
+            return Optional.empty();
+        }
+        String capitalized = Character.toUpperCase(fieldName.charAt(0)) + fieldName.substring(1);
+        String[] candidates = ownerType.isRecord()
+                ? new String[]{fieldName, "get" + capitalized, "is" + capitalized}
+                : new String[]{"get" + capitalized, "is" + capitalized};
+        Class<?> declaring = field.getDeclaringClass();
+        for (String name : candidates) {
+            Method method = findZeroArgMethod(ownerType, declaring, name);
+            if (method != null) {
+                Optional<ColumnConverter> onMethod = findConverter(method);
+                if (onMethod.isPresent()) {
+                    return onMethod;
+                }
+            }
+        }
+        return Optional.empty();
+    }
+
+    private static @Nullable Method findZeroArgMethod(Class<?> ownerType, Class<?> declaringClass, String name) {
+        try {
+            return ownerType.getMethod(name);
+        } catch (NoSuchMethodException ignored) {
+        }
+        try {
+            return declaringClass.getDeclaredMethod(name);
+        } catch (NoSuchMethodException ignored) {
+            return null;
+        }
+    }
+
+    private static ColumnConverter compileConverter(Class<?> converterClass) {
+        Class<?> matchedInterface = null;
+        for (Class<?> iface : ATTRIBUTE_CONVERTER_INTERFACES) {
+            if (iface.isAssignableFrom(converterClass)) {
+                matchedInterface = iface;
+                break;
+            }
+        }
+        if (matchedInterface == null) {
+            throw new DbException("@Convert converter [" + converterClass.getName()
+                    + "] must implement jakarta.persistence.AttributeConverter or javax.persistence.AttributeConverter");
+        }
+        Object instance;
+        try {
+            Constructor<?> ctor = converterClass.getDeclaredConstructor();
+            if (!ctor.canAccess(null)) {
+                ctor.trySetAccessible();
+            }
+            instance = ctor.newInstance();
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            throw new DbException("Failed to instantiate @Convert AttributeConverter ["
+                    + converterClass.getName() + "]; a no-arg constructor is required", e);
+        }
+        try {
+            MethodHandle toDb = PUBLIC_LOOKUP.findVirtual(matchedInterface, "convertToDatabaseColumn", UNARY_OBJECT_TYPE)
+                    .bindTo(instance);
+            MethodHandle toEntity = PUBLIC_LOOKUP.findVirtual(matchedInterface, "convertToEntityAttribute", UNARY_OBJECT_TYPE)
+                    .bindTo(instance);
+            Class<?>[] args = TypeUtils.resolveTypeArguments(converterClass, matchedInterface);
+            Class<?> entityType = (args.length >= 1 && args[0] != null) ? args[0] : Object.class;
+            Class<?> dbType = (args.length >= 2 && args[1] != null) ? args[1] : Object.class;
+            return new ColumnConverter(converterClass, entityType, dbType, toDb, toEntity);
+        } catch (ReflectiveOperationException e) {
+            throw new DbException("Failed to bind AttributeConverter methods on [" + converterClass.getName() + "]", e);
+        }
+    }
+
     private static boolean isAnyPresent(AnnotatedElement element, List<Class<? extends Annotation>> types) {
         for (Class<? extends Annotation> type : types) {
             if (element.isAnnotationPresent(type)) {
@@ -163,6 +294,28 @@ public final class PersistenceAnnotations {
             }
         }
         return List.copyOf(result);
+    }
+
+    private static List<Class<?>> loadInterfaces(String... classNames) {
+        ClassLoader cl = PersistenceAnnotations.class.getClassLoader();
+        java.util.ArrayList<Class<?>> result = new java.util.ArrayList<>(classNames.length);
+        for (String name : classNames) {
+            try {
+                result.add(Class.forName(name, false, cl));
+            } catch (ClassNotFoundException ignored) {
+            }
+        }
+        return List.copyOf(result);
+    }
+
+    private static Class<?> invokeClass(Annotation annotation, String attributeName) {
+        try {
+            Method m = annotation.annotationType().getMethod(attributeName);
+            Object val = m.invoke(annotation);
+            return val instanceof Class<?> c ? c : null;
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     private static String invokeString(Annotation annotation, String attributeName) {

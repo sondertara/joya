@@ -10,7 +10,6 @@ import com.sondertara.joya.core.kernel.executor.ExecutionOptions;
 import com.sondertara.joya.core.kernel.executor.Executor;
 import com.sondertara.joya.core.kernel.executor.Executors;
 import com.sondertara.joya.core.kernel.executor.ResultSetExtractor;
-import com.sondertara.joya.core.kernel.executor.ResultSetSpliterator;
 import com.sondertara.joya.core.kernel.executor.ResultType;
 import com.sondertara.joya.core.kernel.executor.RowMapper;
 import com.sondertara.joya.core.kernel.executor.RowMapperFactory;
@@ -21,6 +20,8 @@ import com.sondertara.joya.core.kernel.observe.ExecutionObserver;
 import com.sondertara.joya.core.kernel.observe.SqlExecutionContext;
 import com.sondertara.joya.core.kernel.observe.SqlExecutionListener;
 import com.sondertara.joya.core.kernel.observe.SqlExecutionResult;
+import com.sondertara.joya.core.kernel.statement.AstStatement;
+import com.sondertara.joya.core.kernel.statement.BatchAstStatement;
 import com.sondertara.joya.core.kernel.statement.BatchSlot;
 import com.sondertara.joya.core.kernel.statement.BatchSqlStatement;
 import com.sondertara.joya.core.kernel.statement.DbType;
@@ -41,17 +42,13 @@ import java.util.stream.Stream;
 
 /**
  * 内部 SQL 执行内核（零业务语义，协调准备、方言、观测与执行四阶段管线）。
- * <p>
- * 职责边界：
+ *
+ * <p>职责边界：
  * <ul>
- *   <li>只认 {@link SqlStatement} / {@link BatchSqlStatement}，不感知上层查询 DSL 或实体门面。</li>
- *   <li><b>SQL 执行唯一入口</b>：所有 public 执行方法都先经 {@link StatementPreparer}
- *       （AST 结构改写 {@link SqlRewriter} 后由 {@link SqlRenderer} 单一渲染），无旁路
- *       （注：单参隐式计数分页 {@link #queryPage(SqlStatement, RowMapper, long, long)} 先对基础语句执行一次
- *       {@code prepare}，再由方言派生 {@code countSql} / {@code pageSql} 两条物理 SQL，避免重复改写）；
- *       执行由 {@link Executor} 端口完成，观测由 {@link ExecutionObserver} 包装。</li>
- *   <li>不感知事务：连接来源由 {@link ConnectionProvider} 决定；事务视图通过 {@link #bind(ConnectionProvider)} 派生，
- *       与原内核共享改写器链与方言。</li>
+ *   <li>接收结构化 {@link AstStatement} / {@link BatchAstStatement}（来自查询 DSL 与实体变更门面，单趟编译）
+ *       以及原生 {@link SqlStatement} / {@link BatchSqlStatement}（来自 {@code SqlOps}）。</li>
+ *   <li><b>SQL 执行唯一入口</b>：所有常规读写均经 {@link StatementPreparer} 与 {@link ExecutionObserver}，无旁路。</li>
+ *   <li>不感知事务：连接来源由 {@link ConnectionProvider} 决定；事务视图通过 {@link #bind(ConnectionProvider)} 派生。</li>
  * </ul>
  */
 public final class ExecutionKernel {
@@ -66,13 +63,6 @@ public final class ExecutionKernel {
     private final RowMapperFactory rowMapperFactory;
     private final Executor executor;
 
-    /**
-     * 内核装配配置；所有字段在构造时校验一次。
-     *
-     * @param connections     唯一连接来源（方言探测、执行、逃生舱都经此端口）
-     * @param executorFactory 执行器工厂（可选，默认 {@link Executors#JDBC}）
-     * @param clientName      可选客户端逻辑标识（如 {@code "primary"}、{@code "order"}，随事务与设置视图继承）
-     */
     public record Config(
             List<SqlRewriter> rewriters,
             List<SqlExecutionListener> executionListeners,
@@ -107,7 +97,7 @@ public final class ExecutionKernel {
             dialectStrategy = Objects.requireNonNull(dialectStrategy, "dialectStrategy must not be null");
             executionOptions = executionOptions == null ? ExecutionOptions.DEFAULT : executionOptions;
             if (executionOptions.queryTimeoutSeconds() > 0
-                    && !(connections instanceof ResultSetSpliterator.StreamAccess)) {
+                    && !connections.managesStreamLifecycle()) {
                 connections = connections.withQueryTimeoutSeconds(executionOptions.queryTimeoutSeconds());
             }
             namingPolicy = namingPolicy == null ? NamingPolicy.DEFAULT : namingPolicy;
@@ -125,17 +115,13 @@ public final class ExecutionKernel {
         this.executionOptions = config.executionOptions();
         this.namingPolicy = config.namingPolicy();
         this.rowMapperFactory = config.rowMapperFactory();
-        this.preparer = new StatementPreparer(config.rewriters(), dialectStrategy, connections);
+        this.preparer = new StatementPreparer(config.rewriters(), dialectStrategy, connections, namingPolicy);
         this.observer = new ExecutionObserver(config.executionListeners(), config.clientName());
         this.executor = Objects.requireNonNull(
                 config.executorFactory().create(connections, config.exceptionTranslator()),
                 "executorFactory must not return null");
     }
 
-    /**
-     * 派生一个使用指定连接来源的内核视图（共享改写器链、方言策略、客户端标识与配置）。
-     * <p>事务视图即由此产生：{@code kernel.bind(txConnectionProvider)}；执行器由工厂用新连接来源重建。
-     */
     public ExecutionKernel bind(ConnectionProvider provider) {
         return new ExecutionKernel(new Config(
                 preparer.rewriters(),
@@ -151,10 +137,6 @@ public final class ExecutionKernel {
         ));
     }
 
-    /**
-     * 派生一个使用新执行选项与命名策略的内核视图（共享连接来源语义、客户端标识、改写器、监听器与扩展端口）。
-     * <p>若语句超时秒数发生变化，会通过 {@link ConnectionProvider#withQueryTimeoutSeconds(int)} 派生新的连接提供者并重建执行器。
-     */
     public ExecutionKernel withSettings(ExecutionOptions newExecutionOptions, NamingPolicy newNamingPolicy) {
         ExecutionOptions effectiveOptions = newExecutionOptions == null ? executionOptions : newExecutionOptions;
         NamingPolicy effectiveNaming = newNamingPolicy == null ? namingPolicy : newNamingPolicy;
@@ -175,36 +157,41 @@ public final class ExecutionKernel {
         ));
     }
 
-    /**
-     * 按结果类型解析行映射器；映射实现由上层注入，kernel 不依赖具体 JDBC 映射器。
-     */
     public <V> RowMapper<V> mapperFor(ResultType type, Class<V> javaType) {
         return rowMapperFactory.create(type, javaType);
     }
 
-    // ===== 查询 =====
-
-    /** 查询首行；无结果返回 {@code null}。 */
-    public <T> T query(SqlStatement statement, RowMapper<T> mapper) {
-        SqlStatement rewritten = preparer.prepare(statement).statement();
-        return observer.observe(rewritten,
-                () -> executor.query(rewritten, new SingleRowRecordExtractor<>(mapper)),
-                result -> SqlExecutionResult.rows(result == null ? 0L : 1L));
+    public <V> RowMapper<V> mapperFor(ResultType type,
+                                      Class<V> javaType,
+                                      java.util.Map<String, com.sondertara.joya.utils.SqlDataUtils.ColumnReader> columnReaderOverrides) {
+        if (columnReaderOverrides == null || columnReaderOverrides.isEmpty()) {
+            return rowMapperFactory.create(type, javaType);
+        }
+        return rowMapperFactory.create(type, javaType, columnReaderOverrides);
     }
 
-    /** 严格单行查询：0 行返回 {@code null}，1 行返回映射值，多于 1 行抛 {@link IllegalStateException}。 */
+    // ===== 查询（AST 单趟编译入口 + 原生 SQL 入口） =====
+
+    public <T> T query(AstStatement statement, RowMapper<T> mapper) {
+        return executeQuery(preparer.prepare(statement).statement(), mapper);
+    }
+
+    public <T> T query(SqlStatement statement, RowMapper<T> mapper) {
+        return executeQuery(preparer.prepare(statement).statement(), mapper);
+    }
+
+    public <T> T queryOne(AstStatement statement, RowMapper<T> mapper) {
+        return executeQueryOne(preparer.prepare(statement).statement(), mapper);
+    }
+
     public <T> T queryOne(SqlStatement statement, RowMapper<T> mapper) {
+        return executeQueryOne(preparer.prepare(statement).statement(), mapper);
+    }
+
+    public <T> T query(AstStatement statement, ResultSetExtractor<T> extractor) {
         SqlStatement rewritten = preparer.prepare(statement).statement();
-        return observer.observe(rewritten, () -> executor.query(rewritten, rs -> {
-            if (!rs.next()) {
-                return null;
-            }
-            T first = mapper.forResultSet(rs).map(rs);
-            if (rs.next()) {
-                throw new IllegalStateException("Expected at most 1 row, but query returned multiple rows: " + rewritten.sql());
-            }
-            return first;
-        }), result -> SqlExecutionResult.rows(result == null ? 0L : 1L));
+        return observer.observe(rewritten, () -> executor.query(rewritten, extractor),
+                result -> SqlExecutionResult.rows(-1L));
     }
 
     public <T> T query(SqlStatement statement, ResultSetExtractor<T> extractor) {
@@ -213,25 +200,109 @@ public final class ExecutionKernel {
                 result -> SqlExecutionResult.rows(-1L));
     }
 
+    public <T> List<T> queryList(AstStatement statement, RowMapper<T> mapper) {
+        return executeQueryList(preparer.prepare(statement).statement(), mapper);
+    }
+
     public <T> List<T> queryList(SqlStatement statement, RowMapper<T> mapper) {
-        SqlStatement rewritten = preparer.prepare(statement).statement();
+        return executeQueryList(preparer.prepare(statement).statement(), mapper);
+    }
+
+    public <T> Stream<T> queryStream(AstStatement statement, RowMapper<T> mapper) {
+        return executeQueryStream(preparer.prepare(statement), mapper);
+    }
+
+    public <T> Stream<T> queryStream(SqlStatement statement, RowMapper<T> mapper) {
+        return executeQueryStream(preparer.prepare(statement), mapper);
+    }
+
+    public <T> List<T> queryLimit(AstStatement statement, RowMapper<T> mapper, long offset, long limit) {
+        validatePageBounds(offset, limit);
+        return executeQueryLimit(preparer.prepare(statement), mapper, offset, limit);
+    }
+
+    public <T> List<T> queryLimit(SqlStatement statement, RowMapper<T> mapper, long offset, long limit) {
+        validatePageBounds(offset, limit);
+        return executeQueryLimit(preparer.prepare(statement), mapper, offset, limit);
+    }
+
+    public <T> PageSlice<T> queryPage(AstStatement statement, RowMapper<T> mapper, long offset, long limit) {
+        validatePageBounds(offset, limit);
+        return executeImplicitPage(preparer.prepare(statement), mapper, offset, limit);
+    }
+
+    public <T> PageSlice<T> queryPage(SqlStatement statement, RowMapper<T> mapper, long offset, long limit) {
+        validatePageBounds(offset, limit);
+        return executeImplicitPage(preparer.prepare(statement), mapper, offset, limit);
+    }
+
+    public <T> PageSlice<T> queryPage(AstStatement statement, AstStatement countStatement,
+                                      RowMapper<T> mapper, long offset, long limit) {
+        validatePageBounds(offset, limit);
+        SqlStatement rewrittenCount = preparer.prepare(countStatement).statement();
+        long total = executeCount(rewrittenCount, offset, limit);
+        if (total == 0 || limit == 0) {
+            return new PageSlice<>(List.of(), total);
+        }
+        return executeExplicitPagedData(preparer.prepare(statement), mapper, offset, limit, total);
+    }
+
+    public <T> PageSlice<T> queryPage(SqlStatement statement, SqlStatement countStatement,
+                                      RowMapper<T> mapper, long offset, long limit) {
+        validatePageBounds(offset, limit);
+        SqlStatement rewrittenCount = preparer.prepare(countStatement).statement();
+        long total = executeCount(rewrittenCount, offset, limit);
+        if (total == 0 || limit == 0) {
+            return new PageSlice<>(List.of(), total);
+        }
+        return executeExplicitPagedData(preparer.prepare(statement), mapper, offset, limit, total);
+    }
+
+    public <T> Stream<T> queryStream(AstStatement statement, RowMapper<T> mapper, long offset, long limit) {
+        validatePageBounds(offset, limit);
+        return executeStreamLimit(preparer.prepare(statement), mapper, offset, limit);
+    }
+
+    public <T> Stream<T> queryStream(SqlStatement statement, RowMapper<T> mapper, long offset, long limit) {
+        validatePageBounds(offset, limit);
+        return executeStreamLimit(preparer.prepare(statement), mapper, offset, limit);
+    }
+
+    private <T> T executeQuery(SqlStatement rewritten, RowMapper<T> mapper) {
+        return observer.observe(rewritten,
+                () -> executor.query(rewritten, new SingleRowRecordExtractor<>(mapper)),
+                result -> SqlExecutionResult.rows(result == null ? 0L : 1L));
+    }
+
+    private <T> T executeQueryOne(SqlStatement rewritten, RowMapper<T> mapper) {
+        return observer.observe(rewritten, () -> executor.query(rewritten, rs -> {
+            if (!rs.next()) {
+                return null;
+            }
+            T first = mapper.forResultSet(rs).map(rs);
+            if (rs.next()) {
+                throw new IllegalStateException(
+                        "Expected at most 1 row, but query returned multiple rows: " + rewritten.sql());
+            }
+            return first;
+        }), result -> SqlExecutionResult.rows(result == null ? 0L : 1L));
+    }
+
+    private <T> List<T> executeQueryList(SqlStatement rewritten, RowMapper<T> mapper) {
         return observer.observe(rewritten, () -> executor.queryList(rewritten, mapper),
                 result -> SqlExecutionResult.rows(result.size()));
     }
 
-    /** 流式查询：返回的 Stream 必须关闭（try-with-resources），关闭时才归还连接。 */
-    public <T> Stream<T> queryStream(SqlStatement statement, RowMapper<T> mapper) {
-        StatementPreparer.Prepared prepared = preparer.prepare(statement);
+    private <T> Stream<T> executeQueryStream(StatementPreparer.Prepared prepared, RowMapper<T> mapper) {
         SqlStatement rewritten = prepared.statement();
         Dialect currentDialect = dialectFor(prepared);
-        return observer.observeStream(rewritten,
-                () -> executor.queryStream(rewritten, mapper, currentDialect.streamFetchSize()));
+        return observer.observeStream(rewritten, null,
+                () -> executor.queryStream(rewritten, mapper, currentDialect.streamFetchSize()),
+                connections::onStreamClose);
     }
 
-    /** 方言分页截取：offset 起的 limit 行。 */
-    public <T> List<T> queryLimit(SqlStatement statement, RowMapper<T> mapper, long offset, long limit) {
-        validatePageBounds(offset, limit);
-        StatementPreparer.Prepared prepared = preparer.prepare(statement);
+    private <T> List<T> executeQueryLimit(StatementPreparer.Prepared prepared, RowMapper<T> mapper,
+                                          long offset, long limit) {
         if (limit == 0) {
             return List.of();
         }
@@ -243,15 +314,8 @@ public final class ExecutionKernel {
                 result -> SqlExecutionResult.rows(result.size()));
     }
 
-    /**
-     * 隐式计数分页查询（主要用于原生 SQL）：原始 {@code statement} 先经过一次 {@code StatementPreparer.prepare}
-     * （完成 AST 改写），再由 {@link Dialect#countSql(SqlStatement)} 与 {@link Dialect#pageSql(SqlStatement, long, long)}
-     * 分别派生计数包装语句与分页物理语句（不重复触发改写器），两次物理执行各自独立进入 {@link ExecutionObserver}
-     * 并携带统一的 {@link SqlExecutionContext.PaginationView}。
-     */
-    public <T> PageSlice<T> queryPage(SqlStatement statement, RowMapper<T> mapper, long offset, long limit) {
-        validatePageBounds(offset, limit);
-        StatementPreparer.Prepared prepared = preparer.prepare(statement);
+    private <T> PageSlice<T> executeImplicitPage(StatementPreparer.Prepared prepared, RowMapper<T> mapper,
+                                                 long offset, long limit) {
         SqlStatement rewritten = prepared.statement();
         Dialect currentDialect = dialectFor(prepared);
         SqlStatement countStmt = currentDialect.countSql(rewritten);
@@ -271,29 +335,18 @@ public final class ExecutionKernel {
         return new PageSlice<>(rows, total);
     }
 
-    /**
-     * 分页查询（显式计数语句）：由渲染层直接提供不含 {@code ORDER BY / LIMIT} 的计数 SQL，避免方言再包一层子查询。
-     *
-     * @param statement      数据查询语句
-     * @param countStatement 计数语句（单行单列）
-     * @param mapper         行映射器
-     * @param offset         起始偏移量
-     * @param limit          每页条数
-     */
-    public <T> PageSlice<T> queryPage(SqlStatement statement, SqlStatement countStatement, RowMapper<T> mapper, long offset, long limit) {
-        validatePageBounds(offset, limit);
-        SqlStatement rewrittenCount = preparer.prepare(countStatement).statement();
+    private long executeCount(SqlStatement rewrittenCount, long offset, long limit) {
         Long counted = observer.observe(rewrittenCount,
                 pageView(rewrittenCount, offset, limit),
                 () -> executor.query(rewrittenCount,
                         new SingleRowRecordExtractor<>(new SingleColumnRowMapper<>(Long.class))),
                 value -> SqlExecutionResult.rows(value == null ? 0L : 1L));
-        long total = counted == null ? 0L : counted;
-        if (total == 0 || limit == 0) {
-            return new PageSlice<>(List.of(), total);
-        }
-        // 数据查询同样被观测（与计数语句各触发一次监听），且仅在有数据时才准备 / 拦截
-        StatementPreparer.Prepared preparedData = preparer.prepare(statement);
+        return counted == null ? 0L : counted;
+    }
+
+    private <T> PageSlice<T> executeExplicitPagedData(StatementPreparer.Prepared preparedData,
+                                                      RowMapper<T> mapper,
+                                                      long offset, long limit, long total) {
         SqlStatement rewrittenData = preparedData.statement();
         Dialect currentDialect = dialectFor(preparedData);
         SqlStatement pagedData = currentDialect.pageSql(rewrittenData, offset, limit);
@@ -304,10 +357,8 @@ public final class ExecutionKernel {
         return new PageSlice<>(rows, total);
     }
 
-    /** 方言分页截取的流式查询：返回的 Stream 必须关闭（try-with-resources）。 */
-    public <T> Stream<T> queryStream(SqlStatement statement, RowMapper<T> mapper, long offset, long limit) {
-        validatePageBounds(offset, limit);
-        StatementPreparer.Prepared prepared = preparer.prepare(statement);
+    private <T> Stream<T> executeStreamLimit(StatementPreparer.Prepared prepared, RowMapper<T> mapper,
+                                             long offset, long limit) {
         if (limit == 0) {
             return Stream.empty();
         }
@@ -315,7 +366,8 @@ public final class ExecutionKernel {
         Dialect currentDialect = dialectFor(prepared);
         SqlStatement paged = currentDialect.pageSql(rewritten, offset, limit);
         return observer.observeStream(paged, pageView(rewritten, offset, limit),
-                () -> executor.queryStream(paged, mapper, currentDialect.streamFetchSize()));
+                () -> executor.queryStream(paged, mapper, currentDialect.streamFetchSize()),
+                connections::onStreamClose);
     }
 
     private SqlExecutionContext.@Nullable PaginationView pageView(SqlStatement logicalStatement, long offset, long limit) {
@@ -346,37 +398,64 @@ public final class ExecutionKernel {
         }
     }
 
-    // ===== 变更 =====
+    // ===== 变更（AST 单趟编译入口 + 原生 SQL 入口） =====
+
+    public int update(AstStatement statement) {
+        return executeUpdate(preparer.prepare(statement).statement());
+    }
 
     public int update(SqlStatement statement) {
-        SqlStatement rewritten = preparer.prepare(statement).statement();
-        return observer.observe(rewritten, () -> executor.update(rewritten),
-                affected -> SqlExecutionResult.affected((long) affected));
+        return executeUpdate(preparer.prepare(statement).statement());
     }
 
-    /** 执行 INSERT 并返回真实受影响行数与首个生成键。 */
+    public Executor.InsertSlice insertExecute(AstStatement statement) {
+        return executeInsert(preparer.prepare(statement).statement());
+    }
+
     public Executor.InsertSlice insertExecute(SqlStatement statement) {
-        SqlStatement rewritten = preparer.prepare(statement).statement();
-        return observer.observe(rewritten, () -> executor.insertExecute(rewritten),
-                slice -> SqlExecutionResult.insert(slice.affectedRows(), slice.generatedKey()));
+        return executeInsert(preparer.prepare(statement).statement());
     }
 
-    /** 列级绑定批量执行（支持分片 Flush 与生成键收集，返回内核值类型）；与单条语句一样经过完整改写与拦截链。 */
+    public BatchSlice batchExecute(BatchAstStatement batch) {
+        if (batch == null || batch.rowCount() == 0) {
+            return BatchSlice.EMPTY;
+        }
+        return executePreparedBatch(preparer.prepareBatch(batch), false);
+    }
+
     public BatchSlice batchExecute(BatchSqlStatement batch) {
         if (batch == null || batch.rowCount() == 0) {
             return BatchSlice.EMPTY;
         }
-        int rowCount = batch.rowCount();
-        BatchSqlStatement effective = preparer.prepareBatch(batch);
+        return executePreparedBatch(preparer.prepareBatch(batch), false);
+    }
+
+    /** 精确行计数批量执行（AST 入口）：单趟编译并经改写器与监听器，但底层逐行返回真实受影响行数。 */
+    public BatchSlice batchExecuteExact(BatchAstStatement batch) {
+        if (batch == null || batch.rowCount() == 0) {
+            return BatchSlice.EMPTY;
+        }
+        return executePreparedBatch(preparer.prepareBatch(batch), true);
+    }
+
+    private int executeUpdate(SqlStatement rewritten) {
+        return observer.observe(rewritten, () -> executor.update(rewritten),
+                affected -> SqlExecutionResult.affected((long) affected));
+    }
+
+    private Executor.InsertSlice executeInsert(SqlStatement rewritten) {
+        return observer.observe(rewritten, () -> executor.insertExecute(rewritten),
+                slice -> SqlExecutionResult.insert(slice.affectedRows(), slice.generatedKey()));
+    }
+
+    private BatchSlice executePreparedBatch(BatchSqlStatement effective, boolean exact) {
+        int rowCount = effective.rowCount();
         SqlStatement probe = SqlStatement.of(effective.sql(), probeParameters(effective), effective.metadata());
-        return observer.observeBatch(probe, rowCount, () -> executor.batchExecute(effective),
+        return observer.observeBatch(probe, rowCount,
+                () -> exact ? executor.batchExecuteExact(effective) : executor.batchExecute(effective),
                 slice -> new SqlExecutionResult(-1L, -1L, slice.batchCounts(), slice.generatedKeys(), 0L));
     }
 
-    /**
-     * 批处理观测视图：按 {@link BatchSlot} 顺序结合首行值构造与占位符一一对应的参数列表，
-     * 保证监听器拿到的是自洽的 {@link SqlStatement}（占位符数 == 参数数，保留真实 {@code ParameterSource}）。
-     */
     private static List<SqlParameter> probeParameters(BatchSqlStatement batch) {
         List<BatchSlot> slots = batch.slots();
         List<SqlParameter> parameters = new ArrayList<>(slots.size());
@@ -395,12 +474,10 @@ public final class ExecutionKernel {
 
     // ===== 逃生舱 =====
 
-    /** 在一条连接上执行回调（不经过改写器链，调用方自负其责）。 */
     public <T> T withConnection(ConnectionCallback<T> action) {
         return executor.withConnection(action);
     }
 
-    /** 执行 SQL 脚本（DDL / 初始化数据，逃生舱：不经过改写器与观测管线；优先复用已缓存方言词法，不触发额外探测连接）。 */
     public void runScript(Reader reader) {
         Dialect cached = peekDialect();
         executor.runScript(reader, cached != null ? cached.dbType() : null);
@@ -408,12 +485,10 @@ public final class ExecutionKernel {
 
     // ===== 访问器 =====
 
-    /** 方言端口（由 {@link DialectStrategy} 决定解析与缓存策略）。 */
     public Dialect dialect() {
         return dialectStrategy.resolve(connections);
     }
 
-    /** 仅返回已缓存或固定配置的方言（不打开数据库连接探测）。 */
     public @Nullable Dialect peekDialect() {
         return dialectStrategy.peek();
     }
@@ -430,21 +505,10 @@ public final class ExecutionKernel {
         return preparer.hasRewriters();
     }
 
-    /**
-     * 是否存在对给定操作、实体与表可能生效的 {@link SqlRewriter}（只探测 {@code supports}，不执行改写）。
-     *
-     * <p>用于「原生 UPSERT 这类优化路径能否安全放行」的判定：写路径一旦可能被改写器改写为带行级过滤的语义，
-     * 就必须走回退路径，否则会绕过租户/审计等条件。返回 {@code false} 时可直接走原生最快的路径。
-     *
-     * @param operations 需要同时检查的操作集合（UPSERT 应同时检查 SELECT / INSERT / UPDATE）
-     * @param entityType 实体类型，可为 {@code null}
-     * @param tables     本次语句涉及的物理表引用
-     * @param dbType     当前方言，可为 {@code null}（改写器不感知方言时无影响）
-     */
     public boolean hasApplicableRewriters(Collection<Operation> operations,
-                                         @Nullable Class<?> entityType,
-                                         Set<TableRef> tables,
-                                         @Nullable DbType dbType) {
+                                          @Nullable Class<?> entityType,
+                                          Set<TableRef> tables,
+                                          @Nullable DbType dbType) {
         return preparer.hasApplicableRewriters(operations, entityType, tables, dbType);
     }
 

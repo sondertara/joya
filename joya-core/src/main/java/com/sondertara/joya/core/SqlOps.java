@@ -11,7 +11,6 @@ import com.sondertara.joya.core.kernel.statement.DbType;
 import com.sondertara.joya.core.kernel.statement.NamedSqlCompiler;
 import com.sondertara.joya.core.kernel.statement.Operation;
 import com.sondertara.joya.core.kernel.statement.SqlFormatUtils;
-import com.sondertara.joya.core.kernel.statement.SqlRenderer;
 import com.sondertara.joya.core.kernel.statement.SqlStatement;
 import com.sondertara.joya.core.kernel.statement.StatementMetadata;
 import com.sondertara.joya.core.query.PageResult;
@@ -23,6 +22,9 @@ import org.jspecify.annotations.Nullable;
 import java.beans.IntrospectionException;
 import java.beans.Introspector;
 import java.beans.PropertyDescriptor;
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
@@ -48,7 +50,7 @@ public final class SqlOps {
     private final ExecutionKernel kernel;
     private final String sql;
     private final Object[] args;
-    private final SqlStatement presetStatement;
+    private final @Nullable SqlStatement presetStatement;
     private Map<String, Object> namedBindings;
     private DbType explicitDbType;
     private DbType resolvedDbType;
@@ -156,8 +158,7 @@ public final class SqlOps {
         if (dbType == null || statement.metadata().dbType() == dbType) {
             return statement;
         }
-        SqlStatement updated = statement.withDbType(dbType);
-        return updated.ast() == null ? updated : SqlRenderer.render(updated.ast(), updated.metadata());
+        return statement.withDbType(dbType);
     }
 
     private DbType peekDbType() {
@@ -189,7 +190,7 @@ public final class SqlOps {
      * {@code ... LIMIT 2 LIMIT ?} 这类非法 SQL。这里在发往数据库前给出明确错误。
      */
     private void rejectTrailingLimit(String operation) {
-        if (sql != null && SqlFormatUtils.hasTopLevelPagination(sql, currentDbType())) {
+        if (SqlFormatUtils.hasTopLevelPagination(sql, currentDbType())) {
             throw new IllegalStateException("Cannot apply " + operation
                     + "(): the SQL already contains a pagination clause (LIMIT/OFFSET/FETCH); remove it or use list()/one(): " + sql);
         }
@@ -199,7 +200,7 @@ public final class SqlOps {
 
     /** 查询多行并映射为指定类型列表。 */
     public <T> List<T> list(Class<T> type) {
-        return kernel.queryList(selectStmt(), mapperForType(type));
+        return list(mapperForType(type));
     }
 
     /** 查询多行并使用自定义 {@link RowMapper} 映射。 */
@@ -248,7 +249,7 @@ public final class SqlOps {
      * 查询单列标量值（如 {@code SELECT count(*)} / {@code SELECT max(age)}）。
      */
     public <T> Optional<T> value(Class<T> scalarType) {
-        return Optional.ofNullable(kernel.queryOne(selectStmt(), new SingleColumnRowMapper<>(scalarType)));
+        return one(new SingleColumnRowMapper<>(scalarType));
     }
 
     /**
@@ -290,7 +291,7 @@ public final class SqlOps {
      * 流式查询（调用方必须使用 {@code try-with-resources} 关闭返回的 {@link Stream}）。
      */
     public <T> Stream<T> stream(Class<T> type) {
-        return kernel.queryStream(selectStmt(), mapperForType(type));
+        return stream(mapperForType(type));
     }
 
     /**
@@ -429,38 +430,70 @@ public final class SqlOps {
         return kernel.mapperFor(ResultType.classify(type), type);
     }
 
-    private static void extractBeanProperties(Object bean, Map<String, Object> target) {
-        Class<?> type = bean.getClass();
-        try {
-            if (type.isRecord()) {
-                for (RecordComponent component : type.getRecordComponents()) {
-                    Method accessor = component.getAccessor();
-                    accessor.trySetAccessible();
-                    target.put(component.getName(), accessor.invoke(bean));
+    private static final MethodType BEAN_READER_TYPE = MethodType.methodType(Object.class, Object.class);
+
+    private record BeanPropertyReader(String name, MethodHandle handle) {
+        @Nullable
+        Object read(Object bean) throws Throwable {
+            return (Object) handle.invokeExact(bean);
+        }
+    }
+
+    private static final ClassValue<List<BeanPropertyReader>> BEAN_READERS = new ClassValue<>() {
+        @Override
+        protected List<BeanPropertyReader> computeValue(Class<?> type) {
+            MethodHandles.Lookup lookup = MethodHandles.lookup();
+            Map<String, BeanPropertyReader> readers = new LinkedHashMap<>();
+            try {
+                if (type.isRecord()) {
+                    for (RecordComponent component : type.getRecordComponents()) {
+                        Method accessor = component.getAccessor();
+                        accessor.trySetAccessible();
+                        MethodHandle mh = lookup.unreflect(accessor).asType(BEAN_READER_TYPE);
+                        readers.put(component.getName(), new BeanPropertyReader(component.getName(), mh));
+                    }
+                    return List.copyOf(readers.values());
                 }
-                return;
-            }
-            PropertyDescriptor[] descriptors = Introspector.getBeanInfo(type, Object.class).getPropertyDescriptors();
-            for (PropertyDescriptor pd : descriptors) {
-                Method readMethod = pd.getReadMethod();
-                if (readMethod != null) {
-                    readMethod.trySetAccessible();
-                    target.put(pd.getName(), readMethod.invoke(bean));
-                }
-            }
-            Class<?> cursor = type;
-            while (cursor != null && cursor != Object.class && !cursor.getName().startsWith("java.")) {
-                for (Field field : cursor.getDeclaredFields()) {
-                    if (!Modifier.isStatic(field.getModifiers())
-                            && !field.isSynthetic()
-                            && !target.containsKey(field.getName())
-                            && field.trySetAccessible()) {
-                        target.put(field.getName(), field.get(bean));
+                PropertyDescriptor[] descriptors = Introspector.getBeanInfo(type, Object.class).getPropertyDescriptors();
+                for (PropertyDescriptor pd : descriptors) {
+                    Method readMethod = pd.getReadMethod();
+                    if (readMethod != null) {
+                        readMethod.trySetAccessible();
+                        MethodHandle mh = lookup.unreflect(readMethod).asType(BEAN_READER_TYPE);
+                        readers.put(pd.getName(), new BeanPropertyReader(pd.getName(), mh));
                     }
                 }
-                cursor = cursor.getSuperclass();
+                Class<?> cursor = type;
+                while (cursor != null && cursor != Object.class && !cursor.getName().startsWith("java.")) {
+                    for (Field field : cursor.getDeclaredFields()) {
+                        if (!Modifier.isStatic(field.getModifiers())
+                                && !field.isSynthetic()
+                                && !readers.containsKey(field.getName())
+                                && field.trySetAccessible()) {
+                            MethodHandle mh = lookup.unreflectGetter(field).asType(BEAN_READER_TYPE);
+                            readers.put(field.getName(), new BeanPropertyReader(field.getName(), mh));
+                        }
+                    }
+                    cursor = cursor.getSuperclass();
+                }
+                return List.copyOf(readers.values());
+            } catch (ReflectiveOperationException | IntrospectionException e) {
+                throw new IllegalArgumentException(
+                        "Failed to introspect properties for bindBean() on " + type.getName(), e);
             }
-        } catch (ReflectiveOperationException | IntrospectionException e) {
+        }
+    };
+
+    private static void extractBeanProperties(Object bean, Map<String, Object> target) {
+        Class<?> type = bean.getClass();
+        List<BeanPropertyReader> readers = BEAN_READERS.get(type);
+        try {
+            for (BeanPropertyReader reader : readers) {
+                target.put(reader.name(), reader.read(bean));
+            }
+        } catch (RuntimeException | Error e) {
+            throw e;
+        } catch (Throwable e) {
             throw new IllegalArgumentException(
                     "Failed to extract properties for bindBean() from " + type.getName(), e);
         }

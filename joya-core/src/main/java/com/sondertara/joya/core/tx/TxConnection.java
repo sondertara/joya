@@ -187,12 +187,12 @@ public final class TxConnection implements TxSession {
         OptionalInt fallback = defaultQueryTimeoutSeconds.isPresent()
                 ? defaultQueryTimeoutSeconds
                 : (baseConnections != null ? baseConnections.queryTimeoutSeconds() : OptionalInt.empty());
-        return support.resolveQueryTimeoutSeconds(fallback);
+        return support.resolveQueryTimeoutSeconds(fallback, this::markRollbackOnlyState);
     }
 
     @Override
     public OptionalInt deadlineTimeoutSeconds() {
-        return support.resolveQueryTimeoutSeconds(OptionalInt.empty());
+        return support.resolveQueryTimeoutSeconds(OptionalInt.empty(), this::markRollbackOnlyState);
     }
 
     // ===== 状态查询 =====

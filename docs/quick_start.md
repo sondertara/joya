@@ -8,14 +8,10 @@ Maven Project（Spring Boot 3）
 <dependency>
     <groupId>com.sondertara.joya</groupId>
     <artifactId>joya-spring-boot-starter</artifactId>
-    <version>1.1.1</version>
+    <version>1.2.0</version>
 </dependency>
-<!-- joya-spring-boot-starter 采用轻量旁路定位，不强制绑定特定连接池；
-     若宿主工程尚未引入连接池（如 spring-boot-starter-data-jpa / Druid），请一并引入 spring-boot-starter-jdbc 与对应数据库驱动 -->
-<dependency>
-    <groupId>org.springframework.boot</groupId>
-    <artifactId>spring-boot-starter-jdbc</artifactId>
-</dependency>
+<!-- Starter 已内置 spring-boot-starter-jdbc（HikariCP + JDBC + 事务）与 jakarta.persistence-api，
+     仅需额外引入对应数据库驱动即可开箱即用 -->
 ```
 
 Maven Project（纯 Java）
@@ -24,7 +20,7 @@ Maven Project（纯 Java）
 <dependency>
     <groupId>com.sondertara.joya</groupId>
     <artifactId>joya-core</artifactId>
-    <version>1.1.1</version>
+    <version>1.2.0</version>
 </dependency>
 ```
 
@@ -80,12 +76,16 @@ joya:
     use-spring: true            # 默认 true：复用 spring.datasource；设为 false 时在当前节点下配置独立 url/username/password
     batch-size: 2048
   datasources:
-    - name: order               # 自建旁路连接池
+    - name: order               # 自建旁路连接池（自动绑定 joya-order 连接池名与 Micrometer 指标）
       url: jdbc:mysql://localhost:3306/order_db
       username: root
       password: secret
+      expose-transaction-manager: true  # 可选：暴露 orderTransactionManager 以支持 @Transactional("orderTransactionManager")
       batch-size: 512
     - name: archive             # 复用容器中已有的 DataSource / PlatformTransactionManager Bean
       data-source-bean: archiveDataSource
       transaction-manager-bean: archiveTxManager
+  observation:
+    enabled: true               # 存在 Micrometer ObservationRegistry 时自动桥接 SQL 指标与链路追踪
+    include-sql: false          # 默认不记录高基数 db.statement
 ```

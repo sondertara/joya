@@ -835,6 +835,8 @@ class JoyaSpringSidecarIntegrationTest {
     @Test
     void selfManagedDataSource_withoutConnectionPoolOrExplicitType_failsFastWithActionableGuidance() {
         autoDiscoveryRunner()
+                .withClassLoader(new org.springframework.boot.test.context.FilteredClassLoader(
+                        com.zaxxer.hikari.HikariDataSource.class))
                 .withPropertyValues(
                         "spring.datasource.url=jdbc:h2:mem:pool_missing_primary;MODE=MYSQL;DB_CLOSE_DELAY=-1",
                         "spring.datasource.username=sa",

@@ -1,8 +1,10 @@
 package com.sondertara.joya.spring.autoconfigure;
 
 import com.sondertara.joya.core.JoyaClient;
+import com.sondertara.joya.spring.support.JoyaManagedTransactionManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.transaction.PlatformTransactionManager;
 
 import javax.sql.DataSource;
 import java.util.Collections;
@@ -39,19 +41,29 @@ public final class JoyaClientRegistry implements AutoCloseable {
     private final Map<String, JoyaClient> clients;
     private final List<AutoCloseable> managedResources;
     private final Map<String, DataSource> sidecarDataSources;
+    private final Map<String, JoyaManagedTransactionManager> exposedTransactionManagers;
+    private final java.util.concurrent.atomic.AtomicBoolean closed = new java.util.concurrent.atomic.AtomicBoolean();
 
     public JoyaClientRegistry(Map<String, JoyaClient> clients) {
-        this(PRIMARY, clients, List.of(), Map.of());
+        this(PRIMARY, clients, List.of(), Map.of(), Map.of());
     }
 
     public JoyaClientRegistry(String primaryName, Map<String, JoyaClient> clients) {
-        this(primaryName, clients, List.of(), Map.of());
+        this(primaryName, clients, List.of(), Map.of(), Map.of());
     }
 
     JoyaClientRegistry(String primaryName,
                        Map<String, JoyaClient> clients,
                        List<AutoCloseable> managedResources,
                        Map<String, DataSource> sidecarDataSources) {
+        this(primaryName, clients, managedResources, sidecarDataSources, Map.of());
+    }
+
+    JoyaClientRegistry(String primaryName,
+                       Map<String, JoyaClient> clients,
+                       List<AutoCloseable> managedResources,
+                       Map<String, DataSource> sidecarDataSources,
+                       Map<String, JoyaManagedTransactionManager> exposedTransactionManagers) {
         Objects.requireNonNull(primaryName, "primaryName must not be null");
         Objects.requireNonNull(clients, "clients must not be null");
         if (clients.isEmpty()) {
@@ -67,6 +79,9 @@ public final class JoyaClientRegistry implements AutoCloseable {
         this.sidecarDataSources = sidecarDataSources == null || sidecarDataSources.isEmpty()
                 ? Map.of()
                 : Collections.unmodifiableMap(new LinkedHashMap<>(sidecarDataSources));
+        this.exposedTransactionManagers = exposedTransactionManagers == null || exposedTransactionManagers.isEmpty()
+                ? Map.of()
+                : Collections.unmodifiableMap(new LinkedHashMap<>(exposedTransactionManagers));
     }
 
     /**
@@ -108,14 +123,52 @@ public final class JoyaClientRegistry implements AutoCloseable {
         return sidecarDataSources;
     }
 
+    /** 获取主数据源对应的自管 {@link JoyaManagedTransactionManager}（仅当自建主库开启事务管理器暴露时可用）。 */
+    public JoyaManagedTransactionManager primaryTransactionManager() {
+        return transactionManager(primaryName);
+    }
+
+    /** 按数据源名称获取 Joya 为自建托管数据源创建的 {@link JoyaManagedTransactionManager}。 */
+    public JoyaManagedTransactionManager transactionManager(String name) {
+        JoyaManagedTransactionManager tm = (name == null || name.isBlank()) ? null : exposedTransactionManagers.get(name);
+        if (tm == null) {
+            throw new IllegalArgumentException(
+                    "No Joya-managed PlatformTransactionManager registered for name '" + name
+                            + "'. Available managed transaction managers: " + exposedTransactionManagers.keySet());
+        }
+        return tm;
+    }
+
+    /** 按数据源名称安全查找 Joya 为自建托管数据源创建的 {@link PlatformTransactionManager}。 */
+    public Optional<PlatformTransactionManager> findTransactionManager(String name) {
+        if (name == null || name.isBlank()) {
+            return Optional.empty();
+        }
+        return Optional.ofNullable(exposedTransactionManagers.get(name));
+    }
+
     @Override
     public void close() {
-        for (AutoCloseable resource : managedResources) {
+        if (!closed.compareAndSet(false, true)) {
+            return;
+        }
+        Error firstError = null;
+        for (int i = managedResources.size() - 1; i >= 0; i--) {
+            AutoCloseable resource = managedResources.get(i);
             try {
                 resource.close();
-            } catch (Exception e) {
-                log.warn("Failed to close Joya managed DataSource resource", e);
+            } catch (Error err) {
+                if (firstError == null) {
+                    firstError = err;
+                } else {
+                    firstError.addSuppressed(err);
+                }
+            } catch (Throwable t) {
+                log.warn("Failed to close Joya managed DataSource resource", t);
             }
+        }
+        if (firstError != null) {
+            throw firstError;
         }
     }
 }

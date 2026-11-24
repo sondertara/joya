@@ -21,13 +21,15 @@ import java.util.Objects;
  * @param batchRows  批处理总行数（非批处理或未指定批行数时固定为 {@code -1}）
  * @param clientName 所属客户端逻辑标识（未命名客户端为 {@code null}）
  * @param page       可选分页视图（非分页执行为 {@code null}）
+ * @param streaming  是否为流式查询（为 {@code true} 时观测器需延后至 {@code onStreamClosed} 收口生命周期）
  */
 public record SqlExecutionContext(
         SqlStatement statement,
         boolean batch,
         int batchRows,
         @Nullable String clientName,
-        @Nullable PaginationView page
+        @Nullable PaginationView page,
+        boolean streaming
 ) {
 
     /**
@@ -47,12 +49,21 @@ public record SqlExecutionContext(
 
     /** 便捷构造：非分页执行（无客户端标识，未指定批行数时统一为 {@code -1}）。 */
     public SqlExecutionContext(SqlStatement statement, boolean batch) {
-        this(statement, batch, -1, null, null);
+        this(statement, batch, -1, null, null, false);
     }
 
     /** 便捷构造：指定客户端标识的非分页执行。 */
     public SqlExecutionContext(SqlStatement statement, boolean batch, int batchRows, @Nullable String clientName) {
-        this(statement, batch, batchRows, clientName, null);
+        this(statement, batch, batchRows, clientName, null, false);
+    }
+
+    /** 便捷构造：非流式分页/普通执行。 */
+    public SqlExecutionContext(SqlStatement statement,
+                               boolean batch,
+                               int batchRows,
+                               @Nullable String clientName,
+                               @Nullable PaginationView page) {
+        this(statement, batch, batchRows, clientName, page, false);
     }
 
     public SqlExecutionContext {
@@ -71,11 +82,8 @@ public record SqlExecutionContext(
     }
 
     /**
-     * 返回 {@code SqlRewriter} 改写完成、方言分页/{@code COUNT(*)} 包装之前的逻辑语句；
+     * 返回 {@code SqlRewriter} 改写完成、方言分页/{@code COUNT(*)} 包装之前的逻辑物理语句；
      * 非分页执行时直接返回 {@link #statement()} 同一引用（零额外分配）。
-     *
-     * <p>注意：经过方言分页或 {@code COUNT(*)} 包装后的物理 {@link #statement()} 其 {@code ast()} 为 {@code null}；
-     * 需要读取结构化 AST 的监听器请访问 {@code logicalStatement().ast()}。
      */
     public SqlStatement logicalStatement() {
         return page == null ? statement : page.logicalStatement();

@@ -7,6 +7,7 @@ import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.sql.Types;
+import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.util.Date;
@@ -106,6 +107,8 @@ public interface ParameterBinder {
             statement.setTimestamp(index, timestamp);
         } else if (value instanceof Date date) {
             statement.setTimestamp(index, Timestamp.from(date.toInstant()));
+        } else if (value instanceof Instant instant) {
+            statement.setTimestamp(index, Timestamp.from(instant));
         } else if (value instanceof Enum<?> enumVal) {
             statement.setString(index, enumVal.name());
         } else if (value instanceof OffsetDateTime odt && isOracle(statement, dbType)) {

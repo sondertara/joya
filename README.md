@@ -5,18 +5,18 @@
 ![JDK](https://img.shields.io/badge/JDK-17%2B-blue)
 [![License](https://img.shields.io/github/license/sondertara/joya)](https://www.apache.org/licenses/LICENSE-2.0)
 
-> Joya 是一款面向现代 Java（JDK 17+ / Spring Boot 3）的轻量级旁路（Sidecar）ORM 与流式 SQL 框架，以**统一流式入口（`DataOps`：`from` / `of` / `sql` / `mapper`）**、**三段式类型安全查询 DSL**、**显式值事务（`Tx`）**与**零侵入多数据源注册表（`JoyaClientRegistry`）**为核心设计理念。
+> Joya 是一款面向现代 Java（JDK 17+ / Spring Boot 3）的轻量级 ORM 与流式 SQL 框架（主 ORM 与旁路多数据源一体），以**统一流式入口（`DataOps`：`from` / `of` / `sql` / `mapper`）**、**三段式类型安全查询 DSL**、**显式值事务（`Tx`）**、**标准 JPA `@Convert` / `@Version` 乐观锁**与**多数据源注册表（`JoyaClientRegistry`）**为核心设计理念。
 
 ## 🍹 项目特性
 
-- **统一流式契约（`DataOps`）**：`JoyaClient`（自动提交）与 `Tx`（显式事务）实现同一份 `DataOps` 接口，三大数据入口——`db.from(Entity.class)`（查询 DSL）、`db.of(Entity.class)`（实体写与快捷读）、`db.sql(...)`（参数化原生 SQL）在事务内外无缝复用
+- **统一流式契约（`DataOps`）**：`JoyaClient`（自动提交）与 `Tx`（显式事务）实现同一份 `DataOps` 接口，三大数据入口——`db.from(Entity.class)`（查询 DSL，支持绑定离线 `Query.of(...)`）、`db.of(Entity.class)`（实体写与快捷读）、`db.sql(...)`（参数化原生 SQL）在事务内外无缝复用
 - **单一查询入口，全形态覆盖**：从 `joya.from(Entity.class)` 出发，一脉相承覆盖完整实体、部分列装回实体、单列直取、跨表构造映射（`Record::new`）、分组聚合、宽 DTO 自动推列与分页（支持 `PageResult.map(...)` 转换）
-- **零字符串别名，编译期列数/类型匹配 + 渲染期表归属校验**：多表联查与聚合通过定长泛型 `Select1..8` + `Record::new` 按位置构造映射，内置 `RecordOrderVerifier` 防止同类型字段顺序颠倒；列所属表是否已在 `FROM / JOIN` 中注册由渲染期统一校验
-- **Spring Boot 3 旁路集成，零侵入共存**：主库默认复用原生 `spring.datasource`，与 `DataSourceTransactionManager` / `JpaTransactionManager` 下的 `@Transactional`（MyBatis / JPA / `JdbcTemplate`）自动共享同一条事务连接；扩展数据源既可自建旁路连接池（不污染全局 `DataSource` Bean），也可复用容器既有 Bean，并自动注册 `@Qualifier("<name>") JoyaClient`
-- **免扫描跨库 `JoyaMapper`**：内置全套单表读写删与动态分页默认方法，自定义查询用 `default` 方法组合 `query()` / `ops()` / `sql(...)`；通过 `joya.mapper(UserMapper.class)` 随取随用，零包扫描开销，同一接口可在多数据源间无缝复用
+- **标准 JPA `@Convert` 与 `@Version` 乐观锁一等支持**：内置标准 JPA `@Convert` / `AttributeConverter<X, Y>`（`jakarta` / `javax` 双栈无反射热路径，自动透传普通 DTO/Record 与 `WhereCriterion`）与 `Instant` 读写兼容；`@Version` 覆盖插入自动初值回写、单条/批量精确行计数校验（`batchExecuteExact`）、两阶段内存版本号回写、实体删除校验与 Upsert 冲突防覆盖
+- **Spring Boot 3 主 ORM 与旁路共存一体**：Starter 默认内置 `spring-boot-starter-jdbc` 与 `jakarta.persistence-api`，引入驱动即可作为唯一主 ORM 开箱即用（自动排在 `Flyway`/`Liquibase` 之后）；主库默认复用 `spring.datasource`，自建主库或开启 `expose-transaction-manager=true` 的扩展库支持声明式 `@Transactional` 事务桥接；内置自建 Hikari 连接池指标绑定、Micrometer `ObservationRegistry` 链路追踪桥接与 `@JoyaTest` 数据层切片测试注解
+- **免扫描跨库 `JoyaMapper` 与按需 `@JoyaMapperScan`**：内置全套单表读写删与动态分页默认方法，自定义查询用 `default` 方法组合 `query()` / `ops()` / `sql(...)`；既可通过 `joya.mapper(UserMapper.class)` 随取随用，也可标注 `@JoyaMapperScan` 直接 `@Autowired` 注入
 - **显式值事务（`Tx`）**：`1 JoyaClient = 1 DataSource`、`1 Tx = 1 Connection`，废除 `ThreadLocal` 隐式污染；支持 `savepoint` 局部回滚、`afterCommit` / `afterCompletion` 回调与死锁退避重试（`retryOnDeadlock`）
 - **动态条件零样板与默认防误操作**：`WhereCriterion` 默认严格非空（传 `null` 立即报错，可选条件显式使用 `*IfPresent` / `*IfNotBlank` / `*IfNotEmpty`）；`EntityUpdate` / `EntityDelete` 默认强制非空 `WHERE`（全表操作须显式 `.allowAll()`）；外部动态筛选通过 `PageQueryParams` 强制白名单防注入
-- **渲染期动态表名与无旁路观测**：通过 `TableNameResolver` 在生成 SQL 时决定物理表名（覆盖分表与 schema 切换）；所有常规执行统一收口于 `ExecutionKernel`，100% 经过 AST `SqlRewriter` 与 `SqlExecutionListener`（含慢 SQL 告警与敏感参数脱敏）
+- **AST 2.0 单趟编译与无旁路观测**：通过 `TableNameResolver` 在渲染期决定物理表名（覆盖分表与 schema 切换）；所有常规执行统一收口于 `ExecutionKernel`，经 AST `SqlRewriter` 与单趟 `SqlRenderer` 编译并 100% 经过 `SqlExecutionListener`（含慢 SQL 告警、敏感参数脱敏与 Micrometer Observation）
 
 ---
 
@@ -30,14 +30,10 @@
 <dependency>
     <groupId>com.sondertara.joya</groupId>
     <artifactId>joya-spring-boot-starter</artifactId>
-    <version>1.1.1</version>
+    <version>1.2.0</version>
 </dependency>
-<!-- Starter 保持轻量旁路定位，不强绑特定连接池；
-     若宿主工程尚未引入连接池（如 spring-boot-starter-data-jpa / Druid），请一并引入 spring-boot-starter-jdbc 与数据库驱动 -->
-<dependency>
-    <groupId>org.springframework.boot</groupId>
-    <artifactId>spring-boot-starter-jdbc</artifactId>
-</dependency>
+<!-- Starter 已内置 spring-boot-starter-jdbc（HikariCP + JDBC + 事务）与 jakarta.persistence-api，
+     直接引入对应数据库驱动（如 mysql-connector-j / postgresql）即可作为主 ORM 开箱即用 -->
 ```
 
 ### 纯 Java 项目（无 Spring）
@@ -46,7 +42,7 @@
 <dependency>
     <groupId>com.sondertara.joya</groupId>
     <artifactId>joya-core</artifactId>
-    <version>1.1.1</version>
+    <version>1.2.0</version>
 </dependency>
 ```
 
@@ -77,17 +73,21 @@ joya:
     use-spring: true              # 默认 true 复用 spring.datasource；设为 false 时在当前节点下配置独立连接池
     batch-size: 2048
   datasources:
-    # 方式 A：自建旁路连接池（不注册为全局 DataSource Bean，绝不干扰主 ORM；存在 Actuator 时自动纳入 joyaHealthContributor）
+    # 方式 A：自建旁路连接池（不注册为全局 DataSource Bean；存在 Actuator/MeterRegistry 时自动接入健康检查与 Hikari 指标）
     - name: order
       url: jdbc:mysql://localhost:3306/order_db
       username: root
       password: secret
+      expose-transaction-manager: true  # 可选：暴露 @Qualifier("order") orderTransactionManager 支持 @Transactional("orderTransactionManager")
       batch-size: 512
       query-timeout-seconds: 15
     # 方式 B：复用 Spring 容器中已有的 DataSource / PlatformTransactionManager Bean
     - name: archive
       data-source-bean: archiveDataSource
       transaction-manager-bean: archiveTxManager
+  observation:
+    enabled: true                       # 存在 Micrometer ObservationRegistry 时自动上报 joya.sql 指标与链路追踪
+    include-sql: false                  # 默认关闭高基数 db.statement 标签，按需开启
 ```
 
 ### 2. 依赖注入与跨库路由

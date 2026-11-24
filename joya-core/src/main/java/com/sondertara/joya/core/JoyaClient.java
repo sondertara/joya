@@ -114,6 +114,11 @@ public final class JoyaClient implements DataOps {
     }
 
     @Override
+    public <T> Query<T> from(Query<T> query) {
+        return dataOps.from(query);
+    }
+
+    @Override
     public <T> EntityOps<T> of(Class<T> entityType) {
         return dataOps.of(entityType);
     }

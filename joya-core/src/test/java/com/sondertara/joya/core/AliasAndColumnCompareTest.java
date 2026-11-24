@@ -425,13 +425,14 @@ class AliasAndColumnCompareTest {
         assertEquals("issue", ticketMeta.resolveColumn(TicketRecord::issue));
         assertEquals("getaway", ticketMeta.resolveColumn(TicketRecord::getaway));
 
-        // 1.4: SelectStatementFactory 拒绝元数据外非法列名拼接
+        // 1.4: EntityStatements.selectColumnsAst 拒绝元数据外非法列名拼接
         var userMeta = com.sondertara.joya.core.metadata.LocalTableMetaCache.getMetadataContext(User.class);
         assertThrows(IllegalArgumentException.class, () ->
-                com.sondertara.joya.core.statement.factory.SelectStatementFactory.create(
+                EntityStatements.selectColumnsAst(
                         userMeta,
                         null,
-                        java.util.Set.of("1; DROP TABLE t_user --")));
+                        java.util.Set.of("1; DROP TABLE t_user --"),
+                        com.sondertara.joya.core.naming.NamingPolicy.DEFAULT));
 
         // 1.5-1: underlineColumn 与 stripTableAlias 跳过字符串字面量
         assertEquals(

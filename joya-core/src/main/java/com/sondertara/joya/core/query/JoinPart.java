@@ -12,7 +12,7 @@ import java.util.Objects;
  * 关联查询（JOIN）关系描述单元。
  *
  * <p>持有左右关联列的 {@link ColumnMetaProvider}（惰性列元数据）、可选的显式表别名 {@code alias} 以及可选的 {@code ON} 附加条件，
- * 在构造期不触发 {@code t0 / t1} 表别名分配，直到查询渲染期由 {@link com.sondertara.joya.core.query.RenderContext} 统一解析。
+ * 在构造期不触发 {@code t0 / t1} 表别名分配，直到查询编译期由 {@link TableScope} 统一解析。
  *
  * @author huangxiaohu
  */

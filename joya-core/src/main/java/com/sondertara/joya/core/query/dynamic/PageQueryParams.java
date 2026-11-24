@@ -8,7 +8,6 @@ import com.sondertara.joya.core.query.pagination.FilterCondition;
 import com.sondertara.joya.core.query.pagination.FilterOperator;
 import com.sondertara.joya.core.query.pagination.PageQueryRequest;
 import com.sondertara.joya.core.query.pagination.SortCondition;
-import com.sondertara.joya.exceptions.TaraException;
 
 import java.lang.reflect.Array;
 import java.util.ArrayList;
@@ -27,7 +26,7 @@ import java.util.Objects;
  * }</pre>
  *
  * <p>安全保证：所有外部传入的字段名与排序字段均通过 {@link com.sondertara.joya.core.query.ColumnMetaProvider#fromName(String)}
- * 及 {@link com.sondertara.joya.core.query.RenderContext} 校验是否在当前查询的 {@code from / join} 实体元数据白名单内，
+ * 及 {@link com.sondertara.joya.core.query.TableScope} 校验是否在当前查询的 {@code from / join} 实体元数据白名单内，
  * 非法或未知字段直接抛出 {@link IllegalArgumentException}。
  */
 public final class PageQueryParams {
@@ -142,7 +141,7 @@ public final class PageQueryParams {
                     List<Object> range = extractCollection("BETWEEN", val);
                     if (range != null && !range.isEmpty()) {
                         if (range.size() != 2) {
-                            throw new TaraException("The value of operator [BETWEEN] must contain 2 elements");
+                            throw new IllegalArgumentException("The value of operator [BETWEEN] must contain 2 elements");
                         }
                         w.betweenIfPresent(field, range.get(0), range.get(1));
                     }
@@ -169,6 +168,6 @@ public final class PageQueryParams {
         if (val instanceof Collection<?> col) {
             return new ArrayList<>(col);
         }
-        throw new TaraException("The value of operator [" + opName + "] must be collection or array");
+        throw new IllegalArgumentException("The value of operator [" + opName + "] must be collection or array");
     }
 }

@@ -5,6 +5,7 @@ import com.sondertara.joya.core.kernel.statement.SqlStatement;
 import com.sondertara.joya.core.query.PageResult;
 import com.sondertara.joya.core.query.pagination.PageRequest;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -27,14 +28,14 @@ public sealed class SelectN
 
     public <E> SelectN and(IGetter<E, ?> column) {
         Objects.requireNonNull(column, "column must not be null");
-        java.util.List<IGetter<?, ?>> next = new java.util.ArrayList<>(columns.size() + 1);
+        List<IGetter<?, ?>> next = new ArrayList<>(columns.size() + 1);
         next.addAll(columns);
         next.add(column);
         return new SelectN(query, next);
     }
 
     public SqlStatement toSqlStatement() {
-        return query.renderStatement(Projections.positional(columns, args -> null, null, query.renderContext()));
+        return query.renderStatement(Projections.positional(columns, args -> null, null, query.tableScope()));
     }
 
     public final <V> List<V> list(Class<V> type) {
@@ -62,11 +63,11 @@ public sealed class SelectN
     }
 
     private <V> Projection<V> namedProjection(Class<V> type) {
-        return Projections.named(columns, type, query.renderContext());
+        return Projections.named(columns, type, query.tableScope());
     }
 
     final <V> Projection<V> positionalProjection(Function<Object[], V> factory, Object mapper) {
         Objects.requireNonNull(mapper, "mapper must not be null");
-        return Projections.positional(columns, factory, mapper, query.renderContext());
+        return Projections.positional(columns, factory, mapper, query.tableScope());
     }
 }

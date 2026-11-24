@@ -1,16 +1,16 @@
 package com.sondertara.joya.core;
 
-import com.sondertara.joya.core.listener.EntityListener;
 import com.sondertara.joya.core.kernel.ExecutionKernel;
 import com.sondertara.joya.core.kernel.executor.BatchSlice;
-import com.sondertara.joya.core.kernel.statement.BatchSqlStatement;
-import com.sondertara.joya.core.kernel.statement.SqlStatement;
+import com.sondertara.joya.core.kernel.statement.AstStatement;
+import com.sondertara.joya.core.kernel.statement.BatchAstStatement;
+import com.sondertara.joya.core.listener.EntityListener;
+import com.sondertara.joya.core.metadata.ColumnConverter;
 import com.sondertara.joya.core.metadata.EntityMetadataContext;
-import com.sondertara.joya.core.metadata.EntitySnapshot;
+import com.sondertara.joya.core.metadata.VersionMetadata;
 import com.sondertara.joya.core.result.MutationResult;
-import com.sondertara.joya.core.statement.MutationContext;
-import com.sondertara.joya.core.statement.factory.InsertStatementFactory;
 import com.sondertara.joya.utils.ConvertUtils;
+import com.sondertara.joya.utils.TypeUtils;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -19,17 +19,15 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
 
 /**
  * 实体插入计划：单条插入与批量插入共用的唯一规划/校验/执行入口。
  *
- * <p>每个实体在 {@code prePersist} 之后只做一次字段快照，后续单条渲染、批量行提取、
- * 生成键回写全部复用该快照，避免同一行被反复反射读取。
+ * <p>基于 {@link EntityMetadataContext#snapshotValues(Object)} 紧凑数组一次提取列值（零 {@code LinkedHashMap} 分配），
+ * 并直接向 {@link ExecutionKernel} 提交 {@link AstStatement} / {@link BatchAstStatement} 单趟编译。
  */
 final class InsertPlan<T> {
 
@@ -54,30 +52,36 @@ final class InsertPlan<T> {
                 : Collections.unmodifiableMap(new LinkedHashMap<>(overrides));
     }
 
-    /**
-     * 一次实体快照：列选择、单条渲染、批量行提取、生成键回写共用。
-     */
-    private record RowPlan<E>(E entity, Map<String, Object> values, List<String> columns) {
+    private record RowPlan<E>(E entity, Object[] snapshot, List<String> columns,
+                              @Nullable Object initializedVersion) {
     }
 
-    /**
-     * 监听器执行后的实体快照；显式 {@code value(...)} 覆盖值优先于快照。
-     */
-    private Map<String, Object> valuesOf(T entity) {
-        Map<String, Object> values = new LinkedHashMap<>(EntitySnapshot.snapshot(meta, entity).values());
+    private Object[] snapshotOf(T entity) {
+        Object[] snapshot = meta.snapshotValues(entity);
         if (!overrides.isEmpty()) {
-            values.putAll(overrides);
+            for (Map.Entry<String, Object> entry : overrides.entrySet()) {
+                int idx = meta.columnIndex(entry.getKey());
+                if (idx >= 0) {
+                    snapshot[idx] = entry.getValue();
+                }
+            }
         }
-        return values;
+        return snapshot;
     }
 
     MutationResult execute(ExecutionKernel kernel) {
+        return execute(kernel, null);
+    }
+
+    MutationResult execute(ExecutionKernel kernel, @Nullable List<Runnable> externalDeferredWriteBacks) {
         if (entities.isEmpty()) {
             return MutationResult.EMPTY;
         }
         String pk = meta.primaryKey();
+        int pkIndex = pk != null ? meta.columnIndex(pk) : -1;
         boolean pkGenerated = pk != null && meta.generatedColumns().contains(pk);
 
+        VersionMetadata versionMeta = meta.versionMetadata();
         record InsertRun<E>(List<String> cols, List<RowPlan<E>> rows) {
         }
         List<InsertRun<T>> runs = new ArrayList<>();
@@ -85,9 +89,17 @@ final class InsertPlan<T> {
             if (entity instanceof EntityListener listener) {
                 listener.prePersist();
             }
-            Map<String, Object> values = valuesOf(entity);
-            List<String> cols = columnsFor(values, pk);
-            RowPlan<T> row = new RowPlan<>(entity, values, cols);
+            Object[] snapshot = snapshotOf(entity);
+            Object initializedVersion = null;
+            if (versionMeta != null) {
+                int vIdx = versionMeta.columnIndex();
+                if (snapshot[vIdx] == null) {
+                    initializedVersion = versionMeta.initialValue();
+                    snapshot[vIdx] = initializedVersion;
+                }
+            }
+            List<String> cols = columnsFor(snapshot, pkIndex);
+            RowPlan<T> row = new RowPlan<>(entity, snapshot, cols, initializedVersion);
             if (!runs.isEmpty() && runs.get(runs.size() - 1).cols().equals(cols)) {
                 runs.get(runs.size() - 1).rows().add(row);
             } else {
@@ -97,16 +109,26 @@ final class InsertPlan<T> {
             }
         }
 
+        // 跨多列分组或外层跨分片（saveAll）时统一延后内存回写，确保任意后段失败回滚不污染前段实体内存
+        List<Runnable> deferred = externalDeferredWriteBacks != null
+                ? externalDeferredWriteBacks
+                : (runs.size() > 1 ? new ArrayList<>() : null);
+
         MutationResult total = MutationResult.EMPTY;
         for (InsertRun<T> run : runs) {
             MutationResult result;
             if (runs.size() == 1 && run.rows().size() == 1) {
-                result = insertSingle(kernel, run.rows().get(0), pk);
+                result = insertSingle(kernel, run.rows().get(0), pkIndex, deferred);
             } else {
                 boolean wantKeys = pkGenerated && !run.cols().contains(pk);
-                result = insertBatch(kernel, run.rows(), run.cols(), wantKeys);
+                result = insertBatch(kernel, run.rows(), run.cols(), wantKeys, deferred);
             }
             total = total.merge(result);
+        }
+        if (externalDeferredWriteBacks == null && deferred != null) {
+            for (Runnable writeBack : deferred) {
+                writeBack.run();
+            }
         }
         return total;
     }
@@ -115,19 +137,15 @@ final class InsertPlan<T> {
         return pkValue != null ? meta.insertableColumnsWithPrimaryKey() : meta.insertableColumns();
     }
 
-    /**
-     * 计算一行实际要写入的列：主键非空时保留主键列；{@code ignoreNull} 时过滤 null 列；
-     * 并对“非自增主键为 null”给出明确错误，避免落到 JDBC 层的 {@code NULL not allowed}。
-     */
-    private List<String> columnsFor(Map<String, Object> values, @Nullable String pk) {
-        Object pkValue = pk == null ? null : values.get(pk);
+    private List<String> columnsFor(Object[] snapshot, int pkIndex) {
+        Object pkValue = pkIndex >= 0 ? snapshot[pkIndex] : null;
         meta.requireAssignedPrimaryKey(pkValue);
         List<String> candidate = candidateColumns(meta, pkValue);
         List<String> cols;
         if (ignoreNull) {
             cols = new ArrayList<>(candidate.size());
             for (String col : candidate) {
-                if (values.get(col) != null) {
+                if (meta.columnValue(snapshot, col) != null) {
                     cols.add(col);
                 }
             }
@@ -141,48 +159,100 @@ final class InsertPlan<T> {
         return cols;
     }
 
-    private MutationResult insertSingle(ExecutionKernel kernel, RowPlan<T> row, String pk) {
-        Set<String> declared = new LinkedHashSet<>(row.columns());
-        MutationContext ctx = new MutationContext(meta, row.values(), null, declared, ignoreNull, false,
-                kernel.namingPolicy());
-        Object existingPkValue = pk == null ? null : row.values().get(pk);
-        return executeSingleStatement(kernel, meta, InsertStatementFactory.create(ctx),
-                row.entity(), existingPkValue);
-    }
-
-    private MutationResult insertBatch(ExecutionKernel kernel, List<RowPlan<T>> rows,
-                                       List<String> columns, boolean wantKeys) {
-        List<Object[]> batchRows = new ArrayList<>(rows.size());
-        for (RowPlan<T> row : rows) {
-            batchRows.add(rowValues(row.values(), columns));
+    private MutationResult insertSingle(ExecutionKernel kernel,
+                                        RowPlan<T> row,
+                                        int pkIndex,
+                                        @Nullable List<Runnable> deferredWriteBacks) {
+        List<String> cols = row.columns();
+        List<Object> vals = new ArrayList<>(cols.size());
+        boolean hasOverrides = !overrides.isEmpty();
+        for (String col : cols) {
+            Object raw = meta.columnValue(row.snapshot(), col);
+            vals.add(hasOverrides ? meta.convertToDatabaseIfAttribute(col, raw) : meta.convertToDatabase(col, raw));
         }
-        int batchSize = kernel.executionOptions().batchSize();
-        BatchSqlStatement batch = InsertStatementFactory.createBatch(
-                meta, columns, batchRows, kernel.namingPolicy(), batchSize, wantKeys);
-        BatchSlice slice = kernel.batchExecute(batch);
-        MutationResult result = slice.isEmpty()
-                ? MutationResult.EMPTY
-                : MutationResult.ofBatch(slice.batchCounts(), slice.generatedKeys());
-        if (wantKeys) {
-            if (slice.generatedKeys().size() == rows.size()) {
-                for (int i = 0; i < rows.size(); i++) {
-                    writeBackPrimaryKey(meta, rows.get(i).entity(), slice.generatedKeys().get(i));
-                }
+        AstStatement astStmt = EntityStatements.insertAst(meta, cols, vals, kernel.namingPolicy());
+        Object existingPkValue = pkIndex >= 0 ? row.snapshot()[pkIndex] : null;
+        MutationResult result = executeSingleAst(kernel, meta, astStmt, row.entity(), existingPkValue, deferredWriteBacks);
+        if (row.initializedVersion() != null) {
+            Runnable verSync = () -> writeBackVersion(meta, row.entity(), row.initializedVersion());
+            if (deferredWriteBacks != null) {
+                deferredWriteBacks.add(verSync);
             } else {
-                log.warn("Generated key count mismatch for batch insert on {}: expected {} but got {}; "
-                                + "primary keys will not be written back",
-                        meta.entityType().getName(), rows.size(), slice.generatedKeys().size());
+                verSync.run();
             }
         }
         return result;
     }
 
-    private static Object[] rowValues(Map<String, Object> values, List<String> columns) {
-        Object[] row = new Object[columns.size()];
-        for (int i = 0; i < columns.size(); i++) {
-            row[i] = values.get(columns.get(i));
+    private MutationResult insertBatch(ExecutionKernel kernel,
+                                       List<RowPlan<T>> rows,
+                                       List<String> columns,
+                                       boolean wantKeys,
+                                       @Nullable List<Runnable> deferredWriteBacks) {
+        int colCount = columns.size();
+        int[] colIndices = new int[colCount];
+        for (int i = 0; i < colCount; i++) {
+            colIndices[i] = meta.columnIndex(columns.get(i));
         }
-        return row;
+        boolean hasOverrides = !overrides.isEmpty();
+        List<Object[]> batchRows = new ArrayList<>(rows.size());
+        for (RowPlan<T> row : rows) {
+            Object[] values = new Object[colCount];
+            Object[] snap = row.snapshot();
+            for (int i = 0; i < colCount; i++) {
+                int idx = colIndices[i];
+                if (idx >= 0) {
+                    values[i] = hasOverrides
+                            ? meta.convertToDatabaseIfAttribute(columns.get(i), snap[idx])
+                            : meta.convertToDatabaseAt(idx, snap[idx]);
+                }
+            }
+            batchRows.add(values);
+        }
+        int batchSize = kernel.executionOptions().batchSize();
+        BatchAstStatement batch = EntityStatements.insertBatchAst(
+                meta, columns, batchRows, kernel.namingPolicy(), batchSize, wantKeys);
+        BatchSlice slice = kernel.batchExecute(batch);
+        MutationResult result = slice.isEmpty()
+                ? MutationResult.EMPTY
+                : MutationResult.ofBatch(slice.batchCounts(), slice.generatedKeys());
+        Runnable syncAction = () -> {
+            if (wantKeys) {
+                if (slice.generatedKeys().size() == rows.size()) {
+                    for (int i = 0; i < rows.size(); i++) {
+                        writeBackPrimaryKey(meta, rows.get(i).entity(), slice.generatedKeys().get(i));
+                    }
+                } else {
+                    log.warn("Generated key count mismatch for batch insert on {}: expected {} but got {}; "
+                                    + "primary keys will not be written back",
+                            meta.entityType().getName(), rows.size(), slice.generatedKeys().size());
+                }
+            }
+            for (RowPlan<T> row : rows) {
+                if (row.initializedVersion() != null) {
+                    writeBackVersion(meta, row.entity(), row.initializedVersion());
+                }
+            }
+        };
+        if (deferredWriteBacks != null) {
+            deferredWriteBacks.add(syncAction);
+        } else {
+            syncAction.run();
+        }
+        return result;
+    }
+
+    private static void writeBackVersion(EntityMetadataContext meta, Object entity, Object version) {
+        VersionMetadata versionMeta = meta.versionMetadata();
+        if (versionMeta == null || entity == null || meta.entityType().isRecord()) {
+            return;
+        }
+        try {
+            meta.writeFieldValue(entity, versionMeta.columnName(), version);
+        } catch (Exception ignored) {
+            log.debug("Failed to write back initial @Version to entity {}: {}",
+                    meta.entityType().getName(), ignored.getMessage());
+        }
     }
 
     private static void writeBackPrimaryKey(EntityMetadataContext meta, Object entity, Object generatedKey) {
@@ -191,28 +261,52 @@ final class InsertPlan<T> {
             return;
         }
         try {
-            Class<?> pkType = meta.primaryKeyType();
-            Object converted = (pkType != null && !pkType.isInstance(generatedKey))
-                    ? ConvertUtils.convert(generatedKey, pkType)
-                    : generatedKey;
+            ColumnConverter pkConverter = meta.converterFor(pkCol);
+            Object converted;
+            if (pkConverter != null) {
+                Class<?> dbType = pkConverter.databaseColumnType();
+                Object dbKey = (dbType != Object.class && !TypeUtils.getWrapClass(dbType).isInstance(generatedKey))
+                        ? ConvertUtils.convert(generatedKey, dbType)
+                        : generatedKey;
+                converted = pkConverter.toEntity(dbKey);
+            } else {
+                Class<?> pkType = meta.primaryKeyType();
+                converted = (pkType != null && !pkType.isInstance(generatedKey))
+                        ? ConvertUtils.convert(generatedKey, pkType)
+                        : generatedKey;
+            }
             meta.writeFieldValue(entity, pkCol, converted);
         } catch (Exception ignored) {
-            // 与旧 GeneratedKeyWriter 行为一致：回写失败不阻断已成功的插入，调用方仍可从 MutationResult 取键
             log.debug("Failed to write back generated key to entity {}: {}",
                     meta.entityType().getName(), ignored.getMessage());
         }
     }
 
-    static <T> MutationResult executeSingleStatement(
+    static <T> MutationResult executeSingleAst(
             ExecutionKernel kernel,
             EntityMetadataContext meta,
-            SqlStatement statement,
+            AstStatement statement,
             @Nullable T sourceEntity,
             @Nullable Object existingPkValue) {
+        return executeSingleAst(kernel, meta, statement, sourceEntity, existingPkValue, null);
+    }
+
+    static <T> MutationResult executeSingleAst(
+            ExecutionKernel kernel,
+            EntityMetadataContext meta,
+            AstStatement statement,
+            @Nullable T sourceEntity,
+            @Nullable Object existingPkValue,
+            @Nullable List<Runnable> deferredWriteBacks) {
         var slice = kernel.insertExecute(statement);
         Object generatedKey = slice.generatedKey();
         if (sourceEntity != null && existingPkValue == null && generatedKey != null) {
-            writeBackPrimaryKey(meta, sourceEntity, generatedKey);
+            Runnable pkSync = () -> writeBackPrimaryKey(meta, sourceEntity, generatedKey);
+            if (deferredWriteBacks != null) {
+                deferredWriteBacks.add(pkSync);
+            } else {
+                pkSync.run();
+            }
         }
         return MutationResult.ofInsert(slice.affectedRows(),
                 generatedKey != null ? generatedKey : existingPkValue);

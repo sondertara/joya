@@ -58,21 +58,33 @@ public final class ExecutionObserver {
         return !listeners.isEmpty();
     }
 
+    @FunctionalInterface
+    public interface StreamCloseRegistrar {
+        <T> Stream<T> register(Stream<T> stream, Runnable cleanup);
+    }
+
     /**
      * 流式执行观测包装：before → 执行 → after/onError，流关闭时触发 onStreamClosed。监听器为空时零额外开销。
      */
     public <T> Stream<T> observeStream(SqlStatement statement, Supplier<Stream<T>> action) {
-        return observeStream(statement, null, action);
+        return observeStream(statement, null, action, Stream::onClose);
     }
 
     public <T> Stream<T> observeStream(SqlStatement statement,
                                        SqlExecutionContext.@Nullable PaginationView page,
                                        Supplier<Stream<T>> action) {
+        return observeStream(statement, page, action, Stream::onClose);
+    }
+
+    public <T> Stream<T> observeStream(SqlStatement statement,
+                                       SqlExecutionContext.@Nullable PaginationView page,
+                                       Supplier<Stream<T>> action,
+                                       StreamCloseRegistrar closeRegistrar) {
         if (listeners.isEmpty()) {
             return action.get();
         }
         List<SqlExecutionListener> active = orderedListeners();
-        SqlExecutionContext ctx = new SqlExecutionContext(statement, false, -1, clientName, page);
+        SqlExecutionContext ctx = new SqlExecutionContext(statement, false, -1, clientName, page, true);
         for (SqlExecutionListener listener : active) {
             runListenerQuietly(() -> listener.beforeExecute(ctx), "beforeExecute");
         }
@@ -87,16 +99,29 @@ public final class ExecutionObserver {
             }
             throw error;
         }
-        SqlExecutionResult summary = SqlExecutionResult.rows(-1L)
-                .withElapsedNanos(System.nanoTime() - start);
-        for (SqlExecutionListener listener : active) {
-            runListenerQuietly(() -> listener.afterExecute(ctx, summary), "afterExecute");
-        }
-        return stream.onClose(() -> {
+        try {
+            SqlExecutionResult summary = SqlExecutionResult.rows(-1L)
+                    .withElapsedNanos(System.nanoTime() - start);
             for (SqlExecutionListener listener : active) {
-                runListenerQuietly(() -> listener.onStreamClosed(ctx), "onStreamClosed");
+                runListenerQuietly(() -> listener.afterExecute(ctx, summary), "afterExecute");
             }
-        });
+            java.util.concurrent.atomic.AtomicBoolean closeNotified = new java.util.concurrent.atomic.AtomicBoolean();
+            Runnable notifyClosed = () -> {
+                if (closeNotified.compareAndSet(false, true)) {
+                    for (SqlExecutionListener listener : active) {
+                        runListenerQuietly(() -> listener.onStreamClosed(ctx), "onStreamClosed");
+                    }
+                }
+            };
+            return closeRegistrar.register(stream, notifyClosed);
+        } catch (Throwable postError) {
+            try {
+                stream.close();
+            } catch (Throwable closeErr) {
+                postError.addSuppressed(closeErr);
+            }
+            throw postError;
+        }
     }
 
     public <T> T observe(SqlStatement statement,

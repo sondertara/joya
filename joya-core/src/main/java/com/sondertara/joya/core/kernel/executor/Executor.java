@@ -58,6 +58,14 @@ public interface Executor {
     /** 列级绑定的批量执行（支持分片 Flush 与生成键收集）。 */
     BatchSlice batchExecute(BatchSqlStatement batch);
 
+    /**
+     * 精确行计数批量执行：单连接复用单条 {@link java.sql.PreparedStatement} 逐行执行 {@code executeUpdate()}，
+     * 保证每行返回真实受影响行数（不退化为 {@code Statement.SUCCESS_NO_INFO = -2}），供 {@code @Version} 乐观锁批量更新/删除使用。
+     */
+    default BatchSlice batchExecuteExact(BatchSqlStatement batch) {
+        return batchExecute(batch);
+    }
+
     /** 在一条连接上执行回调（逃生舱）。 */
     <T> T withConnection(ConnectionCallback<T> action);
 

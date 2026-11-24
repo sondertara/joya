@@ -75,7 +75,7 @@ public final class Select1<A> extends SelectN {
     }
 
     private Projection<A> singleProjection() {
-        return Projections.single(c1, query.renderContext());
+        return Projections.single(c1, query.tableScope());
     }
 
     @SuppressWarnings("unchecked")

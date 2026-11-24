@@ -249,34 +249,7 @@ public enum PaginationStyle {
     }
 
     private static String chooseUniqueIdentifier(String sql, String baseName) {
-        String candidate = baseName;
-        int suffix = 1;
-        while (containsIdentifierIgnoreCase(sql, candidate)) {
-            candidate = baseName + "_" + suffix++;
-        }
-        return candidate;
-    }
-
-    private static boolean containsIdentifierIgnoreCase(String sql, String identifier) {
-        if (sql == null || sql.isEmpty() || identifier == null || identifier.isEmpty()) {
-            return false;
-        }
-        String lowerSql = sql.toLowerCase(Locale.ROOT);
-        String lowerIdent = identifier.toLowerCase(Locale.ROOT);
-        int from = 0;
-        while (true) {
-            int idx = lowerSql.indexOf(lowerIdent, from);
-            if (idx < 0) {
-                return false;
-            }
-            boolean leftBoundary = idx == 0 || !isIdentifierPart(sql.charAt(idx - 1));
-            int end = idx + identifier.length();
-            boolean rightBoundary = end == sql.length() || !isIdentifierPart(sql.charAt(end));
-            if (leftBoundary && rightBoundary) {
-                return true;
-            }
-            from = idx + 1;
-        }
+        return SqlFormatUtils.chooseUniqueIdentifier(sql, baseName);
     }
 
     static boolean hasLexicalPlaceholder(String sql, DbType dbType) {

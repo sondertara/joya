@@ -65,6 +65,12 @@ public final class DataOpsSupport {
         return new Query<>(kernel, entityType);
     }
 
+    public <T> Query<T> from(Query<T> query) {
+        accessGuard.run();
+        Objects.requireNonNull(query, "query must not be null");
+        return query.bind(kernel);
+    }
+
     @SuppressWarnings("unchecked")
     public <T> EntityOps<T> of(Class<T> entityType) {
         accessGuard.run();

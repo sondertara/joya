@@ -22,10 +22,17 @@ class JoyaTransactionManagerResolverTest {
         AutoConfiguration annotation = JoyaAutoConfiguration.class.getAnnotation(AutoConfiguration.class);
         assertNotNull(annotation, "JoyaAutoConfiguration 必须声明 @AutoConfiguration");
         List<String> afterName = List.of(annotation.afterName());
+        List<String> beforeName = List.of(annotation.beforeName());
         assertTrue(afterName.contains("org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration"),
                 "必须排在主 DataSource 装配之后：" + afterName);
-        assertTrue(afterName.contains("org.springframework.boot.autoconfigure.transaction.TransactionAutoConfiguration"),
-                "必须排在事务管理器装配之后：" + afterName);
+        assertTrue(afterName.contains("org.springframework.boot.autoconfigure.jdbc.DataSourceTransactionManagerAutoConfiguration"),
+                "必须排在主 DataSourceTransactionManager 装配之后：" + afterName);
+        assertTrue(afterName.contains("org.springframework.boot.autoconfigure.flyway.FlywayAutoConfiguration"),
+                "必须排在 Flyway 迁移之后：" + afterName);
+        assertTrue(afterName.contains("org.springframework.boot.autoconfigure.liquibase.LiquibaseAutoConfiguration"),
+                "必须排在 Liquibase 迁移之后：" + afterName);
+        assertTrue(beforeName.contains("org.springframework.boot.autoconfigure.transaction.TransactionAutoConfiguration"),
+                "必须排在 TransactionAutoConfiguration 之前，以支持自建主库自动触发 @EnableTransactionManagement：" + beforeName);
     }
 
     @Test

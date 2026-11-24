@@ -11,6 +11,7 @@ import com.sondertara.joya.core.kernel.observe.SqlExecutionListener;
 import com.sondertara.joya.core.naming.TableNameResolver;
 import com.sondertara.joya.spring.autoconfigure.JoyaProperties.JoyaDataSourceProperties;
 import com.sondertara.joya.spring.autoconfigure.JoyaProperties.PrimaryDataSourceProperties;
+import com.sondertara.joya.spring.support.JoyaManagedTransactionManager;
 import com.sondertara.joya.spring.support.SpringConnectionProvider;
 import com.sondertara.joya.spring.support.SpringSqlExceptionTranslator;
 import com.sondertara.joya.spring.support.SpringTxEngine;
@@ -40,26 +41,32 @@ final class JoyaClientAssembler {
     private final JoyaProperties properties;
     private final @Nullable Environment environment;
     private final ObjectProvider<DataSource> springDataSourceProvider;
-    private final ObjectProvider<PlatformTransactionManager> txManagerProvider;
     private final ConfigurableListableBeanFactory beanFactory;
     private final JoyaExtensionPointResolver extensionResolver;
+    private @Nullable List<PlatformTransactionManager> cachedExternalTxManagers;
 
     JoyaClientAssembler(JoyaProperties properties,
                         @Nullable Environment environment,
                         ObjectProvider<DataSource> springDataSourceProvider,
-                        ObjectProvider<PlatformTransactionManager> txManagerProvider,
                         ConfigurableListableBeanFactory beanFactory) {
         this.properties = properties;
         this.environment = environment;
         this.springDataSourceProvider = springDataSourceProvider;
-        this.txManagerProvider = txManagerProvider;
         this.beanFactory = beanFactory;
         this.extensionResolver = new JoyaExtensionPointResolver(beanFactory);
+    }
+
+    private List<PlatformTransactionManager> externalTxManagers() {
+        if (cachedExternalTxManagers == null) {
+            cachedExternalTxManagers = JoyaTransactionManagerResolver.resolveExternalManagers(beanFactory);
+        }
+        return cachedExternalTxManagers;
     }
 
     JoyaClientRegistry assemble(List<JoyaClientCustomizer> customizers) {
         Map<String, JoyaClient> clients = new LinkedHashMap<>();
         Map<String, DataSource> sidecarDataSources = new LinkedHashMap<>();
+        Map<String, JoyaManagedTransactionManager> exposedTransactionManagers = new LinkedHashMap<>();
         List<AutoCloseable> managedResources = new ArrayList<>();
 
         try {
@@ -77,6 +84,12 @@ final class JoyaClientAssembler {
                     primaryTxManager = resolveExplicitOrOptionalTxManager(
                             "joya.primary", primaryProps, primaryDataSource, false);
                 } else {
+                    if (Boolean.TRUE.equals(primaryProps.getExposeTransactionManager())) {
+                        throw new IllegalStateException(
+                                "Conflicting Joya DataSource configuration under 'joya.primary': "
+                                        + "'expose-transaction-manager=true' is only valid for self-managed DataSources "
+                                        + "(set 'use-spring=false', or let Spring Boot manage the primary transactionManager).");
+                    }
                     if (JoyaDataSourceFactory.hasCustomConnectionConfig(primaryProps, environment)) {
                         log.warn("[Joya] 'joya.primary.use-spring' is true: custom connection/pool properties under 'joya.primary' "
                                 + "(url/username/password/driver-class-name/type/hikari) will be ignored and Spring's native DataSource will be used instead. "
@@ -86,7 +99,7 @@ final class JoyaClientAssembler {
                             primaryName, springDataSourceProvider, beanFactory);
                     primaryTxManager = Strings.isNotBlank(primaryProps.getTransactionManagerBean())
                             ? resolveExplicitTxManager("joya.primary", primaryProps.getTransactionManagerBean(), primaryDataSource)
-                            : JoyaTransactionManagerResolver.resolve(primaryDataSource, txManagerProvider);
+                            : JoyaTransactionManagerResolver.resolve(primaryDataSource, externalTxManagers());
                 }
             } else if (Strings.isNotBlank(primaryProps.getDataSourceBean())) {
                 JoyaDataSourceFactory.validateBeanReference("joya.primary", primaryProps, environment);
@@ -101,12 +114,21 @@ final class JoyaClientAssembler {
                                     + "set 'use-spring=true' or specify 'data-source-bean'.");
                 }
                 JoyaDataSourceFactory.validateSelfManaged("joya.primary", primaryProps, environment);
-                primaryDataSource = JoyaDataSourceFactory.buildSelfManaged("joya.primary", primaryProps);
+                primaryDataSource = JoyaDataSourceFactory.buildSelfManaged("joya.primary", primaryName, primaryProps);
                 if (primaryDataSource instanceof AutoCloseable closeable) {
                     managedResources.add(closeable);
                 }
                 sidecarDataSources.put(primaryName, primaryDataSource);
-                primaryTxManager = null;
+                Boolean exposePrimaryTm = primaryProps.getExposeTransactionManager();
+                boolean shouldExposePrimaryTm = Boolean.TRUE.equals(exposePrimaryTm)
+                        || (exposePrimaryTm == null && !JoyaTransactionManagerResolver.hasExternalTransactionManager(beanFactory));
+                if (shouldExposePrimaryTm) {
+                    JoyaManagedTransactionManager managedTm = new JoyaManagedTransactionManager(primaryDataSource);
+                    primaryTxManager = managedTm;
+                    exposedTransactionManagers.put(primaryName, managedTm);
+                } else {
+                    primaryTxManager = null;
+                }
             }
 
             clients.put(primaryName, buildClient(primaryName, primaryProps, primaryDataSource,
@@ -137,17 +159,24 @@ final class JoyaClientAssembler {
                                         + "'transaction-manager-bean' requires 'data-source-bean' to be specified.");
                     }
                     JoyaDataSourceFactory.validateSelfManaged(propertyPath, dsProps, environment);
-                    extraDataSource = JoyaDataSourceFactory.buildSelfManaged(propertyPath, dsProps);
+                    extraDataSource = JoyaDataSourceFactory.buildSelfManaged(propertyPath, name, dsProps);
                     if (extraDataSource instanceof AutoCloseable closeable) {
                         managedResources.add(closeable);
                     }
                     sidecarDataSources.put(name, extraDataSource);
-                    extraTxManager = null;
+                    if (Boolean.TRUE.equals(dsProps.getExposeTransactionManager())) {
+                        JoyaManagedTransactionManager managedTm = new JoyaManagedTransactionManager(extraDataSource);
+                        extraTxManager = managedTm;
+                        exposedTransactionManagers.put(name, managedTm);
+                    } else {
+                        extraTxManager = null;
+                    }
                 }
                 clients.put(name, buildClient(name, dsProps, extraDataSource, extraTxManager, customizers));
             }
 
-            return new JoyaClientRegistry(primaryName, clients, managedResources, sidecarDataSources);
+            return new JoyaClientRegistry(
+                    primaryName, clients, managedResources, sidecarDataSources, exposedTransactionManagers);
         } catch (RuntimeException | Error failure) {
             closeManagedResourcesAfterFailure(managedResources, failure);
             throw failure;
@@ -176,8 +205,8 @@ final class JoyaClientAssembler {
             return resolveExplicitTxManager(propertyPath, props.getTransactionManagerBean(), targetDataSource);
         }
         return optionalMatch
-                ? JoyaTransactionManagerResolver.resolveOptional(targetDataSource, txManagerProvider)
-                : JoyaTransactionManagerResolver.resolve(targetDataSource, txManagerProvider);
+                ? JoyaTransactionManagerResolver.resolveOptional(targetDataSource, externalTxManagers())
+                : JoyaTransactionManagerResolver.resolve(targetDataSource, externalTxManagers());
     }
 
     private PlatformTransactionManager resolveExplicitTxManager(String propertyPath,

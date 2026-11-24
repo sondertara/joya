@@ -214,7 +214,7 @@ public class JoinCriterion {
             return null;
         }
         String trimmed = alias.trim();
-        if (!ColumnMetaProvider.SAFE_ALIAS.matcher(trimmed).matches()) {
+        if (!ColumnMetaProvider.isSafeAlias(trimmed)) {
             throw new IllegalArgumentException(
                     "Invalid table alias (potential SQL injection rejected): " + alias);
         }

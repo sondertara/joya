@@ -122,7 +122,6 @@ class SqlStatementTest {
                 StatementMetadata.of(Operation.INSERT, DbType.h2),
                 100,
                 false,
-                null,
                 null);
 
         BatchSqlStatement normalized = batch.withSql("INSERT INTO t_user (id, name) VALUES (?, ?)");
@@ -147,18 +146,22 @@ class SqlStatementTest {
                     @Override
                     public void release(Connection connection) {
                     }
-                });
-        SqlStatement leaked = SqlStatement.of(
-                "INSERT INTO t_user (id) VALUES (?)",
-                List.of(SqlParameter.of(1, "id", new BatchSlot.RowRef(0), ParameterSource.INSERT)),
-                StatementMetadata.of(Operation.INSERT, DbType.h2));
+                },
+                com.sondertara.joya.core.naming.NamingPolicy.DEFAULT);
+        com.sondertara.joya.core.kernel.statement.AstStatement leakedAst =
+                new com.sondertara.joya.core.kernel.statement.AstStatement(
+                        new com.sondertara.joya.core.kernel.statement.SqlNode.Insert(
+                                com.sondertara.joya.core.kernel.statement.SqlNodes.table("t_user", "t_user"),
+                                List.of("id"),
+                                List.of(List.of(com.sondertara.joya.core.kernel.statement.SqlNodes.rowParam(
+                                        "id", 0, ParameterSource.INSERT)))),
+                        StatementMetadata.of(Operation.INSERT, DbType.h2));
 
-        assertThrows(IllegalStateException.class, () -> preparer.prepare(leaked));
+        assertThrows(IllegalStateException.class, () -> preparer.prepare(leakedAst));
 
         assertThrows(IllegalArgumentException.class,
-                () -> new BatchSlot.Const("id", new BatchSlot.RowRef(0), ParameterSource.INSERT,
-                        com.sondertara.joya.core.kernel.statement.ParameterBinder.DEFAULT),
-                "BatchSlot.Const 不得容纳 BatchSlot.RowRef");
+                () -> new com.sondertara.joya.core.kernel.statement.SqlNode.Param.RowSlot(-1),
+                "RowSlot 下标不得为负数");
 
         BatchSqlStatement mismatchedBatch = new BatchSqlStatement(
                 "INSERT INTO t_user (id, name) VALUES (?, ?)",
@@ -167,7 +170,6 @@ class SqlStatementTest {
                 StatementMetadata.of(Operation.INSERT, DbType.h2),
                 100,
                 false,
-                null,
                 null);
         assertThrows(IllegalArgumentException.class, () -> preparer.prepareBatch(mismatchedBatch),
                 "prepareBatch 必须统一拦截无改写路径的占位符与槽位数量失配");

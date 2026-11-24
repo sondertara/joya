@@ -71,6 +71,10 @@ public class JoyaProperties {
     /** 扩展数据源列表（数组形式，支持 IDE 直接补全每个元素的属性）。 */
     private List<JoyaDataSourceProperties> datasources = new ArrayList<>();
 
+    /** Micrometer Observation 链路追踪与指标桥接配置（仅当 classpath 存在 ObservationRegistry 时生效）。 */
+    @NestedConfigurationProperty
+    private ObservationProperties observation = new ObservationProperties();
+
     // ===== Getters & Setters =====
 
     public boolean isEnabled() {
@@ -207,6 +211,42 @@ public class JoyaProperties {
         this.datasources = datasources;
     }
 
+    public ObservationProperties getObservation() {
+        return observation;
+    }
+
+    public void setObservation(ObservationProperties observation) {
+        this.observation = observation == null ? new ObservationProperties() : observation;
+    }
+
+    /**
+     * Micrometer Observation 集成配置（{@code joya.observation.*}）。
+     */
+    public static class ObservationProperties {
+
+        /** 是否在存在 {@code ObservationRegistry} Bean 时自动注册 SQL 观测监听器，默认开启。 */
+        private boolean enabled = true;
+
+        /** 是否把物理 SQL 文本作为高基数键值（{@code db.statement}）附加到 Observation，默认关闭以防敏感字面量泄露与标签膨胀。 */
+        private boolean includeSql = false;
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public boolean isIncludeSql() {
+            return includeSql;
+        }
+
+        public void setIncludeSql(boolean includeSql) {
+            this.includeSql = includeSql;
+        }
+    }
+
     /**
      * 单个数据源配置：内聚纯 JDBC 连接属性（{@code url}、{@code username}、{@code password}、
      * {@code driver-class-name}、{@code type}）与该数据源可选的 Joya 参数覆写（不继承生命周期 Bean
@@ -264,6 +304,18 @@ public class JoyaProperties {
 
         /** 复用 Spring 容器中已存在的 {@link org.springframework.transaction.PlatformTransactionManager} Bean 名称。 */
         private String transactionManagerBean;
+
+        /**
+         * 是否为 Joya 自建托管数据源暴露独立的 Spring {@code DataSourceTransactionManager} Bean，
+         * 使该数据源支持声明式 {@code @Transactional}（并自动把该客户端切换为 Spring 事务引擎）：
+         * <ul>
+         *   <li>对扩展库（{@code joya.datasources[i]}）：{@code null} 默认等同 {@code false}，保持旁路零侵入；
+         *       设为 {@code true} 时注册非 {@code @Primary} 的 {@code <name>TransactionManager}（带 {@code @Qualifier("<name>")}）；</li>
+         *   <li>对自建主库（{@code joya.primary.use-spring=false}）：{@code null} 在容器尚无任何外部
+         *       {@code PlatformTransactionManager} 时自动启用，设为 {@code false} 可显式关闭。</li>
+         * </ul>
+         */
+        private Boolean exposeTransactionManager;
 
         public String getName() {
             return name;
@@ -408,6 +460,14 @@ public class JoyaProperties {
 
         public void setTransactionManagerBean(String transactionManagerBean) {
             this.transactionManagerBean = transactionManagerBean;
+        }
+
+        public Boolean getExposeTransactionManager() {
+            return exposeTransactionManager;
+        }
+
+        public void setExposeTransactionManager(Boolean exposeTransactionManager) {
+            this.exposeTransactionManager = exposeTransactionManager;
         }
     }
 

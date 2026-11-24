@@ -2,20 +2,19 @@ package com.sondertara.joya.core;
 
 import com.sondertara.joya.core.function.IGetter;
 import com.sondertara.joya.core.kernel.ExecutionKernel;
+import com.sondertara.joya.core.kernel.statement.AstStatement;
+import com.sondertara.joya.core.kernel.statement.SqlRenderer;
 import com.sondertara.joya.core.kernel.statement.SqlStatement;
 import com.sondertara.joya.core.metadata.EntityMetadataContext;
-import com.sondertara.joya.core.metadata.EntitySnapshot;
-import com.sondertara.joya.core.statement.MutationContext;
+import com.sondertara.joya.core.metadata.VersionMetadata;
 import com.sondertara.joya.core.result.MutationResult;
-import com.sondertara.joya.core.statement.factory.InsertStatementFactory;
 import org.jspecify.annotations.Nullable;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
 
 /**
  * 实体链式插入构建器 —— 由 {@link EntityOps#insert()} 创建。
@@ -36,7 +35,6 @@ public final class EntityInsert<T> {
         this.meta = Objects.requireNonNull(meta, "meta must not be null");
     }
 
-    /** 按 Lambda 属性引用设置列值。 */
     public <V> EntityInsert<T> value(IGetter<T, V> column, @Nullable V value) {
         String colName = validateInsertableColumn(meta.resolveColumn(column));
         values.put(colName, value);
@@ -44,7 +42,6 @@ public final class EntityInsert<T> {
         return this;
     }
 
-    /** 当值非 {@code null} 时按 Lambda 属性引用设置列值（列名与可插入性始终立即校验）。 */
     public <V> EntityInsert<T> valueIfPresent(IGetter<T, V> column, @Nullable V value) {
         String colName = validateInsertableColumn(meta.resolveColumn(column));
         if (value != null) {
@@ -54,7 +51,6 @@ public final class EntityInsert<T> {
         return this;
     }
 
-    /** 按列名或字段名设置列值。 */
     public EntityInsert<T> value(String columnOrField, @Nullable Object value) {
         String colName = validateInsertableColumn(meta.resolveColumnName(columnOrField));
         values.put(colName, value);
@@ -62,7 +58,6 @@ public final class EntityInsert<T> {
         return this;
     }
 
-    /** 当值非 {@code null} 时按列名或字段名设置列值（列名与可插入性始终立即校验）。 */
     public EntityInsert<T> valueIfPresent(String columnOrField, @Nullable Object value) {
         String colName = validateInsertableColumn(meta.resolveColumnName(columnOrField));
         if (value != null) {
@@ -72,70 +67,97 @@ public final class EntityInsert<T> {
         return this;
     }
 
-    /** 批量设置列值。 */
     public EntityInsert<T> values(Map<String, ?> map) {
         Objects.requireNonNull(map, "values map must not be null");
         map.forEach(this::value);
         return this;
     }
 
-    /**
-     * 从实体快照提取列值（若主键为 null 则自动跳过自增主键列，且遵守 insertable=false）。
-     *
-     * <p>该方法只负责构建期快照；{@code prePersist} 在 {@link #execute()} 时触发，
-     * 触发后会重新快照并重新选列，因此监听器新增/修改的字段（含生成主键）不会丢失。
-     */
     public EntityInsert<T> values(T entity) {
         Objects.requireNonNull(entity, "entity must not be null");
         this.sourceEntity = entity;
-        EntitySnapshot snapshot = EntitySnapshot.snapshot(meta, entity);
+        Object[] snapshot = meta.snapshotValues(entity);
         String pk = meta.primaryKey();
-        Object pkVal = pk == null ? null : snapshot.value(pk);
+        Object pkVal = pk == null ? null : meta.columnValue(snapshot, pk);
         for (String col : InsertPlan.candidateColumns(meta, pkVal)) {
-            values.put(col, snapshot.value(col));
+            values.put(col, meta.columnValue(snapshot, col));
         }
         return this;
     }
 
-    /** 忽略值为 null 的列（交由数据库默认值填充）。 */
     public EntityInsert<T> ignoreNulls() {
         this.ignoreNull = true;
         return this;
     }
 
-    /**
-     * 渲染为不可变 {@link SqlStatement}。
-     *
-     * <p>这是纯渲染方法，不触发 {@code prePersist}；实体模式下它反映的是构建期快照。
-     * 需要包含监听器处理结果时，请以 {@link #execute()} 为准。
-     */
-    public SqlStatement toSqlStatement() {
+    /** 构建未渲染的结构化 {@link AstStatement}（包内使用，不触发 {@code prePersist}）。 */
+    AstStatement toAstStatement() {
         if (values.isEmpty()) {
             throw new IllegalStateException("Insert values must not be empty");
         }
-        Set<String> declared = new LinkedHashSet<>(values.keySet());
-        MutationContext ctx = new MutationContext(meta, values, null, declared, ignoreNull, false, kernel.namingPolicy());
-        return InsertStatementFactory.create(ctx);
+        String pk = meta.primaryKey();
+        Object pkValue = pk != null ? values.get(pk) : null;
+        meta.requireAssignedPrimaryKey(pkValue);
+        VersionMetadata versionMeta = meta.versionMetadata();
+        String versionCol = versionMeta != null ? versionMeta.columnName() : null;
+        boolean versionAdded = false;
+        List<String> finalColumns = new ArrayList<>(values.size() + (versionMeta != null ? 1 : 0));
+        List<Object> finalValues = new ArrayList<>(values.size() + (versionMeta != null ? 1 : 0));
+        for (Map.Entry<String, Object> entry : values.entrySet()) {
+            String col = entry.getKey();
+            Object val = entry.getValue();
+            if (versionCol != null && col.equals(versionCol)) {
+                if (val == null) {
+                    val = versionMeta.initialValue();
+                }
+                versionAdded = true;
+            }
+            if (ignoreNull && val == null) {
+                continue;
+            }
+            if (meta.nonInsertableColumns().contains(col)) {
+                continue;
+            }
+            finalColumns.add(col);
+            finalValues.add(meta.convertToDatabaseIfAttribute(col, val));
+        }
+        if (versionMeta != null && !versionAdded && !meta.nonInsertableColumns().contains(versionCol)) {
+            finalColumns.add(versionCol);
+            finalValues.add(versionMeta.initialValue());
+        }
+        if (finalColumns.isEmpty()) {
+            throw new IllegalStateException("INSERT statement has no insertable columns");
+        }
+        return EntityStatements.insertAst(meta, finalColumns, finalValues, kernel.namingPolicy());
     }
 
-    /** 执行插入并返回包含生成键与真实影响行数的 {@link MutationResult}。 */
+    /** 离线编译为不可变物理 {@link SqlStatement}（不触发 {@code prePersist}）。 */
+    public SqlStatement toSqlStatement() {
+        return SqlRenderer.render(toAstStatement(), kernel.namingPolicy());
+    }
+
+    /** 执行插入并返回包含生成键与真实受影响行数的 {@link MutationResult}。 */
     public MutationResult execute() {
         if (sourceEntity != null) {
-            // 实体模式统一交给 InsertPlan：prePersist() 之后重新快照并重新选列，
-            // 钩子新增的字段（含生成主键）因此不会被漏掉。
             return new InsertPlan<>(meta, List.of(sourceEntity), ignoreNull,
                     "entity must not be null", explicitValues).execute(kernel);
         }
-        SqlStatement stmt = toSqlStatement();
+        AstStatement astStmt = toAstStatement();
         String pk = meta.primaryKey();
         Object existingPkVal = pk == null ? null : values.get(pk);
-        return InsertPlan.executeSingleStatement(kernel, meta, stmt, null, existingPkVal);
+        return InsertPlan.executeSingleAst(kernel, meta, astStmt, null, existingPkVal);
     }
 
     private String validateInsertableColumn(String colName) {
         if (meta.nonInsertableColumns().contains(colName)) {
             throw new IllegalArgumentException(
                     "Column '" + colName + "' is marked as insertable=false on entity " + meta.entityType().getName());
+        }
+        String pk = meta.primaryKey();
+        if (meta.generatedColumns().contains(colName) && !colName.equals(pk)) {
+            throw new IllegalArgumentException(
+                    "Column '" + colName + "' is database-generated and cannot be inserted on entity "
+                            + meta.entityType().getName());
         }
         return colName;
     }

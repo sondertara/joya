@@ -430,10 +430,12 @@ class SilentFailureRegressionTest {
                         .column("id", "id")
                         .column("name", "name")
                         .build();
-        SqlStatement stmt = com.sondertara.joya.core.statement.factory.SelectStatementFactory.create(
-                customMeta,
-                new com.sondertara.joya.core.query.criterion.WhereCriterion().eq("id", 1L),
-                java.util.Set.of("id"),
+        SqlStatement stmt = com.sondertara.joya.core.kernel.statement.SqlRenderer.render(
+                EntityStatements.selectColumnsAst(
+                        customMeta,
+                        new com.sondertara.joya.core.query.criterion.WhereCriterion().eq("id", 1L),
+                        java.util.Set.of("id"),
+                        com.sondertara.joya.core.naming.NamingPolicy.DEFAULT),
                 com.sondertara.joya.core.naming.NamingPolicy.DEFAULT);
         assertEquals("SELECT t0.id FROM t_custom_meta_override t0 WHERE t0.id = ?", stmt.sql());
     }
@@ -523,20 +525,16 @@ class SilentFailureRegressionTest {
 
         // 验证 ON_DUPLICATE_KEY 与 ON_CONFLICT 渲染同样排除 updatable = false 列
         var meta = com.sondertara.joya.core.metadata.LocalTableMetaCache.getMetadataContext(ImmutableAuditUser.class);
-        var ctx = new com.sondertara.joya.core.statement.MutationContext(
-                meta,
-                Map.<String, Object>of("id", 1L, "name", "v2", "created_by", "attacker"),
-                new WhereCriterion(),
-                null,
-                false,
-                false,
+        SqlStatement mysqlUpsert = com.sondertara.joya.core.kernel.statement.SqlRenderer.render(
+                EntityStatements.upsertAst(
+                        meta,
+                        List.of("id", "name", "created_by"),
+                        List.of(1L, "v2", "attacker"),
+                        "id",
+                        com.sondertara.joya.core.kernel.statement.UpsertStyle.ON_DUPLICATE_KEY,
+                        com.sondertara.joya.core.kernel.statement.DbType.mysql,
+                        com.sondertara.joya.core.naming.NamingPolicy.DEFAULT),
                 com.sondertara.joya.core.naming.NamingPolicy.DEFAULT);
-        SqlStatement mysqlUpsert = com.sondertara.joya.core.statement.factory.UpsertStatementFactory.create(
-                ctx,
-                List.of("id", "name", "created_by"),
-                "id",
-                com.sondertara.joya.core.kernel.statement.UpsertStyle.ON_DUPLICATE_KEY,
-                com.sondertara.joya.core.kernel.statement.DbType.mysql);
         assertTrue(mysqlUpsert.sql().contains("ON DUPLICATE KEY UPDATE name = VALUES(name)"), mysqlUpsert.sql());
         org.junit.jupiter.api.Assertions.assertFalse(
                 mysqlUpsert.sql().contains("created_by = VALUES(created_by)"), mysqlUpsert.sql());
@@ -626,7 +624,7 @@ class SilentFailureRegressionTest {
         baseQuery.where(w -> w.eq(User::getId, 999L));
         assertEquals(List.of("a"), nameSelect.list());
 
-        SqlStatement entityStmt = com.sondertara.joya.core.query.dsl.Query.of(User.class).toSqlStatement();
+        var entityStmt = com.sondertara.joya.core.query.dsl.Query.of(User.class).toAstStatement();
         com.sondertara.joya.core.kernel.statement.SqlNode.Select selectAst =
                 org.junit.jupiter.api.Assertions.assertInstanceOf(
                         com.sondertara.joya.core.kernel.statement.SqlNode.Select.class, entityStmt.ast());

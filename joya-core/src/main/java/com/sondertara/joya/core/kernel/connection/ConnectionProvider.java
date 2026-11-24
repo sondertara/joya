@@ -4,6 +4,7 @@ import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.Objects;
 import java.util.OptionalInt;
+import java.util.stream.Stream;
 
 /**
  * 连接来源端口（策略）。
@@ -88,6 +89,28 @@ public interface ConnectionProvider {
     }
 
     /**
+     * 校验当前执行上下文是否允许继续消费流式结果集（非事务提供者默认无限制；事务提供者在此校验所有者线程与活跃态）。
+     */
+    default void checkStreamAccess() {
+    }
+
+    /**
+     * 该连接提供者是否托管流式查询的关闭生命周期（事务提供者返回 {@code true}，在提交/回滚时统一关闭未消费完的流）。
+     */
+    default boolean managesStreamLifecycle() {
+        return false;
+    }
+
+    /**
+     * 为流式结果集挂载关闭清理回调（非事务提供者直接委托 {@link Stream#onClose(Runnable)}；
+     * 事务提供者同步登记该回调，使事务结束自动收尾时无需调用 {@code Stream.close()} 即可释放底层游标并触发观测通知，
+     * 从而保留逃逸流再次读取时的事务终态诊断异常）。
+     */
+    default <T> Stream<T> onStreamClose(Stream<T> stream, Runnable cleanup) {
+        return stream.onClose(cleanup);
+    }
+
+    /**
      * 派生一个应用指定默认语句超时秒数（{@code <= 0} 表示取消覆盖/清除默认超时）的连接提供者。
      */
     default ConnectionProvider withQueryTimeoutSeconds(int queryTimeoutSeconds) {
@@ -156,5 +179,20 @@ record FallbackTimeoutConnectionProvider(ConnectionProvider delegate, int fallba
     @Override
     public ConnectionProvider unwrap() {
         return delegate.unwrap();
+    }
+
+    @Override
+    public void checkStreamAccess() {
+        delegate.checkStreamAccess();
+    }
+
+    @Override
+    public boolean managesStreamLifecycle() {
+        return delegate.managesStreamLifecycle();
+    }
+
+    @Override
+    public <T> Stream<T> onStreamClose(Stream<T> stream, Runnable cleanup) {
+        return delegate.onStreamClose(stream, cleanup);
     }
 }

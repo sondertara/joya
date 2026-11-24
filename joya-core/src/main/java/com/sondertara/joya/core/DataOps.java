@@ -31,6 +31,9 @@ public interface DataOps {
     /** 统一查询入口（单表、联表、部分列、DTO/Record 投影、分组聚合、分页全部由此进入）。 */
     <T> Query<T> from(Class<T> entityType);
 
+    /** 将预构建（如离线 {@link Query#of(Class)}）的查询模板绑定到当前数据源/事务上下文执行（不污染原模板）。 */
+    <T> Query<T> from(Query<T> query);
+
     /** 实体域操作入口（实体级写操作、列级变更构建器、按主键快捷读）。 */
     <T> EntityOps<T> of(Class<T> entityType);
 

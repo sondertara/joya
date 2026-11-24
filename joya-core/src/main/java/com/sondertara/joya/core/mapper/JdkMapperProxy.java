@@ -8,11 +8,20 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 
 /**
- * JDK 动态代理实现 Mapper 代理，零外部依赖，仅使用 JDK 标准库 {@link Proxy}。
- *
- * @author huangxiaohu
+ * JDK 动态代理实现 Mapper 代理，零外部依赖，且通过 {@link ClassValue} 缓存接口实体泛型实参（短事务内零重复反射）。
  */
 public class JdkMapperProxy {
+
+    private static final ClassValue<Class<?>> ENTITY_CLASS_CACHE = new ClassValue<>() {
+        @Override
+        protected Class<?> computeValue(Class<?> mapperInterface) {
+            Class<?> entityClass = TypeUtils.resolveTypeArgument(mapperInterface, JoyaMapper.class);
+            if (entityClass == null || entityClass == Object.class) {
+                throw new IllegalStateException("The super class[JoyaMapper.class] should with ParameterizedType");
+            }
+            return entityClass;
+        }
+    };
 
     private final DataOps dataOps;
 
@@ -57,17 +66,10 @@ public class JdkMapperProxy {
         };
     }
 
-    /**
-     * 从 Mapper 接口继承树（支持多层父接口继承）解析实体泛型实参。
-     */
     private static Class<?> resolveEntityClass(Class<?> mapperInterface) {
         if (mapperInterface == null || !JoyaMapper.class.isAssignableFrom(mapperInterface)) {
             throw new IllegalStateException("The mapper interface must be subclass of the interface[JoyaMapper.class]");
         }
-        Class<?> entityClass = TypeUtils.resolveTypeArgument(mapperInterface, JoyaMapper.class);
-        if (entityClass == null || entityClass == Object.class) {
-            throw new IllegalStateException("The super class[JoyaMapper.class] should with ParameterizedType");
-        }
-        return entityClass;
+        return ENTITY_CLASS_CACHE.get(mapperInterface);
     }
 }
